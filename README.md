@@ -5,3 +5,5 @@ The Common Knowledge Base (CKB) is essentially a database management module wher
 The collected data is used as a knowledge base for preparing responses to queries sent to the large language model via Bürokratt. Therefore, in addition to collecting data, it is important to make this data more readable for the language model by cleaning the data of excess (e.g. different css styles and html tags).
 
 All development work related to the CKB must comply with the Architectural Decision Records' (ADR) requirements, which can be found at [https://ADR-Data-pipelines](https://github.com/buerokratt/Buerokratt-onboarding/tree/main/Architectural-Decision-Records-ADR/data-pipelines).
+
+Issues in the repository may be refined during grooming sessions in collaboration with the developers in order to achieve the best possible result.
