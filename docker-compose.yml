@@ -120,7 +120,21 @@ services:
       target: build
     ports:
       - 3001:3001
+    networks:
+      - bykstack
 
+  cron-manager:
+    container_name: cron-manager
+    image: cron-manager
+    # user: root # This root user is only for local development due to multi container mounted volume permissions
+    volumes:
+      - ./DSL/CronManager:/DSL
+    environment:
+      - server.port=9010
+    ports:
+      - 9010:9010
+    networks:
+      - bykstack
 
 networks:
   bykstack:
