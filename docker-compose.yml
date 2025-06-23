@@ -113,6 +113,15 @@ services:
     networks:
       - bykstack
 
+  ckb-gui:
+    container_name: ckb-gui
+    build:
+      context: ./GUI
+      target: build
+    ports:
+      - 3001:3001
+
+
 networks:
   bykstack:
     name: bykstack
