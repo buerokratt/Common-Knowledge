@@ -98,6 +98,21 @@ services:
     cpus: "0.5"
     mem_limit: "512M"
 
+  data-mapper:
+    container_name: data-mapper
+    image: data-mapper
+    environment:
+      - PORT=3005
+      - CONTENT_FOLDER=/data
+    volumes:
+      - ./DSL:/data
+      - ./DSL/DMapper/ckb/hbs:/workspace/app/views/ckb
+      - ./DSL/DMapper/ckb/js:/workspace/app/js/ckb
+    ports:
+      - 3005:3005
+    networks:
+      - bykstack
+
 networks:
   bykstack:
     name: bykstack
