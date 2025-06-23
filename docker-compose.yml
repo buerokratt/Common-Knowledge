@@ -14,7 +14,7 @@ services:
     networks:
       - bykstack
 
-  resql_users:
+  resql-users:
     container_name: resql-users
     image: resql
     depends_on:
@@ -34,7 +34,7 @@ services:
     networks:
       - bykstack
 
-  resql_ckb:
+  resql-ckb:
     container_name: resql-ckb
     image: resql
     depends_on:
@@ -52,6 +52,51 @@ services:
        - ./DSL/Resql:/DSL
     networks:
       - bykstack
+
+  ruuter-public:
+    container_name: ruuter-public
+    image: ruuter
+    environment:
+      - application.cors.allowedOrigins=http://localhost:8086,http://localhost:3001,http://localhost:3003,http://localhost:3004,http://localhost:8080
+      - application.httpCodesAllowList=200,201,202,400,401,403,500
+      - application.internalRequests.allowedIPs=127.0.0.1
+      - application.logging.displayRequestContent=true
+      - application.logging.displayResponseContent=true
+      - application.logging.printStackTrace=true
+      - application.internalRequests.disabled=true
+      - server.port=8086
+    volumes:
+      - ./DSL/Ruuter.public:/DSL
+      - ./constants.ini:/app/constants.ini
+    ports:
+      - 8086:8086
+    networks:
+      - bykstack
+    cpus: "0.5"
+    mem_limit: "512M"
+
+  ruuter-private:
+    container_name: ruuter-private
+    image: ruuter
+    environment:
+      - application.cors.allowedOrigins=http://localhost:8082,http://localhost:3001,http://localhost:3003
+      - application.httpCodesAllowList=200,201,202,400,401,403,500
+      - application.internalRequests.allowedIPs=127.0.0.1
+      - application.logging.displayRequestContent=true
+      - application.logging.displayResponseContent=true
+      - application.logging.printStackTrace=true
+      - application.internalRequests.disabled=true
+      - server.port=8080
+      - application.externalAuthAllowed=
+    volumes:
+      - ./DSL/Ruuter.private:/DSL
+      - ./constants.ini:/app/constants.ini
+    ports:
+      - 8080:8080
+    networks:
+      - bykstack
+    cpus: "0.5"
+    mem_limit: "512M"
 
 networks:
   bykstack:
