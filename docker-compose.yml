@@ -14,6 +14,45 @@ services:
     networks:
       - bykstack
 
+  resql_users:
+    container_name: resql-users
+    image: resql
+    depends_on:
+      - database
+    environment:
+      - server.port=8088
+      - sqlms.datasources.[0].name=byk
+      # - sqlms.datasources.[0].jdbcUrl=jdbc:postgresql://database:5432/users_db // For Local Use
+      - sqlms.datasources.[0].jdbcUrl=jdbc:postgresql://171.22.247.13:5433/byk
+      - sqlms.datasources.[0].username=byk
+      - sqlms.datasources.[0].password=2nH09n6Gly
+      - logging.level.org.springframework.boot=INFO
+    ports:
+      - 8088:8088
+    volumes:
+      - ./DSL/Resql:/DSL
+    networks:
+      - bykstack
+
+  resql_ckb:
+    container_name: resql-ckb
+    image: resql
+    depends_on:
+      - database
+    environment:
+      - server.port=8090
+      - sqlms.datasources.[0].name=byk
+      - sqlms.datasources.[0].jdbcUrl=jdbc:postgresql://database:5432/ckb_db
+      - sqlms.datasources.[0].username=byk
+      - sqlms.datasources.[0].password=01234
+      - logging.level.org.springframework.boot=INFO
+    ports:
+      - 8090:8090
+    volumes:
+       - ./DSL/Resql:/DSL
+    networks:
+      - bykstack
+
 networks:
   bykstack:
     name: bykstack
