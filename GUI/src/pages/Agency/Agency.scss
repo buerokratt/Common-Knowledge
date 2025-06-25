@@ -1,0 +1,122 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.knowledge-base {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  &__agency-cell {
+    padding: get-spacing(paldiski) 0;
+    
+    // Highlight the selected agency cell with purple border
+    &:first-child {
+      position: relative;
+      
+      &::before {
+        content: '';
+        position: absolute;
+        left: -16px;
+        top: -1px;
+        bottom: -1px;
+        width: 4px;
+        background-color: get-color(sapphire-blue-10);
+        border-radius: 2px;
+      }
+    }
+  }
+
+  &__footer {
+    display: flex;
+    align-items: center;
+    padding: get-spacing(paldiski) 0;
+    border-top: 1px solid get-color(black-coral-2);
+    margin-top: get-spacing(paldiski);
+  }
+
+  &__total {
+    position: absolute;
+    transform: translateY(-35px);
+    font-size: $veera-font-size-100;
+    color: get-color(black-coral-12);
+    font-weight: $veera-font-weight-beta;
+  }
+
+  // Custom table styling to match the design
+  .data-table {
+    th:first-child {
+      position: relative;
+      
+      // Purple border for Agency column header
+      &::after {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background-color: get-color(sapphire-blue-10);
+        border-radius: 2px 0 0 2px;
+      }
+    }
+
+    // Highlight first row's first cell
+    tbody tr:first-child td:first-child {
+      position: relative;
+      
+      &::before {
+        content: '';
+        position: absolute;
+        left: 0;
+        top: 0;
+        bottom: 0;
+        width: 4px;
+        background-color: get-color(sapphire-blue-10);
+        border-radius: 2px;
+      }
+    }
+
+    // Action buttons styling
+    .track {
+      button {
+        color: get-color(sapphire-blue-10);
+        
+        &:hover {
+          text-decoration: underline;
+        }
+        
+        .icon {
+          margin-right: 4px;
+        }
+      }
+    }
+  }
+
+  // Modal form styling
+  .dialog {
+    .track {
+      &[data-direction="vertical"] {
+        .input,
+        .select {
+          width: 100%;
+        }
+      }
+    }
+  }
+
+  // Responsive design
+  @media (max-width: 768px) {
+    .data-table {
+      .track {
+        flex-direction: column;
+        gap: 8px;
+        
+        button {
+          width: 100%;
+          justify-content: flex-start;
+        }
+      }
+    }
+  }
+}

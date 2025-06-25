@@ -1,0 +1,154 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.knowledge-base-detail {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+
+  &__breadcrumb {
+    display: flex;
+    align-items: center;
+    gap: get-spacing(paldiski);
+  }
+
+  &__path {
+    display: flex;
+    align-items: center;
+    margin-bottom: get-spacing(haapsalu);
+    padding: get-spacing(paldiski) 0;
+    border-bottom: 1px solid get-color(black-coral-2);
+  }
+
+  &__agency {
+    font-size: $veera-font-size-200;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+  }
+
+  &__separator {
+    font-size: $veera-font-size-200;
+    color: get-color(black-coral-10);
+    margin: 0 16px;
+  }
+
+  &__domain {
+    font-size: $veera-font-size-200;
+    color: get-color(black-coral-12);
+  }
+
+  &__url-cell {
+    max-width: 500px;
+    word-break: break-all;
+  }
+
+  &__url-link {
+    color: get-color(sapphire-blue-10);
+    text-decoration: none;
+    
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__status-cell {
+    display: flex;
+    align-items: center;
+  }
+
+  &__footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: get-spacing(paldiski) 0;
+    border-top: 1px solid get-color(black-coral-2);
+    margin-top: get-spacing(paldiski);
+  }
+  &__total {
+    position: absolute;
+    transform: translateY(-35px);
+    font-size: $veera-font-size-100;
+    color: get-color(black-coral-12);
+    font-weight: $veera-font-weight-beta;
+  }
+  // Custom DataTable styling for this view
+  .data-table {
+    th:first-child {
+      width: 45%;
+    }
+    
+    th:nth-child(2) {
+      width: 20%;
+    }
+    
+    th:nth-child(3) {
+      width: 15%;
+    }
+    
+    th:last-child {
+      width: 20%;
+    }
+
+    // Action buttons styling - vertical stack
+    .track[data-direction="vertical"] {
+      align-items: flex-end;
+      
+      button {
+        color: get-color(sapphire-blue-10);
+        white-space: nowrap;
+        
+        &:hover {
+          text-decoration: underline;
+        }
+        
+        .icon {
+          margin-right: 4px;
+        }
+      }
+    }
+  }
+
+  // Labels styling
+  .label {
+    font-size: $veera-font-size-80;
+    padding: 2px 8px;
+    
+    &--success {
+      background-color: get-color(sea-green-1);
+      color: get-color(sea-green-12);
+      border-color: get-color(sea-green-10);
+    }
+    
+    &--info {
+      background-color: get-color(black-coral-1);
+      color: get-color(black-coral-12);
+      border-color: get-color(black-coral-6);
+    }
+  }
+
+  // Back button styling
+  .track button[data-back="true"] {
+    color: get-color(black-coral-12);
+    
+    &:hover {
+      color: get-color(sapphire-blue-10);
+    }
+  }
+
+  // Responsive design
+  @media (max-width: 768px) {
+    &__path {
+      padding: get-spacing(paldiski) 0;
+    }
+    
+    .data-table {
+      font-size: $veera-font-size-80;
+      
+      th,
+      td {
+        padding: get-spacing(paldiski);
+      }
+    }
+  }
+}

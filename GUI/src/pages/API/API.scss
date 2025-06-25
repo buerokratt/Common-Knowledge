@@ -1,0 +1,428 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.api-wizard__endpoint-remove {
+  display: flex;
+  margin-bottom: -16px;
+  justify-content: flex-end;
+  transform: translateY(-10px);
+  
+}
+
+.api-wizard__remove-endpoint {
+  color: var(--color-error, #dc3545);
+  // position: absolute;
+  
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  
+  &:hover:not(:disabled) {
+    background-color: var(--color-error-light, rgba(220, 53, 69, 0.1));
+  }
+}
+
+.api-wizard {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  &__endpoint-name {
+    display: unset;
+  }
+  &__endpoint-card {
+    border: 1px solid get-color(black-coral-2);
+    border-radius: 8px;
+    padding: get-spacing(haapsalu);
+    margin-bottom: get-spacing(haapsalu);
+    background-color: get-color(white);
+    
+    &:last-child {
+      margin-bottom: 0;
+    }
+  }
+  &__header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: get-spacing(paldiski) get-spacing(haapsalu);
+    background-color: get-color(white);
+    border-bottom: 1px solid get-color(black-coral-2);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  &__title {
+    font-size: $veera-font-size-200;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+    margin: 0;
+    flex-shrink: 0;
+  }
+
+  &__header-buttons {
+    display: flex;
+    gap: get-spacing(paldiski);
+    flex-shrink: 0;
+  }
+
+  &__content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: get-spacing(haapsalu);
+  }
+
+  &__form {
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(haapsalu);
+    width: 768px;
+    max-width: 768px;
+    padding: get-spacing(haapsalu);
+    background-color: get-color(white);
+    border-radius: 8px;
+    border-top-left-radius: 0px;
+    border: 1px solid get-color(black-coral-2);
+  }
+
+  
+
+  &__live-label {
+    transform: translateY(0.7px);
+    font-size: $veera-font-size-100;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+
+    box-sizing: border-box;
+    padding: 12px 16px;
+
+    width: fit-content;
+
+    background: #FFFFFF;
+    border-width: 1px 1px 0px 1px;
+    border-style: solid;
+    border-color: #D2D3D8;
+    border-radius: 5px 5px 0px 0px;
+  }
+  &__live-endpoints {
+    display: flex;
+    align-items: center;
+  }
+
+  &__add-test {
+    color: get-color(sapphire-blue-10);
+    text-decoration: none;
+    font-size: $veera-font-size-100;
+    
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__endpoint {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    border-radius: 8px;
+  }
+
+  &__endpoint-header {
+    padding: get-spacing(haapsalu);
+    background-color: get-color(extra-light);
+    border-bottom: 1px solid get-color(black-coral-2);
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(paldiski);
+  }
+
+  &__url-section {
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(paldiski);
+  }
+
+  &__url-label {
+    font-size: $veera-font-size-100;
+    line-height: 24px;
+    color: get-color(black-coral-15);
+  }
+
+  &__url-input {
+    display: flex;
+    align-items: center;
+    // gap: get-spacing(paldiski);
+    div {
+      border-top-right-radius: 0px;
+      border-bottom-right-radius: 0px;
+    }
+    input {
+      border-top-left-radius: 0px;
+      border-bottom-left-radius: 0px;
+      border-left: none;
+    }
+    .form-select {
+      min-width: 100px;
+    }
+
+    .form-input {
+      flex: 1;
+    }
+  }
+
+  &__url-input-simple {
+    display: flex;
+    align-items: center;
+    gap: get-spacing(paldiski);
+
+    .form-input {
+      flex: 1;
+    }
+  }
+
+  &__endpoint-select {
+    display: flex;
+    align-items: end;
+    gap: get-spacing(paldiski);
+
+    .form-select {
+      flex: 1;
+    }
+  }
+
+  &__endpoint-body {
+    background-color: get-color(white);
+  }
+
+  &__tabs {
+    display: flex;
+    border-bottom: 1px solid get-color(black-coral-2);
+  }
+
+  &__tab {
+    padding: 12px 16px;
+    background: none;
+    border: none;
+    color: get-color(black-coral-12);
+    font-size: $veera-font-size-100;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+
+    &--active {
+      color: get-color(sapphire-blue-10);
+      border-bottom-color: get-color(sapphire-blue-10);
+    }
+
+    &:hover {
+      color: get-color(black-coral-15);
+    }
+  }
+
+  &__tab-content {
+    padding: get-spacing(haapsalu);
+  }
+
+  &__param-section {
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(paldiski);
+  }
+
+  &__param-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: get-spacing(paldiski);
+  }
+
+  &__param-columns {
+    display: flex;
+    gap: get-spacing(paldiski);
+    font-size: $veera-font-size-80;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-12);
+
+    span {
+      flex: 1;
+      // min-width: 200px;
+    }
+  }
+
+  &__raw-toggle {
+    label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: $veera-font-size-80;
+      color: get-color(black-coral-12);
+      cursor: pointer;
+    }
+  }
+
+  &__param-row {
+    display: flex;
+    align-items: center;
+    gap: get-spacing(paldiski);
+
+    .form-input,
+    .form-select {
+      flex: 1;
+      margin: 0;
+    }
+  }
+
+  &__remove-param {
+    background: none;
+    border: none;
+    color: get-color(jasper-10);
+    font-size: 20px;
+    cursor: pointer;
+    padding: 8px;
+    min-width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+
+    &:hover {
+      background-color: get-color(jasper-1);
+      border-radius: 4px;
+    }
+  }
+
+  &__add-param,
+  &__add-endpoint {
+    background: none;
+    margin-top: 16px;
+    border: none;
+    color: get-color(sapphire-blue-10);
+    font-size: $veera-font-size-100;
+    cursor: pointer;
+    padding: 8px 0;
+    text-align: left;
+
+    &:hover {
+      text-decoration: underline;
+    }
+  }
+
+  &__raw-data {
+    padding: get-spacing(paldiski) 0;
+  }
+
+  &__raw-header {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: get-spacing(paldiski);
+  }
+
+  &__raw-textarea {
+    width: 100%;
+    min-height: 120px;
+    padding: get-spacing(paldiski);
+    border: 1px solid get-color(black-coral-6);
+    border-radius: 4px;
+    font-family: monospace;
+    font-size: $veera-font-size-80;
+    resize: vertical;
+
+    &:focus {
+      outline: none;
+      border-color: get-color(sapphire-blue-10);
+    }
+  }
+
+  &__response-data {
+    margin-top: get-spacing(haapsalu);
+    border-top: 1px solid get-color(black-coral-2);
+    padding-top: get-spacing(haapsalu);
+  }
+
+  &__response-header {
+    margin-bottom: get-spacing(paldiski);
+  }
+
+  &__response-row {
+    display: flex;
+    align-items: center;
+    gap: get-spacing(paldiski);
+    margin-bottom: get-spacing(paldiski);
+    border-radius: 4px;
+  }
+
+  &__response-key {
+    flex: 1;
+    font-size: $veera-font-size-100;
+    color: get-color(black-coral-15);
+    font-family: monospace;
+    min-width: 345px;
+    background-color: get-color(white);
+    padding: 8px;
+    border-radius: 4px;
+    border: 1px solid get-color(black-coral-2);
+  }
+
+  &__response-info {
+    background: none;
+    border: none;
+    color: get-color(sapphire-blue-10);
+    font-size: 16px;
+    cursor: not-allowed;
+    padding: 8px;
+    min-width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  // Responsive design
+  @media (max-width: 768px) {
+    &__header {
+      padding: get-spacing(paldiski);
+      flex-direction: column;
+      gap: get-spacing(paldiski);
+      align-items: stretch;
+    }
+
+    &__title {
+      text-align: center;
+    }
+
+    &__header-buttons {
+      justify-content: center;
+    }
+
+    &__content {
+      padding: get-spacing(paldiski);
+    }
+
+    &__form {
+      max-width: 100%;
+    }
+
+    &__url-input {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    &__endpoint-select {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    &__param-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+
+    &__response-row {
+      flex-direction: column;
+      align-items: stretch;
+    }
+  }
+}

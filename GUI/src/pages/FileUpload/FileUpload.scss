@@ -1,0 +1,233 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.file-upload {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+
+  &__header {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: get-spacing(paldiski) get-spacing(haapsalu);
+    background-color: get-color(white);
+    border-bottom: 1px solid get-color(black-coral-2);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  }
+
+  &__title {
+    font-size: $veera-font-size-200;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+    margin: 0;
+    flex-shrink: 0;
+  }
+
+  &__header-buttons {
+    display: flex;
+    gap: get-spacing(paldiski);
+    flex-shrink: 0;
+  }
+
+  &__content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: get-spacing(haapsalu);
+    overflow-y: auto;
+  }
+
+  &__form {
+    max-height: 60vh;
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(haapsalu);
+    width: 768px;
+    max-width: 768px;
+    padding: get-spacing(haapsalu);
+    background-color: get-color(white);
+    border-radius: 8px;
+    border: 1px solid get-color(black-coral-2);
+  }
+
+  &__upload-section {
+    display: flex;
+    align-items: center;
+    gap: get-spacing(paldiski);
+    width: 100%;
+  }
+
+  &__label {
+    flex: 0 0 185px;
+    font-size: $veera-font-size-100;
+    line-height: 24px;
+  }
+
+  &__upload-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    position: relative;
+  }
+
+  &__file-list {
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(paldiski);
+    margin-top: get-spacing(paldiski);
+  }
+
+  &__file-item {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: get-spacing(haapsalu);
+    border-radius: 8px;
+    border: 1px solid;
+    position: relative;
+
+    &--pending {
+      border-color: get-color(black-coral-6);
+      background-color: get-color(white);
+    }
+
+    &--success {
+      border-color: get-color(sea-green-10);
+      background-color: get-color(sea-green-1);
+    }
+
+    &--warning {
+      border-color: get-color(dark-tangerine-10);
+      background-color: get-color(dark-tangerine-1);
+    }
+
+    &--error {
+      border-color: get-color(jasper-10);
+      background-color: #FCEEEE;
+    }
+  }
+
+  &__file-info {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  &__file-name {
+    font-size: $veera-font-size-100;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+  }
+
+  &__file-size {
+    font-size: $veera-font-size-80;
+    color: get-color(black-coral-12);
+  }
+
+  &__file-message {
+    font-size: $veera-font-size-100;
+    line-height: $veera-line-height-500;
+    margin-top: get-spacing(paldiski);
+
+    .file-upload__file-item--success & {
+      color: get-color(black-coral-15);
+    }
+
+    .file-upload__file-item--warning & {
+      color: get-color(black-coral-15);
+    }
+
+    .file-upload__file-item--error & {
+      color: get-color(black-coral-15);
+    }
+  }
+
+  &__file-url {
+    font-size: $veera-font-size-80;
+    color: get-color(black-coral-12);
+    font-style: italic;
+  }
+
+  &__link-button {
+    background: none;
+    border: none;
+    color: get-color(sapphire-blue-10);
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: $veera-font-size-100;
+    padding: 0;
+
+    &:hover {
+      text-decoration: none;
+    }
+  }
+
+  &__delete-button {
+    background: none;
+    border: none;
+    color: get-color(sapphire-blue-10);
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: $veera-font-size-100;
+    padding: 0;
+    flex-shrink: 0;
+    margin-left: get-spacing(paldiski);
+
+    &:hover {
+      text-decoration: none;
+    }
+  }
+
+  // Responsive design
+  @media (max-width: 768px) {
+    &__header {
+      padding: get-spacing(paldiski);
+      flex-direction: column;
+      gap: get-spacing(paldiski);
+      align-items: stretch;
+    }
+
+    &__title {
+      text-align: center;
+    }
+
+    &__header-buttons {
+      justify-content: center;
+    }
+
+    &__content {
+      padding: get-spacing(paldiski);
+    }
+
+    &__form {
+      max-width: 100%;
+    }
+
+    &__upload-section {
+      flex-direction: column;
+      align-items: flex-start;
+    }
+
+    &__label {
+      flex: none;
+    }
+
+    &__file-item {
+      flex-direction: column;
+      gap: get-spacing(paldiski);
+    }
+
+    &__delete-button {
+      margin-left: 0;
+      align-self: flex-end;
+    }
+  }
+}
