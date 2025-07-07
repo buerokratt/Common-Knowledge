@@ -1,0 +1,26 @@
+.header {
+    background: white;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 0 24px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    min-width: 1000px;
+  
+    &__container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 80px;
+      margin: 0 auto;
+    }
+  
+    &__logout {
+      text-decoration: underline;
+      color: #005AA3;
+      
+      &:hover {
+        color: #003662;
+      }
+    }
+  }

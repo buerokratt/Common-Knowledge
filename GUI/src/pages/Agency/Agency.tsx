@@ -1,7 +1,13 @@
 import { FC, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { MdOutlineDeleteOutline } from 'react-icons/md';
+import {
+  MdOutlineDeleteOutline,
+  MdAccessTime,
+  MdOutlineEdit,
+  MdRefresh,
+  MdOutlineStopCircle,
+} from 'react-icons/md';
 import {
   Button,
   Card,
@@ -9,28 +15,32 @@ import {
   Dialog,
   FormInput,
   FormSelect,
-  FormTextarea,
   Icon,
   Track,
+  FileUploader,
 } from 'components';
 import { ColumnDef } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
 import { apiDev } from 'services/api';
+import './Agency.scss';
 import './AgencyList.scss';
+import EditAgency from './AddAgency';
 import { Link } from 'react-router-dom';
+import type { FileItem } from 'components/FileUploader/FileUploader';
 
 interface KnowledgeBaseItem {
   id: string;
-  agency: string;
+  url: string;
   domain: string;
-  lastUpdate: string;
+  lastScraped: string;
+  status: string;
 }
 
 interface KnowledgeBaseFormData {
   agency: string;
   domain: string;
   content?: string;
-  file?: File;
+  files: FileItem[];
   apiUrl?: string;
   websiteUrl?: string;
 }
@@ -50,6 +60,7 @@ const Agency: FC = () => {
   const [formData, setFormData] = useState<KnowledgeBaseFormData>({
     agency: '',
     domain: '',
+    files: [],
   });
 
   // Mock data - replace with actual API call
@@ -62,69 +73,80 @@ const Agency: FC = () => {
       data: [
         {
           id: '1',
-          agency: 'Abc',
+          url: 'Abc',
           domain: 'Domain 1',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'inProgress',
         },
         {
           id: '2',
-          agency: 'Pvc',
+          url: 'Pvc',
           domain: 'Domain 2',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'done',
         },
         {
           id: '3',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'done',
         },
         {
           id: '4',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'inProgress',
         },
         {
           id: '5',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'inProgress',
         },
         {
           id: '6',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'inProgress',
         },
         {
           id: '7',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'inProgress',
         },
         {
           id: '8',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'done',
         },
         {
           id: '9',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'done',
         },
         {
           id: '10',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'done',
         },
         {
           id: '11',
-          agency: 'Xyz',
+          url: 'Xyz',
           domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
+          lastScraped: '31.04.2025',
+          status: 'inProgress',
         },
       ],
       total: 170,
@@ -171,6 +193,20 @@ const Agency: FC = () => {
         message: t('knowledgeBase.apiError'),
       });
     }
+  };
+
+  const handleFilesChange = (files: FileItem[]) => {
+    setFormData((prev) => ({
+      ...prev,
+      files,
+    }));
+  };
+
+  const handleFileDelete = (fileId: string) => {
+    setFormData((prev) => ({
+      ...prev,
+      files: prev.files.filter((file) => file.id !== fileId),
+    }));
   };
 
   const handleAddUrl = async () => {
@@ -248,25 +284,42 @@ const Agency: FC = () => {
   const columns: ColumnDef<KnowledgeBaseItem>[] = [
     {
       accessorKey: 'agency',
-      header: t('knowledgeBase.agency'),
+      header: t('knowledgeBase.url'),
       enableColumnFilter: false,
       cell: ({ row }) => (
         <Link
-          to={`/agency/${row.original.id}`}
+          to={'/pages'}
           style={{ textDecoration: 'underline', color: '#005AA3' }}
         >
-          <div className="agencies__agency-cell">{row.original.agency}</div>
+          <div className="agencies__agency-cell">{row.original.url}</div>
         </Link>
       ),
     },
     {
       accessorKey: 'domain',
-      header: t('knowledgeBase.sector'),
+      header: t('knowledgeBase.subsector'),
       enableColumnFilter: false,
     },
     {
-      accessorKey: 'lastUpdate',
-      header: t('knowledgeBase.lastUpdate'),
+      accessorKey: 'lastScraped',
+      header: t('knowledgeBase.lastScraped'),
+      enableColumnFilter: false,
+    },
+    {
+      accessorKey: 'status',
+      header: t('global.status'),
+      cell: ({ row }) => (
+        <span
+          className={`agencies__status-cell`}
+          style={{
+            color: row.original.status === 'inProgress' ? '#005AA3' : '#266B42',
+            borderColor:
+              row.original.status === 'inProgress' ? '#005AA3' : '#266B42',
+          }}
+        >
+          {t(`knowledgeBase.${row.original.status}`)}
+        </span>
+      ),
       enableColumnFilter: false,
     },
     {
@@ -274,10 +327,48 @@ const Agency: FC = () => {
       header: '',
       cell: ({ row }) => (
         <Track gap={32} justify="end">
+          {row.original.status === 'inProgress' ? (
+            <Button className="agencies__action-btn" appearance="text" size="s">
+              <Icon
+                icon={<MdOutlineStopCircle fontSize={20} />}
+                size="medium"
+              />
+              {t('global.stop')}
+            </Button>
+          ) : (
+            <Button className="agencies__action-btn" appearance="text" size="s">
+              <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
+              {t('knowledgeBase.refresh')}
+            </Button>
+          )}
+
+          <Link
+            style={{ display: 'flex', textDecoration: 'none' }}
+            to={'/settings'}
+          >
+            <Button
+              disabled={row.original.status === 'inProgress'}
+              appearance="text"
+              className="agencies__action-btn"
+            >
+              <Icon icon={<MdAccessTime fontSize={20} />} size="medium" />
+              {t('knowledgeBase.scrapeInterval')}
+            </Button>
+          </Link>
           <Button
+            disabled={row.original.status === 'inProgress'}
             appearance="text"
-            onClick={() => setDeleteModal(row.original)}
             className="agencies__action-btn"
+            onClick={() => setEditModal(true)}
+          >
+            <Icon icon={<MdOutlineEdit fontSize={20} />} size="medium" />
+            {t('global.edit')}
+          </Button>
+          <Button
+            disabled={row.original.status === 'inProgress'}
+            appearance="text"
+            className="agencies__action-btn"
+            onClick={() => setDeleteModal(row.original)}
           >
             <Icon
               icon={<MdOutlineDeleteOutline fontSize={20} />}
@@ -303,20 +394,33 @@ const Agency: FC = () => {
   ];
 
   return (
-    <div className="agencies">
-      <Track
-        style={{ marginBottom: 16, minWidth: 800 }}
-        justify="between"
-        align="center"
+    <div className="agency-container">
+      <EditAgency />
+      <Card
+        header={
+          <Track justify="between" align="center">
+            <span className="knowledge-base-detail__agency">
+              {t('knowledgeBase.sources')}
+            </span>
+            <Track gap={16}>
+              <Button
+                appearance="secondary"
+                style={{
+                  color: '#005AA3',
+                  borderColor: '#005AA3 !important',
+                  boxShadow: 'inset 0 0 0 2px #005AA3',
+                }}
+                onClick={() => setUploadModal(true)}
+              >
+                {t('knowledgeBase.uploadFile')}
+              </Button>
+              <Button appearance="primary" onClick={() => setAddUrlModal(true)}>
+                {t('knowledgeBase.addUrl')}
+              </Button>
+            </Track>
+          </Track>
+        }
       >
-        <h1 className="h1">{t('knowledgeBase.agencies')}</h1>
-        <Track gap={12}>
-          <Link to="/agency/add">
-            <Button appearance="primary">{t('knowledgeBase.addAgency')}</Button>
-          </Link>
-        </Track>
-      </Track>
-      <Card>
         <DataTable
           data={knowledgeBaseData?.data ?? []}
           columns={columns}
@@ -339,7 +443,7 @@ const Agency: FC = () => {
       {/* Upload Modal */}
       {uploadModal && (
         <Dialog
-          title={t('knowledgeBase.uploadTitle')}
+          title={t('knowledgeBase.uploadFile')}
           onClose={() => setUploadModal(false)}
           footer={
             <Track gap={16} justify="end">
@@ -356,36 +460,21 @@ const Agency: FC = () => {
           }
         >
           <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
             <FormInput
-              label={t('knowledgeBase.file')}
-              name="file"
-              type="file"
-              onChange={(e) => {
-                const file = (e.target as HTMLInputElement).files?.[0];
-                setFormData((prev) => ({ ...prev, file }));
-              }}
+              className="url-input"
+              label={t('knowledgeBase.subsector')}
+              name="subsector"
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
+              }
+            />
+            <FileUploader
+              files={formData.files}
+              onFilesChange={handleFilesChange}
+              onFileDelete={handleFileDelete}
+              maxFileSize={30 * 1024 * 1024} // 30MB
+              acceptedTypes=".pdf,.doc,.docx,.txt,.html,.htm"
+              multiple={true}
             />
           </Track>
         </Dialog>
@@ -449,7 +538,7 @@ const Agency: FC = () => {
       {/* Add URL Modal */}
       {addUrlModal && (
         <Dialog
-          title={t('knowledgeBase.addUrlTitle')}
+          title={t('knowledgeBase.addUrl')}
           onClose={() => setAddUrlModal(false)}
           footer={
             <Track gap={16} justify="end">
@@ -460,39 +549,24 @@ const Agency: FC = () => {
                 {t('global.cancel')}
               </Button>
               <Button appearance="primary" onClick={handleAddUrl}>
-                {t('knowledgeBase.addUrl')}
+                {t('global.add')}
               </Button>
             </Track>
           }
         >
           <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
+            <FormInput
+              className="url-input"
+              label={t('knowledgeBase.subsector')}
+              name="subsector"
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
               }
             />
             <FormInput
-              label={t('knowledgeBase.websiteUrl')}
+              className="url-input"
+              label={t('knowledgeBase.url')}
               name="websiteUrl"
-              type="url"
-              placeholder="https://example.com"
               onChange={(e) =>
                 setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
               }
@@ -504,7 +578,7 @@ const Agency: FC = () => {
       {/* Edit Modal */}
       {editModal && (
         <Dialog
-          title={t('knowledgeBase.editTitle')}
+          title={t('knowledgeBase.editSource')}
           onClose={() => setEditModal(null)}
           footer={
             <Track gap={16} justify="end">
@@ -518,36 +592,12 @@ const Agency: FC = () => {
           }
         >
           <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              defaultValue={formData.agency}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              defaultValue={formData.domain}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
-            <FormTextarea
-              label={t('knowledgeBase.content')}
-              name="content"
-              placeholder={t('knowledgeBase.contentPlaceholder')}
+            <FormInput
+              className="url-input"
+              label={t('knowledgeBase.subsector')}
+              name="subsector"
               onChange={(e) =>
-                setFormData((prev) => ({ ...prev, content: e.target.value }))
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
               }
             />
           </Track>
@@ -557,7 +607,7 @@ const Agency: FC = () => {
       {/* Delete Confirmation Modal */}
       {deleteModal && (
         <Dialog
-          title={t('knowledgeBase.deleteAgencyTitle')}
+          title={t('knowledgeBase.deleteSource')}
           onClose={() => setDeleteModal(null)}
           footer={
             <Track gap={16} justify="end">
@@ -573,12 +623,7 @@ const Agency: FC = () => {
             </Track>
           }
         >
-          <p>
-            {t('knowledgeBase.deleteAgencyConfirmation', {
-              agency: deleteModal.agency,
-              domain: deleteModal.domain,
-            })}
-          </p>
+          {t('knowledgeBase.deleteSourceConfirmation')}
         </Dialog>
       )}
     </div>

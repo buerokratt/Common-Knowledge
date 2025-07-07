@@ -29,7 +29,6 @@
       z-index: 3;
     }
   }
-
   &__number {
     display: flex;
     align-items: center;
@@ -49,14 +48,18 @@
     }
 
     .stepper__step--completed & {
-      background-color: get-color(white);
-      color: get-color(black-coral-6);
+      background-color: #266B42;
+      color: #fff;
     }
   }
 
   &__label {
     white-space: nowrap;
   }
+}
+.stepper__step--completed {
+  background-color: #EAF3EE;
+      color: #266B42;
 }
 
 // Responsive design

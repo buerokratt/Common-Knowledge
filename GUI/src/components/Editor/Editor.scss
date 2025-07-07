@@ -1,0 +1,202 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.textarea textarea {
+  max-height: calc(100vh - 365px) !important;
+}
+.card {
+  max-height: unset !important;
+  min-width: 800px;
+}
+.knowledge-base-detail {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: 100%;
+  height: 100%;
+
+  &__header {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 0px;
+    gap: get-spacing(haapsalu);
+    width: 100%;
+    height: 48px;
+
+    h1 {
+      font-family: 'Roboto', sans-serif;
+      font-style: normal;
+      font-weight: 300;
+      font-size: 32px;
+      line-height: 48px;
+      color: get-color(black-coral-20);
+      margin-bottom: 16px;
+    }
+  }
+
+  // Card header styling for agency/domain
+  &__agency-domain {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    padding: 0px;
+    gap: get-spacing(haapsalu);
+    height: 32px;
+    font-family: Roboto;
+    font-weight: 400;
+    font-size: 22px;
+    line-height: 145%;
+    letter-spacing: 0px;
+    text-align: right;
+    color: #09090B; 
+  }
+
+  &__separator {
+    font-family: 'Roboto', sans-serif;
+    font-style: normal;
+    font-weight: 400;
+    font-size: 22px;
+    line-height: 145%;
+    color: get-color(black-coral-20);
+  }
+
+  &__form-group {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 0px;
+    gap: get-spacing(haapsalu);
+    width: 100%;
+    border-radius: 4px;
+    margin-bottom: get-spacing(paldiski);
+
+    &--full {
+      flex-direction: row;
+      align-items: flex-start;
+    }
+
+    &--half {
+      width: 50%;
+    }
+  }
+
+  &__metadata-row {
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(haapsalu);
+    width: 100%;
+  }
+
+  &__form-label {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    align-items: flex-start;
+    padding: 0px;
+    width: 302px;
+    min-width: 302px;
+    height: 25px;
+  }
+
+  &__label {
+    font-family: 'Roboto', sans-serif;
+    font-style: normal;
+    font-weight: 400;
+    font-size: $veera-font-size-100;
+    line-height: 150%;
+    color: get-color(black-coral-18);
+    text-align: right;
+    width: 100%;
+  }
+
+  &__form-value {
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 0px;
+    flex: 1;
+    height: 25px;
+  }
+
+  &__value {
+    font-family: 'Roboto', sans-serif;
+    font-style: normal;
+    font-weight: 700;
+    font-size: $veera-font-size-100;
+    line-height: 150%;
+    color: get-color(black-coral-18);
+  }
+
+  &__form-input {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 0px;
+    flex: 1;
+
+    .textarea {
+      width: 100%;
+      
+      &__wrapper {
+        width: 100%;
+      }
+
+      textarea {
+        width: 100%;
+        max-height: 400px;
+        background: get-color(white);
+        border: 1px solid get-color(black-coral-6);
+        border-radius: 4px;
+        padding: 7px;
+        font-family: 'Roboto', sans-serif;
+        font-size: $veera-font-size-100;
+        line-height: 150%;
+        color: get-color(black-coral-18);
+        resize: vertical;
+
+        &:focus {
+          outline: none;
+          border-color: get-color(sapphire-blue-10);
+        }
+      }
+    }
+  }
+  .card {
+    max-height: unset;
+    width: 100%;
+  }
+  // Custom button styling in footer
+  .card__footer {
+    .track {
+      width: auto;
+    }
+
+    button {
+      padding: 10px 30px;
+      border-radius: 360px;
+      font-family: 'Roboto', sans-serif;
+      font-style: normal;
+      font-weight: 700;
+      font-size: 18px;
+      line-height: 133%;
+      text-align: center;
+
+      &[data-appearance="secondary"] {
+        background: rgba(0, 0, 0, 0.001) !important;
+        border: 2px solid #005AA3 !important;
+        color: #005AA3 !important;
+        box-shadow: inset 0 0 0 2px #005AA3 !important;
+      }
+
+      &[data-appearance="primary"] {
+        background: #005AA3 !important;
+        border: 2px solid #005AA3 !important;
+        color: get-color(white) !important;
+      }
+    }
+  }
+
+ 
+}

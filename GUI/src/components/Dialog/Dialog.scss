@@ -20,6 +20,24 @@
     max-width: 800px;
   }
 
+  &--fullscreen {
+    max-width: unset;
+    height: 100%;
+    
+    margin: 16px;
+    box-sizing: border-box;
+    max-height: unset;
+    height: calc(100% - 32px);
+    width: calc(100% - 32px);
+    top: 0;
+    left: 0;
+    transform: unset;
+    .dialog__body {
+      max-height: unset;
+      height: 100%;
+    }
+  }
+
   &__overlay {
     position: fixed;
     inset: 0;

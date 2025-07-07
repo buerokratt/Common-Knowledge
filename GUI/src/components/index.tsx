@@ -29,6 +29,11 @@ import Section from './Section';
 import Chat from './Chat';
 import Stepper from './Stepper';
 import ProgressBar from './ProgressBar';
+import Editor from './Editor';
+import FileUploader from './FileUploader/FileUploader';
+import NavigationSidebar from './NavigationSidebar';
+import CKBLayout from './CKBLayout';
+import Header from './CKBHeader';
 
 export {
   Layout,
@@ -60,4 +65,12 @@ export {
   Chat,
   Stepper,
   ProgressBar,
+  FileUploader,
+  Editor,
+  NavigationSidebar,
+  CKBLayout,
+  Header,
 };
+
+// Export types that might be needed
+export type { FileItem } from './FileUploader/FileUploader';

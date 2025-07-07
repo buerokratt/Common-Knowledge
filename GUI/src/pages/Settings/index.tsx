@@ -1,13 +1,13 @@
 import { FC, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams } from 'react-router-dom';
-import { MdOutlineCalendarMonth, MdOutlineSchedule } from 'react-icons/md';
+import { MdOutlineSchedule } from 'react-icons/md';
 import {
   Button,
   FormInput,
   FormSelect,
   FormDatepicker,
-  Switch,
+  SwitchBox,
   Icon,
   Track,
   Card,
@@ -405,11 +405,9 @@ const KnowledgeBaseSettings: FC = () => {
             <label className="knowledge-base-settings__label">
               {t('knowledgeBase.updateAutomatically')}
             </label>
-            <Switch
+            <SwitchBox
               label=""
               checked={settings.updateAutomatically}
-              onLabel="Yes"
-              offLabel="No"
               onCheckedChange={(checked) =>
                 setSettings((prev) => ({
                   ...prev,

@@ -16,7 +16,7 @@ interface StepperProps {
 const Stepper: FC<StepperProps> = ({ steps, currentStep }) => {
   return (
     <div className="stepper">
-      {steps.map((step, index) => (
+      {steps.map((step) => (
         <div
           key={step.id}
           className={`stepper__step ${

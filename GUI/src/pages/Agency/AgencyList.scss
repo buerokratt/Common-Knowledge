@@ -1,0 +1,153 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+// Custom table styling to match the design
+.data-table {
+  max-width: 100%;
+  overflow-x: auto;
+  min-width: 800px; // Minimum width to maintain table structure
+  
+  // Action buttons styling
+  .track {
+    button {
+      color: get-color(sapphire-blue-10);
+      white-space: nowrap;
+      
+      &:hover {
+        text-decoration: underline;
+      }
+      
+      .icon {
+        margin-right: 4px;
+      }
+    }
+  }
+
+  // Ensure table cells don't break on small screens
+  th, td {
+    white-space: nowrap;
+    min-width: fit-content;
+  }
+
+  // Allow agency column to be slightly more flexible
+  th:first-child,
+  td:first-child {
+    min-width: 120px;
+  }
+}
+
+.agencies {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  .card {
+    min-width: 800px;
+  }
+
+  &__status-cell {
+    font-family: Roboto;
+    font-weight: 400;
+    float: right;
+    font-size: 14px;
+    line-height: 171%;
+    letter-spacing: 0px;
+    text-align: center;
+    vertical-align: middle;    
+    color: #005AA3;
+    box-sizing: border-box;
+    padding: 2px 8px;
+    background: #FFFFFF;
+    border: 2px solid #337BB5;
+    border-radius: 4px;
+  }
+  
+  &__agency {
+    font-family: Roboto !important;
+    font-weight: 300 !important;
+    font-size: 32px !important;
+    line-height: 48px !important;
+    letter-spacing: 0px !important;
+    text-align: right !important;
+    color: #09090B !important;
+  }
+
+  &__search {
+    display: flex;
+    width: fit-content;
+    gap: 16px;
+    width: 73%;
+    input {
+      width: unset;
+    }
+    label {
+      flex: unset;
+    }
+  }
+  &__agency-cell {
+    padding: get-spacing(paldiski) 0;
+    
+   
+  }
+
+  &__footer {
+    display: flex;
+    align-items: center;
+    padding: get-spacing(paldiski) 0;
+    border-top: 1px solid get-color(black-coral-2);
+    margin-top: get-spacing(paldiski);
+    min-width: max-content;
+  }
+
+  &__total {
+    position: absolute;
+    transform: translateY(-35px);
+    font-size: $veera-font-size-100;
+    color: get-color(black-coral-12);
+    font-weight: $veera-font-weight-beta;
+    white-space: nowrap;
+  }
+
+  // Header section responsive
+  .track {
+    max-width: 100%;
+    flex-wrap: wrap;
+    gap: 12px;
+    
+    h1 {
+      white-space: nowrap;
+    }
+  }
+  &__action-btn {
+    display: flex;
+    align-items: center;
+    font-family: Roboto;
+    font-weight: 700;
+    font-size: 14px;
+    line-height: 171%;
+    letter-spacing: 0px;
+    text-align: center;
+    vertical-align: middle;
+    &:disabled {
+      color: #C0C2C9 !important;
+      text-decoration: none !important;
+      cursor: not-allowed;
+    }
+  }
+
+  // Modal form styling
+  .dialog {
+    max-width: 90vw;
+    width: 100%;
+    
+    .track {
+      &[data-direction="vertical"] {
+        .input,
+        .select {
+          width: 100%;
+        }
+      }
+    }
+  }
+  
+}
