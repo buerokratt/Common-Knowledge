@@ -1,0 +1,59 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.progress-bar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: get-spacing(haapsalu);
+  padding: get-spacing(haapsalu);
+
+  h2 {
+    font-size: $veera-font-size-200;
+    color: get-color(black-coral-15);
+    margin: 0;
+  }
+}
+
+.progress-bar__container {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  background: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.progress-bar__track {
+  width: 736px;
+  height: 8px;
+  background-color: get-color(black-coral-2);
+  border-radius: 4px;
+  overflow: hidden;
+  position: relative;
+  flex: 1;
+  height: 8px;
+  background: #e5e5e5;
+  border-radius: 4px;
+}
+
+.progress-bar__fill {
+  height: 100%;
+  background-color: get-color(sapphire-blue-10);
+  transition: width 0.3s ease;
+}
+
+.progress-bar__text {
+  font-size: $veera-font-size-100;
+  color: get-color(black-coral-12);
+  margin-left: auto;
+}
+
+// Responsive design
+@media (max-width: 768px) {
+  .progress-bar__track {
+    width: 300px;
+  }
+}

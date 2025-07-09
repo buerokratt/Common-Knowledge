@@ -1,0 +1,469 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/other';
+@import 'src/styles/settings/variables/typography';
+
+.active-chat {
+  $self: &;
+  display: flex;
+  justify-content: flex-end;
+  position: relative;
+  height: 100%;
+
+  &__body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 0;
+    right: 288px;
+  }
+
+  &__header {
+    padding: get-spacing(haapsalu);
+    background-color: get-color(extra-light);
+    border-bottom: 1px solid get-color(black-coral-2);
+  }
+
+  &__group-wrapper {
+    flex: 1;
+    padding: get-spacing(haapsalu) get-spacing(haapsalu) 0;
+    overflow: auto;
+    overflow-anchor: none;
+
+    #anchor {
+      overflow-anchor: auto;
+      height: 1px;
+      margin-top: 16px;
+    }
+  }
+
+  &__toolbar {
+    background-color: get-color(extra-light);
+    border-top: 1px solid get-color(black-coral-2);
+    padding: get-spacing(paldiski);
+    position: relative;
+  }
+
+  &__toolbar-actions {
+    display: flex;
+    gap: 8px;
+    position: relative;
+    right: 12px;
+    left: 5px;
+    top: 0px;
+    bottom: 8px;
+    flex-flow: wrap;
+
+    .btn {
+      padding-left: 20px;
+      padding-right: 20px;
+      padding-top: 9.5px;
+      padding-bottom: 9.5px;
+      border-radius: 15px;
+    }
+  }
+
+  &__side {
+    flex: 0 0 288px;
+    height: 100%;
+    overflow: auto;
+    border-left: 1px solid get-color(black-coral-2);
+    display: flex;
+    flex-direction: column;
+    justify-content: start;
+
+    .btn {
+      justify-content: center;
+    }
+  }
+
+  &__side-actions,
+  &__side-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: get-spacing(haapsalu);
+
+    .csa-away {
+      font-size: $veera-font-size-80;
+      line-height: $veera-line-height-500;
+      color: get-color(black-coral-12);
+    }
+  }
+
+  &__side-meta {
+    font-size: $veera-font-size-80;
+    line-height: $veera-line-height-500;
+    color: get-color(black-coral-12);
+  }
+
+  &__group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-left: 56px;
+    position: relative;
+
+    &:not(:last-child) {
+      margin-bottom: 8px;
+    }
+
+    &--event {
+      padding-left: 0;
+      #{$self} {
+        &__event-message {
+          display: flex;
+          position: relative;
+          isolation: isolate;
+          padding: 6px 0;
+
+          p {
+            color: get-color(black-coral-12);
+            font-size: $veera-font-size-80;
+            line-height: $veera-line-height-500;
+            padding: 4px 8px 4px 0;
+            background-color: get-color(white);
+          }
+
+          &::after {
+            content: '';
+            display: block;
+            height: 1px;
+            background-color: get-color(black-coral-2);
+            position: absolute;
+            top: 50%;
+            left: 56px;
+            right: 0;
+            transform: translateY(-50%);
+            z-index: -1;
+          }
+        }
+      }
+    }
+
+    &--buerokratt,
+    &--chatbot {
+      #{$self} {
+        &__group-initials {
+          background-color: get-color(sapphire-blue-10);
+          left: 0;
+        }
+
+        &__group-name {
+          color: get-color(sapphire-blue-10);
+          text-align: left;
+          margin-left: 0;
+          font-size: $veera-font-size-100;
+        }
+
+        &__messages {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          align-items: flex-start;
+        }
+
+        &__message-text {
+          background-color: get-color(sapphire-blue-10);
+          color: get-color(white);
+
+          :any-link {
+            background: url('../../static/icons/link-external-blue.svg')
+              no-repeat right center;
+            padding-right: 1.25em;
+            color: blue;
+            text-decoration: underline;
+          }
+
+          &:hover {
+            background-color: get-color(sapphire-blue-13);
+          }
+        }
+      }
+    }
+
+    &--backoffice-user {
+      #{$self} {
+        &__group-initials {
+          background-color: get-color(black-coral-10);
+          color: get-color(white);
+          left: 0;
+        }
+
+        &__group-name {
+          text-align: left;
+          margin-left: 0;
+          font-size: $veera-font-size-100;
+        }
+
+        &__messages {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          align-items: flex-start;
+        }
+
+        &__message-text {
+          background-color: get-color(black-coral-10);
+          color: get-color(white);
+
+          :any-link {
+            background: url('../../static/icons/link-external-white.svg')
+              no-repeat right center;
+            padding-right: 1.25em;
+            color: white;
+            text-decoration: underline;
+          }
+
+          &:hover {
+            background-color: #535665;
+          }
+        }
+
+        &__selection-icon {
+          background-color: get-color(black-coral-20);
+        }
+      }
+    }
+  }
+
+  &__group-initials {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    background-color: get-color(black-coral-1);
+    border-radius: 50%;
+    font-size: $veera-font-size-80;
+    line-height: $veera-line-height-500;
+    font-weight: $veera-font-weight-delta;
+    color: get-color(black-coral-6);
+    position: absolute;
+    right: 0;
+    top: 0;
+  }
+
+  &__group-name {
+    font-size: $veera-font-size-100;
+    line-height: $veera-line-height-500;
+    font-weight: $veera-font-weight-delta;
+    text-transform: capitalize;
+    margin-left: 10rem;
+    margin-right: 3rem;
+    text-align: right;
+    padding-top: 10px;
+  }
+
+  &__messages {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-end;
+  }
+
+  &__messageContainer {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+  }
+
+  &__message {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    position: relative;
+
+    &--selected {
+      #{$self}__message-text {
+        box-shadow: inset 0 0 0 1px get-color(black-coral-20);
+      }
+    }
+  }
+
+  &__selection-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 12px;
+    height: 12px;
+    background-color: get-color(black-coral-10);
+    border-radius: 50%;
+    color: get-color(white);
+    font-size: 8px;
+    line-height: 1;
+    position: absolute;
+    top: 50%;
+    left: -6px;
+    transform: translateY(-50%);
+  }
+
+  &__edit-icon {
+    height: 25px;
+    margin-left: 5px;
+    width: 20px;
+  }
+
+  &__message-text {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    background-color: get-color(black-coral-0);
+    border-radius: 8px 8px 8px 4px;
+    font-size: $veera-font-size-100;
+    line-height: $veera-line-height-500;
+    transition: all 0.25s ease-out;
+    cursor: pointer;
+    word-break: break-word;
+    white-space: pre-wrap;
+
+    &:hover {
+      background-color: get-color(black-coral-1);
+    }
+
+    :any-link {
+      background: url('../../static/icons/link-external-blue.svg') no-repeat
+        right center;
+      padding-right: 1.25em;
+      color: blue;
+      text-decoration: underline;
+    }
+  }
+
+  &__message-preview {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-radius: 8px 8px 8px 4px;
+    font-size: $veera-font-size-100;
+    line-height: $veera-line-height-500;
+    transition: all 0.25s ease-out;
+    cursor: pointer;
+
+    color: #4472c4;
+    background-color: #e7f3ff;
+  }
+
+  &__message-date {
+    color: get-color(black-coral-6);
+    font-size: 11px;
+    line-height: 20px;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+  }
+
+  &__message-failed-wrapper {
+    gap: 2px;
+    margin-left: -22px;
+  }
+
+  &__message-failed {
+    color: red;
+    display: flex;
+    font-size: 11px;
+    line-height: $veera-line-height-500;
+  }
+
+  &__message-failed-content {
+    margin-top: 4px;
+  }
+
+  &__message-failed-buttons {
+    display: flex;
+    gap: 20px;
+    justify-content: center;
+  }
+
+  &__message-status {
+    color: get-color(black-coral-6);
+    font-size: 11px;
+    line-height: 15px;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
+
+    &::before {
+      // css base64 ::before checkmark
+      content: url('data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTIiIGhlaWdodD0iMTAiIHZpZXdCb3g9IjAgMCAxMiAxMCIgZmlsbD0ibm9uZSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj4KPHBhdGggZD0iTTMuODYzMzkgNy41ODMzNkwxLjA4MzM5IDQuODAzMzZMMC4xMzY3MTkgNS43NDMzNkwzLjg2MzM5IDkuNDcwMDNMMTEuODYzNCAxLjQ3MDAzTDEwLjkyMzQgMC41MzAwMjlMMy44NjMzOSA3LjU4MzM2WiIgZmlsbD0iIzk3OTlBNCIvPgo8L3N2Zz4K');
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+    }
+  }
+}
+
+.edit-toolbar {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: auto auto;
+  gap: 10px;
+
+  &__header {
+    align-items: center;
+    display: flex;
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  &__textarea {
+    grid-column: 1;
+    grid-row: 2;
+  }
+
+  &__edit-actions {
+    display: flex;
+    grid-column: 2;
+    grid-row: 2;
+    gap: 10px;
+    justify-content: flex-end;
+  }
+}
+
+.title {
+  font-size: 13px;
+  color: get-color(black-coral-6);
+  padding-top: 2px;
+}
+
+.reset {
+  margin: 0;
+  padding: 0;
+  line-height: 1.3;
+}
+
+.reset h1,
+.reset h2,
+.reset h3,
+.reset h4,
+.reset h5,
+.reset h6 {
+  margin: 0;
+  padding: 0;
+}
+
+.reset p {
+  margin: 0 0 0.5rem;
+  padding: 0;
+}
+
+.reset ul,
+.reset ol {
+  margin: 0 0 1rem;
+  padding-left: 2.5rem;
+}
+
+.reset li {
+  margin: 0;
+  padding: 0;
+}
+
+.reset a {
+  text-decoration: none;
+  color: inherit;
+}

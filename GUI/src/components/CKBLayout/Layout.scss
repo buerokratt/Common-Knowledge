@@ -1,0 +1,28 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+
+.layout {
+  height: 100%;
+  display: flex;
+
+  &__wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+    overflow: auto;
+  }
+
+  &__main {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(haapsalu);
+    padding: get-spacing(haapsalu);
+    position: absolute;
+    top: 100px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+  }
+}

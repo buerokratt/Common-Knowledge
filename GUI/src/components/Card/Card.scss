@@ -1,0 +1,69 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/other';
+@import 'src/styles/settings/variables/typography';
+
+.card {
+  $self: &;
+  background-color: get-color(white);
+  border: 1px solid get-color(black-coral-2);
+  border-radius: $veera-radius-s;
+  max-height: 80vh;
+  overflow-y: visible;
+
+  &--borderless {
+    border: 0;
+    border-radius: 0;
+
+    #{$self}__header {
+      border-radius: 0;
+    }
+  }
+
+  &--scrollable {
+    overflow-y: auto;
+  }
+
+  &__header,
+  &__body,
+  &__footer {
+    padding: get-spacing(haapsalu);
+  }
+
+  &__header {
+    border-bottom: 1px solid get-color(black-coral-2);
+    background-color: get-color(extra-light);
+    border-radius: $veera-radius-s $veera-radius-s 0 0;
+
+    &.white {
+      background-color: white;
+    }
+  }
+
+  &__body {
+    &.divided {
+      display: flex;
+      flex-direction: column;
+      padding-left: 0px;
+      padding-right: 0px;
+
+      > :not(:last-child) {
+        margin-bottom: get-spacing(haapsalu);
+        border-bottom: 1px solid get-color(black-coral-2);
+        padding-bottom: get-spacing(haapsalu);
+        padding-left: get-spacing(haapsalu);
+      }
+
+      > :is(:last-child) {
+        padding-left: get-spacing(haapsalu);
+      }
+    }
+  }
+
+  &__footer {
+    border-top: 1px solid get-color(black-coral-2);
+    position: sticky;
+    bottom: 0;
+    background-color: get-color(white);
+  }
+}

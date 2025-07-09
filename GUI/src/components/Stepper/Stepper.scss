@@ -1,0 +1,88 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.stepper {
+  display: flex;
+  align-items: center;
+  background-color: get-color(black-coral-2);
+  width: 100%;
+  margin: 0 32px;
+  &__step {
+    display: flex;
+    align-items: center;
+    gap: get-spacing(paldiski);
+
+    color: get-color(black-coral-15);
+    padding: get-spacing(paldiski) get-spacing(haapsalu);
+    font-size: $veera-font-size-100;
+    font-weight: $veera-font-weight-beta;
+    position: relative;
+    min-height: 40px;
+    padding-right: 28px;
+
+    // Active step styling
+    &--active {
+      clip-path: polygon(0 0, calc(100% - 20px) 0, 100% 50%, calc(100% - 20px) 100%, 0 100%);
+      background-color: get-color(sapphire-blue-10);
+      color: get-color(white);
+      z-index: 3;
+    }
+  }
+  &__number {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    background-color: get-color(white);
+    color: get-color(black-coral-15);
+    border-radius: 50%;
+    font-weight: $veera-font-weight-delta;
+    font-size: $veera-font-size-80;
+    flex-shrink: 0;
+
+    .stepper__step--active & {
+      background-color: get-color(white);
+      color: get-color(sapphire-blue-10);
+    }
+
+    .stepper__step--completed & {
+      background-color: #266B42;
+      color: #fff;
+    }
+  }
+
+  &__label {
+    white-space: nowrap;
+  }
+}
+.stepper__step--completed {
+  background-color: #EAF3EE;
+      color: #266B42;
+}
+
+// Responsive design
+@media (max-width: 768px) {
+  .stepper {
+    &__step {
+      padding: get-spacing(paldiski);
+      font-size: $veera-font-size-80;
+
+      &:not(:first-child) {
+        margin-left: -15px;
+        padding-left: calc(#{get-spacing(paldiski)} + 15px);
+      }
+    }
+
+    &__number {
+      width: 20px;
+      height: 20px;
+      font-size: $veera-font-size-70;
+    }
+
+    &__label {
+      display: none; // Hide labels on mobile to save space
+    }
+  }
+}

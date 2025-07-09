@@ -1,0 +1,47 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.url-input {
+  display: unset;
+}
+
+.agency-container {
+  height: 100%;
+  display: flex;
+  gap: 16px;
+  flex-direction: column;
+  &__action-btn {
+    display: flex;
+    align-items: center;
+    font-family: Roboto;
+    font-weight: 700;
+    font-size: 14px;
+    line-height: 171%;
+    letter-spacing: 0px;
+    text-align: center;
+    vertical-align: middle;
+    &:disabled {
+      color: #C0C2C9 !important;
+      text-decoration: none !important;
+      cursor: not-allowed;
+    }
+  }
+ 
+  .card {
+    min-width: 960px;
+  }
+
+
+  // Modal form styling
+  .dialog {
+    .track {
+      &[data-direction="vertical"] {
+        .input,
+        .select {
+          width: 100%;
+        }
+      }
+    }
+  }
+}

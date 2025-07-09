@@ -1,0 +1,200 @@
+@import 'src/styles/tools/spacing';
+@import 'src/styles/tools/color';
+@import 'src/styles/settings/variables/typography';
+
+.knowledge-base-settings {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: get-spacing(haapsalu);
+  .card {
+    min-width: 1168px;
+  }
+  &__path {
+    display: flex;
+    align-items: center;
+    margin-bottom: get-spacing(haapsalu);
+    padding: get-spacing(paldiski) 0;
+    border-bottom: 1px solid get-color(black-coral-2);
+  }
+
+  &__agency {
+    font-size: $veera-font-size-200;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+  }
+
+  &__separator {
+    font-size: $veera-font-size-200;
+    color: get-color(black-coral-10);
+    margin: 0 16px;
+  }
+
+  &__domain {
+    font-size: $veera-font-size-200;
+    color: get-color(black-coral-12);
+  }
+
+  &__content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: get-spacing(haapsalu);
+    max-width: 800px;
+  }
+
+  &__section {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: fit-content;
+  }
+
+  &__label {
+    min-width: 302px;
+    width: 302px;
+    text-align: right;
+    font-size: $veera-font-size-100;
+    font-weight: $veera-font-weight-beta;
+    color: get-color(black-coral-15);
+    margin-bottom: get-spacing(paldiski);
+  }
+
+  &__repeat-group {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+
+  &__schedule-group {
+    display: flex;
+    gap: get-spacing(paldiski);
+    align-items: center;
+    margin-left: get-spacing(haapsalu);
+
+    input[type="radio"] {
+      margin-right: get-spacing(paldiski);
+    }
+  }
+
+  &__days-grid {
+    display: flex;
+    gap: get-spacing(paldiski);
+    flex-wrap: wrap;
+
+    button {
+      min-width: 60px;
+      border-radius: 20px;
+      
+      &[data-appearance="primary"] {
+        background-color: get-color(sapphire-blue-10);
+        color: get-color(white);
+      }
+    }
+  }
+
+  &__urls {
+    display: flex;
+    gap: get-spacing(paldiski);
+  }
+
+  &__url-list {
+    list-style: circle ;
+    padding: 0;
+    margin: 0;
+    margin-left:22px;
+    color: get-color(sapphire-blue-10);
+    li {
+      // display: flex;
+      align-items: center;
+      padding: get-spacing(paldiski) 0;
+
+      a {
+        color: get-color(sapphire-blue-10);
+        text-decoration: none;
+        
+        &:hover {
+          text-decoration: underline;
+        }
+      }
+    }
+  }
+
+  &__footer {
+    margin-top: auto;
+    padding-top: get-spacing(haapsalu);
+    border-top: 1px solid get-color(black-coral-2);
+  }
+
+  // Form field styling adjustments
+  .switch {
+    align-items: flex-start;
+    
+    &__label {
+      font-size: $veera-font-size-100;
+      font-weight: $veera-font-weight-beta;
+    }
+  }
+
+  .input {
+    &__wrapper {
+      position: relative;
+      
+      .icon {
+        position: absolute;
+        right: get-spacing(paldiski);
+        top: 50%;
+        transform: translateY(-50%);
+        color: get-color(black-coral-10);
+      }
+    }
+  }
+
+  // Radio button styling
+  input[type="radio"] {
+    appearance: none;
+    width: 20px;
+    height: 20px;
+    border: 2px solid get-color(black-coral-6);
+    border-radius: 50%;
+    position: relative;
+    cursor: pointer;
+    
+    &:checked {
+      border-color: get-color(sapphire-blue-10);
+      
+      &::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        width: 10px;
+        height: 10px;
+        background-color: get-color(sapphire-blue-10);
+        border-radius: 50%;
+      }
+    }
+  }
+
+  // Responsive design
+  @media (max-width: 768px) {
+    padding: get-spacing(paldiski);
+    
+    &__content {
+      gap: get-spacing(paldiski);
+    }
+    
+    &__days-grid {
+      button {
+        min-width: 50px;
+        font-size: $veera-font-size-80;
+      }
+    }
+    
+    .track {
+      flex-wrap: wrap;
+      gap: get-spacing(paldiski);
+    }
+  }
+}
