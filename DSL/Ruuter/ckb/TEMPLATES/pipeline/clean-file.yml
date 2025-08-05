@@ -1,0 +1,22 @@
+extractRequestData:
+  assign:
+    file_path: ${incoming.body.file_path}
+    meta_data_path: ${incoming.body.meta_data_path}
+    directory_path: ${incoming.body.directory_path}
+    source_file_id: ${incoming.body.source_file_id}
+
+
+cleanData:
+  call: http.post
+  args:
+    url: "[#CKB_CLEANING_SERVICE]/clean_file"
+    body:
+      file_path: ${file_path}
+      meta_data_path: ${meta_data_path}
+      directory_path: ${directory_path}
+      source_file_id: ${source_file_id}
+  result: cleanedResult
+
+
+returnResult:
+  return: ${cleanedResult.response.body}

@@ -1,0 +1,46 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Update an existing agency"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the agency to update"
+      - field: name
+        type: string
+        description: "Updated name of the agency"
+      - field: sector
+        type: string
+        description: "Updated sector of the agency"
+      - field: externalId
+        type: string
+        description: "Updated Centops ID for the agency"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+    name: "${incoming.body.name}"
+    sector: "${incoming.body.sector}"
+    external_id: "${incoming.body.externalId}"
+
+updateAgency:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/update_agency"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      name: ${name}
+      sector: ${sector}
+      external_id: ${external_id}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

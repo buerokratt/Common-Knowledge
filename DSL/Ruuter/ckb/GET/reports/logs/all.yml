@@ -1,0 +1,44 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "List all source run pages with pagination, sorting and optional filtering by source run report"
+  method: get
+  accepts: json
+  returns: json
+  namespace: logs
+  allowlist:
+    query:
+      - field: page
+        type: number
+        description: "Page number for pagination"
+      - field: pageSize
+        type: number
+        description: "Number of items per page"
+      - field: sorting
+        type: string
+        description: "Sorting criteria (url asc/desc, error_type asc/desc, error_message asc/desc, scraped_at asc/desc)"
+      - field: source_run_report_base_id
+        type: string
+        description: "Optional filter by source run report base ID (UUID)"
+
+extractRequestData:
+  assign:
+    page: "${incoming.params.page ?? 1}"
+    page_size: "${incoming.params.pageSize ?? 10}"
+    sorting: "${incoming.params.sorting ?? 'scraped_at desc'}"
+    source_run_report_base_id: "${incoming.params.source_run_report_base_id ?? null}"
+
+getSourceRunPages:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_run_page/list_source_run_pages"
+    query:
+      page: ${page}
+      page_size: ${page_size}
+      sorting: ${sorting}
+      source_run_report_base_id: ${source_run_report_base_id}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

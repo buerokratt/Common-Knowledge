@@ -1,0 +1,54 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Refresh a source by base ID"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source to refresh"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+
+getSource:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source/get_source"
+    contentType: json
+    query:
+      base_id: ${base_id}
+  result: sourceToRun
+
+assignPipelineTemplate:
+  switch:
+    - condition: ${sourceToRun.response.body[0].type == "api"}
+      next: triggerApiPipelineForSource
+  next: triggerScrapperPipelineForSource
+
+triggerApiPipelineForSource:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-eesti-api-source"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+  result: res
+  next: returnResult
+
+triggerScrapperPipelineForSource:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-entire-source"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+  result: res
+  next: returnResult
+
+returnResult:
+  return: "OK"
+  next: end

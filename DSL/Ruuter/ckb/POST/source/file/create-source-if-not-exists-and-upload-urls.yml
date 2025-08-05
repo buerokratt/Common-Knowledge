@@ -1,0 +1,136 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new source and get upload URLs for files"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: agencyBaseId
+        type: string
+        description: "Base ID of the agency"
+      - field: subsector
+        type: string
+        description: "Subsector of the source"
+      - field: files
+        type: array
+        description: "Array of file objects with name and contentType"
+      - field: expiresIn
+        type: integer
+        description: "Expiration time in seconds"
+        optional: true
+
+extractRequestData:
+  assign:
+    agency_base_id: "${incoming.body.agencyBaseId}"
+    url: "Files"
+    subsector: "${incoming.body.subsector}"
+    type: "file"
+    files: "${incoming.body.files}"
+    expires_in: "${incoming.body.expiresIn || 3600}"
+
+sourceExists:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source/get_source_exists"
+    contentType: json
+    query:
+      agency_base_id: ${agency_base_id}
+      url: ${url}
+      subsector: ${subsector}
+      type: ${type}
+  result: exists
+
+checkExists:
+  switch:
+    - condition: ${exists.response.body[0].exists}
+      next: getSource
+  next: createSource
+
+getSource:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source/get_source_by_content"
+    contentType: json
+    query:
+      agency_base_id: ${agency_base_id}
+      url: ${url}
+      subsector: ${subsector}
+      type: ${type}
+  result: sourceResponse
+  next: extractSourceId
+
+
+createSource:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/create_source"
+    headers:
+      type: json
+    body:
+      agency_base_id: ${agency_base_id}
+      url: ${url}
+      subsector: ${subsector}
+      type: ${type}
+  result: sourceResponse
+
+extractSourceId:
+  assign:
+    source_id: "${sourceResponse.response.body[0].baseId}"
+
+generateSourceFileIds:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/generate_source_file_ids"
+    headers:
+      type: json
+    body:
+      files: ${files}
+  result: sourceFileIdsResult
+
+generateFilePaths:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/generate_source_file_paths"
+    headers:
+      type: json
+    body:
+      agencyId: ${agency_base_id}
+      sourceId: ${source_id}
+      files: ${sourceFileIdsResult.response.body}
+  result: enrichedPaths
+
+requestUploadUrls:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/upload-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      files: ${enrichedPaths.response.body.files}
+      expires_in: ${expires_in}
+  result: uploadResponse
+
+mergeUploadData:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/merge_upload_urls_with_metadata"
+    headers:
+      type: json
+    body:
+      upload_urls: ${uploadResponse.response.body.upload_urls}
+      file_metadata: ${enrichedPaths.response.body.file_metadata}
+  result: mergedData
+
+prepareResponse:
+  assign:
+    response:
+      sourceId: ${source_id}
+      fileUploadUrls: ${mergedData.response.body}
+
+returnResponse:
+  return: ${response}
+  next: end

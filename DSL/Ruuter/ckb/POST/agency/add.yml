@@ -1,0 +1,41 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new agency"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: name
+        type: string
+        description: "Name of the agency"
+      - field: sector
+        type: string
+        description: "Sector of the agency"
+      - field: externalId
+        type: string
+        description: "Centops ID for the agency"
+
+extractRequestData:
+  assign:
+    name: "${incoming.body.name}"
+    sector: "${incoming.body.sector}"
+    external_id: "${incoming.body.externalId}"
+
+createAgency:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/create_agency"
+    headers:
+      type: json
+    body:
+      name: ${name}
+      sector: ${sector}
+      external_id: ${external_id}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

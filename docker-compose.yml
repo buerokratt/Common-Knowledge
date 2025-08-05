@@ -55,7 +55,7 @@ services:
     depends_on:
       - database
     environment:
-      - server.port=8088
+      - server.port=8087
       - sqlms.datasources.[0].name=byk
       # - sqlms.datasources.[0].jdbcUrl=jdbc:postgresql://database:5432/users_db // For Local Use
       - sqlms.datasources.[0].jdbcUrl=jdbc:postgresql://171.22.247.13:5433/byk
@@ -63,9 +63,9 @@ services:
       - sqlms.datasources.[0].password=2nH09n6Gly
       - logging.level.org.springframework.boot=INFO
     ports:
-      - 8088:8088
+      - 8087:8087
     volumes:
-      - ./DSL/Resql:/workspace/app/templates
+      - ./DSL/Resql:/DSL
     networks:
       - bykstack
 
@@ -84,12 +84,12 @@ services:
     ports:
       - 8090:8090
     volumes:
-      - ./DSL/Resql:/workspace/app/templates
+      - ./DSL/Resql:/DSL
     networks:
       - bykstack
 
-  ruuter-public:
-    container_name: ruuter-public
+  ruuter:
+    container_name: ruuter
     image: ruuter
     environment:
       - application.cors.allowedOrigins=http://localhost:8086,http://localhost:3001,http://localhost:3003,http://localhost:3004,http://localhost:8080
@@ -100,34 +100,12 @@ services:
       - application.logging.printStackTrace=true
       - application.internalRequests.disabled=true
       - server.port=8086
+      - application.externalAuthAllowed=
     volumes:
-      - ./DSL/Ruuter.public:/DSL
+      - ./DSL/Ruuter:/DSL
       - ./constants.ini:/app/constants.ini
     ports:
       - 8086:8086
-    networks:
-      - bykstack
-    cpus: "0.5"
-    mem_limit: "512M"
-
-  ruuter-private:
-    container_name: ruuter-private
-    image: ruuter
-    environment:
-      - application.cors.allowedOrigins=http://localhost:8082,http://localhost:3001,http://localhost:3003
-      - application.httpCodesAllowList=200,201,202,400,401,403,500
-      - application.internalRequests.allowedIPs=127.0.0.1
-      - application.logging.displayRequestContent=true
-      - application.logging.displayResponseContent=true
-      - application.logging.printStackTrace=true
-      - application.internalRequests.disabled=true
-      - server.port=8080
-      - application.externalAuthAllowed=
-    volumes:
-      - ./DSL/Ruuter.private:/DSL
-      - ./constants.ini:/app/constants.ini
-    ports:
-      - 8080:8080
     networks:
       - bykstack
     cpus: "0.5"

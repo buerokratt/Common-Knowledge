@@ -1,0 +1,21 @@
+extractRequestData:
+  assign:
+    agency_id: ${incoming.body.agency_id}
+    source_id: ${incoming.body.source_id}
+    source_files: ${incoming.body.source_files}
+    download_files: ${incoming.body.download_files}
+
+triggerScrapper:
+  call: http.post
+  args:
+    url: "[#CKB_SCRAPPER_SERVICE]/uploaded-file"
+    contentType: json
+    body:
+      agency_id: ${agency_id}
+      source_id: ${source_id}
+      urls: ${source_files}
+      download_files: ${download_files}
+  result: triggerScrapperResult
+
+returnResult:
+  return: "OK"

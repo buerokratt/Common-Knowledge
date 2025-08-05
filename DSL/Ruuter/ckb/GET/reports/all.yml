@@ -1,0 +1,39 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "List all source run reports with pagination and sorting"
+  method: get
+  accepts: json
+  returns: json
+  namespace: reports
+  allowlist:
+    query:
+      - field: page
+        type: number
+        description: "Page number for pagination"
+      - field: pageSize
+        type: number
+        description: "Number of items per page"
+      - field: sorting
+        type: string
+        description: "Sorting criteria (agency_name asc/desc, url asc/desc, errors asc/desc, scraping_started_at asc/desc, scraping_finished_at asc/desc)"
+
+extractRequestData:
+  assign:
+    page: "${incoming.params.page ?? 1}"
+    page_size: "${incoming.params.pageSize ?? 10}"
+    sorting: "${incoming.params.sorting ?? 'scraping_started_at desc'}"
+
+getSourceRunReports:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/reports/list_source_run_reports"
+    query:
+      page: ${page}
+      page_size: ${page_size}
+      sorting: ${sorting}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

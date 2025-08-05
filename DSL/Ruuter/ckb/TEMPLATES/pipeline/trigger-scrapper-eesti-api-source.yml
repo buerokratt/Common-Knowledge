@@ -1,0 +1,17 @@
+extractRequestData:
+  assign:
+    agency_id: ${incoming.body.agency_id}
+    source_id: ${incoming.body.source_id}
+
+triggerScrapper:
+  call: http.post
+  args:
+    url: "[#CKB_SCRAPPER_SERVICE]/eesti-scrapper-task"
+    contentType: json
+    body:
+      agency_id: ${agency_id}
+      source_id: ${source_id}
+  result: triggerScrapperResult
+
+returnResult:
+  return: "OK"

@@ -1,0 +1,7 @@
+[
+  {{#each agencies}}
+    {{#if this.path}}
+    "{{this.path}}"{{#unless @last}},{{/unless}}
+    {{/if}}
+  {{/each}}
+]

@@ -1,0 +1,7 @@
+[
+  {{#each source_files}}
+    {{#if this.originalDataUrl}}
+    "{{this.originalDataUrl}}"{{#unless @last}},{{/unless}}
+    {{/if}}
+  {{/each}}
+]

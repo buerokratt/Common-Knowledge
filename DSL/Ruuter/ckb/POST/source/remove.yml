@@ -1,0 +1,110 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Delete a source by base ID including search index cleanup"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source to delete"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+
+deleteSourceFromDatabase:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/delete_source"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+  result: deleteDbResult
+
+validateDatabaseDeletion:
+  switch:
+    - condition: "${deleteDbResult.response.length == 0 || deleteDbResult.response.statusCodeValue >= 400}"
+      next: databaseDeleteError
+  next: deleteSourceSearchIndex
+
+deleteSourceSearchIndex:
+  call: http.delete
+  args:
+    url: "[#CKB_SEARCH]/index/${base_id}"
+    headers:
+      type: json
+  result: searchIndexDeleteResult
+
+handleSearchIndexResult:
+  switch:
+    - condition: "${searchIndexDeleteResult.response.statusCodeValue >= 400 && searchIndexDeleteResult.response.statusCodeValue != 404}"
+      next: searchIndexDeleteError
+  next: deleteSourceFilesFromS3
+
+deleteSourceFilesFromS3:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/delete-files-async"
+    headers:
+      type: json
+    body:
+      files:
+        - s3_path: "${deleteDbResult.response.body[0].agencyBaseId}/${base_id}/"
+          is_folder: true
+      callback:
+        url: "[#CKB_RUUTER_INTERNAL]/agency/update-zip-dirty"
+        method: "POST"
+        body:
+          agencyId: "${deleteDbResult.response.body[0].agencyBaseId}"
+  result: deleteS3Result
+
+assignSuccessResponse:
+  assign:
+    response: "Source deleted from database, search index, and S3 deletion task started"
+
+returnSuccess:
+  return: ${response}
+  status: 200
+  next: end
+
+databaseDeleteError:
+  return: "Source not found or has been updated by another process"
+  status: 404
+  next: end
+
+searchIndexDeleteError:
+  # Continue with S3 deletion even if search index deletion fails
+  assign:
+    search_error: "Search index deletion failed: ${searchIndexDeleteResult.response.body?.error ?? 'Unknown error'}"
+  next: deleteSourceFilesFromS3WithWarning
+
+deleteSourceFilesFromS3WithWarning:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/delete-files-async"
+    headers:
+      type: json
+    body:
+      files:
+        - s3_path: "${deleteDbResult.response.body[0].agencyBaseId}/${base_id}/"
+          is_folder: true
+      callback:
+        url: "[#CKB_RUUTER_INTERNAL]/agency/update-zip-dirty"
+        method: "POST"
+        body:
+          agencyId: "${deleteDbResult.response.body[0].agencyBaseId}"
+  result: deleteS3Result
+
+assignWarningResponse:
+  assign:
+    response: "Source deleted from database and S3, but search index deletion failed"
+
+returnSuccessWithWarning:
+  return: ${response}
+  status: 200
+  next: end

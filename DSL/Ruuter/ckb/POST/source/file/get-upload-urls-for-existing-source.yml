@@ -1,0 +1,85 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new source and get upload URLs for files"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: agencyBaseId
+        type: string
+        description: "Base ID of the agency"
+      - field: sourceBaseId
+        type: string
+        description: "Base ID of the source"
+      - field: files
+        type: array
+        description: "Array of file objects with name and contentType"
+      - field: expiresIn
+        type: integer
+        description: "Expiration time in seconds"
+        optional: true
+
+extractRequestData:
+  assign:
+    agency_base_id: "${incoming.body.agencyBaseId}"
+    source_base_id: "${incoming.body.sourceBaseId}"
+    files: "${incoming.body.files}"
+    expires_in: "${incoming.body.expiresIn || 3600}"
+
+generateSourceFileIds:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/generate_source_file_ids"
+    headers:
+      type: json
+    body:
+      files: ${files}
+  result: sourceFileIdsResult
+
+generateFilePaths:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/generate_source_file_paths"
+    headers:
+      type: json
+    body:
+      agencyId: ${agency_base_id}
+      sourceId: ${source_base_id}
+      files: ${sourceFileIdsResult.response.body}
+  result: enrichedPaths
+
+requestUploadUrls:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/upload-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      files: ${enrichedPaths.response.body.files}
+      expires_in: ${expires_in}
+  result: uploadResponse
+
+mergeUploadData:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/merge_upload_urls_with_metadata"
+    headers:
+      type: json
+    body:
+      upload_urls: ${uploadResponse.response.body.upload_urls}
+      file_metadata: ${enrichedPaths.response.body.file_metadata}
+  result: mergedData
+
+prepareResponse:
+  assign:
+    response:
+      sourceId: ${source_base_id}
+      fileUploadUrls: ${mergedData.response.body}
+
+returnResponse:
+  return: ${response}
+  next: end

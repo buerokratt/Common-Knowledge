@@ -1,0 +1,19 @@
+extractRequestData:
+  assign:
+    agency_id: ${incoming.body.agency_id}
+    source_id: ${incoming.body.source_id}
+    source_files: ${incoming.body.source_files}
+
+triggerScrapper:
+  call: http.post
+  args:
+    url: "[#CKB_SCRAPPER_SERVICE]/specified-api-files-scrapper-task"
+    contentType: json
+    body:
+      agency_id: ${agency_id}
+      source_id: ${source_id}
+      api_files: ${source_files}
+  result: triggerScrapperResult
+
+returnResult:
+  return: "OK"

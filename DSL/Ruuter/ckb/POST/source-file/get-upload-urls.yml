@@ -1,0 +1,38 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Get upload URLs for file blobs"
+  method: post
+  accepts: json
+  returns: json
+  namespace: file
+  allowlist:
+    body:
+      - field: files
+        type: array
+        description: "Array of file upload info objects"
+      - field: expires_in
+        type: integer
+        description: "Expiration time in seconds"
+        optional: true
+
+extractRequestData:
+  assign:
+    files: "${incoming.body.files}"
+    expires_in: "${incoming.body.expires_in || 3600}"
+
+requestUploadUrls:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/upload-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      files: ${files}
+      expires_in: ${expires_in}
+  result: uploadResponse
+
+returnResponse:
+  return: ${uploadResponse.response.body}
+  next: end

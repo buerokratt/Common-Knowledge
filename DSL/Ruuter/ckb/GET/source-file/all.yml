@@ -1,0 +1,102 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "List all source files (scraped or uploaded) with pagination, sorting, and search"
+  method: get
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    params:
+      - field: sourceId
+        type: string
+        description: "Source ID to filter by (optional)"
+      - field: type
+        type: string
+        description: "File type filter: 'scraped_file' or 'uploaded_file'"
+      - field: page
+        type: number
+        description: "Page number for pagination"
+      - field: pageSize
+        type: number
+        description: "Number of items per page"
+      - field: sorting
+        type: string
+        description: "Sorting criteria (url asc/desc, page_title asc/desc, excluded asc/desc, status asc/desc, last_scraped_at asc/desc)"
+      - field: search
+        type: string
+        description: "Search query string (optional)"
+
+extractRequestData:
+  assign:
+    source_id: "${incoming.params.sourceId}"
+    file_type: "${incoming.params.type ?? 'scraped_file'}"
+    page: "${incoming.params.page ?? 1}"
+    page_size: "${incoming.params.pageSize ?? 10}"
+    sorting: "${incoming.params.sorting ?? 'last_scraped_at desc'}"
+    search_query: "${incoming.params.search}"
+
+checkSearchRequired:
+  switch:
+    - condition: ${!!search_query}
+      next: performSearch
+  next: getSourceFilesByType
+
+performSearch:
+  call: http.get
+  args:
+    url: "[#CKB_SEARCH]/search/${source_id}"
+    query:
+      q: ${search_query}
+      page: ${page}
+      size: ${page_size}
+      onlyIds: true
+  result: searchResult
+
+getSourceFilesByIds:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_file/list_${file_type === 'scraped_file' || file_type === 'api_file' ? 'scraped' : 'uploaded'}_source_files_by_ids"
+    query:
+      source_file_ids: ${searchResult.response.body.sourceFileIds?.join(',') ?? ''}
+      page: ${page}
+      page_size: ${page_size}
+      sorting: ${sorting}
+      total_count: ${searchResult.response.body.total}
+      type: ${file_type}
+  result: res
+  next: returnSuccess
+
+getSourceFilesByType:
+  switch:
+    - condition: ${file_type === 'uploaded_file'}
+      next: getUploadedSourceFiles
+  next: getScrapedSourceFiles
+
+getScrapedSourceFiles:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_file/list_scraped_source_files"
+    query:
+      source_id: ${source_id}
+      page: ${page}
+      page_size: ${page_size}
+      sorting: ${sorting}
+      type: ${file_type}
+  result: res
+  next: returnSuccess
+
+getUploadedSourceFiles:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_file/list_uploaded_source_files"
+    query:
+      source_id: ${source_id}
+      page: ${page}
+      page_size: ${page_size}
+      sorting: ${sorting}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

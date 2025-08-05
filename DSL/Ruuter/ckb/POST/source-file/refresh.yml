@@ -1,0 +1,55 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "refresh a source file by base ID"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source-file"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+
+getSourceFile:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_file_to_scraping_by_source_file_base_id"
+    contentType: json
+    body:
+      base_id: ${base_id}
+  result: sourceFileToRun
+
+assignPipelineTemplate:
+  switch:
+    - condition: ${sourceFileToRun.response.body[0].type == "api_file"}
+      next: triggerApiPipelineForSourceFile
+  next: triggerPipelineForSourceFile
+
+triggerApiPipelineForSourceFile:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-eesti-api-specified-files"
+  requestType: templates
+  body:
+    source_id: ${sourceFileToRun.response.body[0].sourceBaseId}
+    agency_id: ${sourceFileToRun.response.body[0].agencyBaseId}
+    source_files: ${sourceFileToRun.response.body}
+  result: res
+  next: returnResult
+
+triggerPipelineForSourceFile:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-specified-pages"
+  requestType: templates
+  body:
+    source_id: ${sourceFileToRun.response.body[0].sourceBaseId}
+    agency_id: ${sourceFileToRun.response.body[0].agencyBaseId}
+    source_files: ${sourceFileToRun.response.body}
+  result: res
+
+returnResult:
+  return: "OK"
+  next: end

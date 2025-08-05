@@ -1,0 +1,20 @@
+{
+  "files": [
+    {{#each files}}
+    {
+      "path": "uploads/scrapped-data/{{../agencyId}}/{{../sourceId}}/{{this.id}}/{{this.name}}",
+      "content_type": "{{this.contentType}}"
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+  ],
+  "file_metadata": [
+    {{#each files}}
+    {
+      "path": "uploads/scrapped-data/{{../agencyId}}/{{../sourceId}}/{{this.id}}/{{this.name}}",
+      "source_file_id": "{{this.id}}",
+      "file_name": "{{this.name}}",
+      "content_type": "{{this.contentType}}"
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+  ]
+}

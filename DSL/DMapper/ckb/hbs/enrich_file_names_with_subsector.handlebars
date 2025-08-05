@@ -1,0 +1,8 @@
+[
+  {{#each fileNames}}
+    {
+      "name": "{{this}}",
+      "subsector": "{{../subsector}}"
+    }{{#unless @last}},{{/unless}}
+  {{/each}}
+]
