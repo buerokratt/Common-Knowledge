@@ -1,0 +1,4 @@
+id,base_id,name,sector,external_id,created_at,updated_at,is_deleted,zipped_data_url,data_hash
+743eaaec-bc29-4b6e-8d74-b8ee65696411,f41964fe-bd79-4a64-ac0c-2fa1d653c79d,test 1,production,1,'2025-07-17 11:39:12.287104 +00:00'::TIMESTAMP WITH TIME ZONE,'2025-07-17 11:39:12.287104 +00:00'::TIMESTAMP WITH TIME ZONE,false,,
+ecf72cf5-7479-4ece-ba6f-7127d6c9ecc0,f41964fe-bd79-4a64-ac0c-2fa1d653c79d,test 1 updated,production,1,'2025-07-17 11:39:12.287104 +00:00'::TIMESTAMP WITH TIME ZONE,'2025-07-17 11:39:12.287104 +00:00'::TIMESTAMP WITH TIME ZONE,false,,
+13f7d7e5-3d9d-4573-8507-27095e2ea432,f34da622-685c-4d6c-9269-229ad4d2b2a0,test 2,service,2,'2025-07-17 11:40:06.356056 +00:00'::TIMESTAMP WITH TIME ZONE,'2025-07-17 11:40:06.356056 +00:00'::TIMESTAMP WITH TIME ZONE,false,,
