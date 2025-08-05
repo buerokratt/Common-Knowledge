@@ -76,6 +76,56 @@
     flex-grow: 0;
   }
 
+  // Overall progress styles
+  &__overall-progress {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: row;
+    justify-content: center;
+    align-items: center;
+    padding: 22px;
+    width: 100%;
+    height: 68px;
+    background: #FFFFFF;
+    border: 2px dashed #005AA3;
+    border-radius: 4px;
+    flex: none;
+    order: 0;
+    align-self: stretch;
+    flex-grow: 0;
+  }
+
+  &__overall-progress-content {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+
+  &__progress-icon {
+    width: 24px;
+    height: 24px;
+    color: #005AA3;
+    flex: none;
+    order: 0;
+    flex-grow: 0;
+  }
+
+  &__progress-text {
+    font-family: 'Roboto';
+    font-style: normal;
+    font-weight: 400;
+    font-size: 16px;
+    line-height: 150%;
+    display: flex;
+    align-items: center;
+    text-align: center;
+    color: #005AA3;
+    flex: none;
+    order: 1;
+    flex-grow: 0;
+  }
+
   &__helper-texts {
     display: flex;
     flex-direction: column;
@@ -149,6 +199,16 @@
     &--error {
       border: 1px solid #AC3232;
     }
+
+    &--uploading {
+      background: #E3F2FD;
+      border: 1px solid #005AA3;
+    }
+
+    &--success {
+      background: #E8F5E8;
+      border: 1px solid #266B42;
+    }
   }
 
   &__attachment-name {
@@ -212,13 +272,18 @@
       color: #131317;
     }
 
-    &:hover {
+    &:hover:not(:disabled) {
       background-color: rgba(0, 0, 0, 0.1);
     }
 
     &:focus {
       outline: 2px solid #005AA3;
       outline-offset: 1px;
+    }
+
+    &:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
     }
   }
 
@@ -249,7 +314,16 @@
       height: 60px;
     }
 
+    &__overall-progress {
+      padding: 16px;
+      height: 60px;
+    }
+
     &__instructions {
+      font-size: 14px;
+    }
+
+    &__progress-text {
       font-size: 14px;
     }
 

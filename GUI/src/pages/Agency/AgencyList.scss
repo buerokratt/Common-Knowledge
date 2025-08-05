@@ -95,13 +95,13 @@
     align-items: center;
     padding: get-spacing(paldiski) 0;
     border-top: 1px solid get-color(black-coral-2);
-    margin-top: get-spacing(paldiski);
     min-width: max-content;
   }
 
   &__total {
-    position: absolute;
-    transform: translateY(-35px);
+    position: relative;
+    transform: translateY(-42px);
+    margin-bottom: -24px;
     font-size: $veera-font-size-100;
     color: get-color(black-coral-12);
     font-weight: $veera-font-weight-beta;
@@ -111,7 +111,6 @@
   // Header section responsive
   .track {
     max-width: 100%;
-    flex-wrap: wrap;
     gap: 12px;
     
     h1 {

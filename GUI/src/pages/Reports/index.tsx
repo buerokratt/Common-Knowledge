@@ -1,123 +1,166 @@
-import { FC, useState } from 'react';
+// Reports.tsx - Reports List Component with API Integration
+import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MdOutlineDeleteOutline } from 'react-icons/md';
 import { Button, Card, DataTable, Dialog, Icon, Track } from 'components';
-import { ColumnDef } from '@tanstack/react-table';
+import {
+  ColumnDef,
+  PaginationState,
+  SortingState,
+  ColumnFiltersState,
+} from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
-import { apiDev } from 'services/api';
-import 'pages/Agency/AgencyList.scss';
 import { Link } from 'react-router-dom';
-
-interface ReportItem {
-  id: string;
-  agency: string;
-  domain: string;
-  errors: number;
-  startedAt: string;
-  finishedAt: string;
-}
+import {
+  getReports,
+  deleteReport,
+  Report,
+  ReportListParams,
+} from 'services/reports';
+import 'pages/Agency/AgencyList.scss';
 
 const Reports: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
-  const [deleteModal, setDeleteModal] = useState<ReportItem | null>(null);
+  const [deleteModal, setDeleteModal] = useState<Report | null>(null);
 
-  // Mock data - replace with actual API call
-  const { data: reportsData, refetch } = useQuery<{
-    data: ReportItem[];
-    total: number;
-  }>({
-    queryKey: ['reports'],
-    queryFn: async () => ({
-      data: [
-        {
-          id: '1',
-          agency: 'EMTA',
-          domain: 'www.emta.ee',
-          errors: 3,
-          startedAt: '31.04.2025 14:53',
-          finishedAt: '31.04.2025 15:53',
-        },
-        {
-          id: '2',
-          agency: 'EMTA',
-          domain: 'www.emta.ee',
-          errors: 0,
-          startedAt: '31.05.2025 14:53',
-          finishedAt: '31.05.2025 15:53',
-        },
-        {
-          id: '3',
-          agency: 'EMTA',
-          domain: 'www.emta2.ee',
-          errors: 2,
-          startedAt: '30.04.2025 14:53',
-          finishedAt: '31.04.2025 15:53',
-        },
-        {
-          id: '4',
-          agency: 'PPA',
-          domain: 'www.politsei.ee',
-          errors: 2,
-          startedAt: '31.04.2025 14:53',
-          finishedAt: '31.04.2025 15:53',
-        },
-        {
-          id: '5',
-          agency: 'Statistikaamet',
-          domain: 'www.stat.ee',
-          errors: 0,
-          startedAt: '31.04.2025 14:53',
-          finishedAt: '31.04.2025 15:53',
-        },
-      ],
-      total: 170,
+  // Add table state for server-side pagination and sorting
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  });
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // Convert sorting state to API format
+  const getSortingParam = (sorting: SortingState): string => {
+    if (sorting.length === 0) return 'scraping_started_at desc';
+
+    const sort = sorting[0];
+    let field = sort.id;
+
+    // Map column IDs to API field names
+    const fieldMap: Record<string, string> = {
+      agency: 'agency_name',
+      url: 'url',
+      errors: 'errors',
+      startedAt: 'scraping_started_at',
+      finishedAt: 'scraping_finished_at',
+    };
+
+    field = fieldMap[field] || field;
+    return `${field} ${sort.desc ? 'desc' : 'asc'}`;
+  };
+
+  // API query parameters
+  const queryParams: ReportListParams = useMemo(
+    () => ({
+      page: pagination.pageIndex + 1,
+      pageSize: pagination.pageSize,
+      sorting: getSortingParam(sorting),
     }),
+    [pagination.pageIndex, pagination.pageSize, sorting]
+  );
+
+  // Fetch reports data
+  const {
+    data: reportsApiData,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ['reports', queryParams],
+    queryFn: () => getReports(queryParams),
+    keepPreviousData: true,
   });
 
-  const handleDelete = async () => {
-    if (!deleteModal) return;
-
-    try {
-      await apiDev.delete(`reports/${deleteModal.id}`);
-      setDeleteModal(null);
-      refetch();
+  // Delete report mutation
+  const deleteReportMutation = useMutation({
+    mutationFn: deleteReport,
+    onSuccess: () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('reports.deleteSuccess'),
       });
-    } catch (error) {
+      setDeleteModal(null);
+      queryClient.invalidateQueries(['reports']);
+    },
+    onError: (error: any) => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: t('reports.deleteError'),
+        message: error.message || t('reports.deleteError'),
       });
+    },
+  });
+
+  // Transform API data
+  const reportsData = useMemo(() => {
+    if (!reportsApiData) return { data: [], total: 0 };
+
+    return {
+      data: reportsApiData.data,
+      total: reportsApiData.total,
+    };
+  }, [reportsApiData]);
+
+  // Handle pagination change
+  const handlePaginationChange = (newPagination: PaginationState) => {
+    setPagination(newPagination);
+  };
+
+  // Handle sorting change
+  const handleSortingChange = (newSorting: SortingState) => {
+    setSorting(newSorting);
+  };
+
+  // Handle delete confirmation
+  const handleDeleteConfirm = () => {
+    if (deleteModal) {
+      deleteReportMutation.mutate(deleteModal.baseId);
     }
   };
 
-  const columns: ColumnDef<ReportItem>[] = [
+  // Format date helper
+  const formatDate = (dateString: string) => {
+    if (!dateString) return '';
+    return new Date(dateString).toLocaleDateString('et-EE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const columns: ColumnDef<Report>[] = [
     {
-      accessorKey: 'agency',
+      accessorKey: 'agencyName',
+      id: 'agency',
       header: t('global.agency'),
       enableColumnFilter: false,
       cell: ({ row }) => (
         <div className="agencies__agency-cell">
           <Link
-            to={`/reports/${row.original.id}`}
+            to={`/reports/${row.original.baseId}`}
             style={{ textDecoration: 'underline', color: '#005AA3' }}
           >
-            {row.original.agency}
+            {row.original.agencyName}
           </Link>
         </div>
       ),
     },
     {
-      accessorKey: 'domain',
+      accessorKey: 'url',
       header: t('global.domain'),
       enableColumnFilter: false,
+      cell: ({ row }) => (
+        <div className="agencies__agency-cell">{row.original.url}</div>
+      ),
     },
     {
       accessorKey: 'errors',
@@ -125,31 +168,38 @@ const Reports: FC = () => {
       enableColumnFilter: false,
       cell: ({ row }) => (
         <span
-          style={{ color: row.original.errors > 0 ? '#D73E3E' : '#308653' }}
+          style={{
+            color: (row.original.errors || 0) > 0 ? '#D73E3E' : '#308653',
+          }}
         >
-          {row.original.errors}
+          {row.original.errors || 0}
         </span>
       ),
     },
     {
-      accessorKey: 'startedAt',
+      accessorKey: 'scrapingStartedAt',
+      id: 'startedAt',
       header: t('reports.startedAt'),
       enableColumnFilter: false,
+      cell: ({ row }) => formatDate(row.original.scrapingStartedAt),
     },
     {
-      accessorKey: 'finishedAt',
+      accessorKey: 'scrapingFinishedAt',
+      id: 'finishedAt',
       header: t('reports.finishedAt'),
       enableColumnFilter: false,
+      cell: ({ row }) => formatDate(row.original.scrapingFinishedAt),
     },
     {
       id: 'actions',
       header: '',
       cell: ({ row }) => (
-        <Track gap={16} justify="end">
+        <Track gap={32} justify="end">
           <Button
             appearance="text"
             onClick={() => setDeleteModal(row.original)}
             className="agencies__action-btn"
+            disabled={deleteReportMutation.isLoading}
           >
             <Icon
               icon={<MdOutlineDeleteOutline fontSize={20} />}
@@ -162,9 +212,23 @@ const Reports: FC = () => {
     },
   ];
 
+  // Show loading state
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  // Show error state
+  if (error) {
+    return <div>Error loading reports: {error.message}</div>;
+  }
+
   return (
     <div className="agencies">
-      <Track style={{ marginBottom: 16 }} justify="between" align="center">
+      <Track
+        style={{ marginBottom: 16, minWidth: 800 }}
+        justify="between"
+        align="center"
+      >
         <h1 className="h1">{t('reports.title')}</h1>
       </Track>
 
@@ -172,13 +236,16 @@ const Reports: FC = () => {
         <DataTable
           data={reportsData?.data ?? []}
           columns={columns}
-          pagination={{
-            pageIndex: 0,
-            pageSize: 10,
-          }}
+          pagination={pagination}
+          setPagination={handlePaginationChange}
+          sorting={sorting}
+          setSorting={handleSortingChange}
+          columnFilters={columnFilters}
+          setFiltering={setColumnFilters}
           sortable
           filterable
-          pagesCount={Math.ceil((reportsData?.total ?? 0) / 10)}
+          pagesCount={reportsApiData?.totalPages ?? 0}
+          isClientSide={false}
         />
 
         <div className="agencies__footer">
@@ -198,19 +265,26 @@ const Reports: FC = () => {
               <Button
                 appearance="secondary"
                 onClick={() => setDeleteModal(null)}
+                disabled={deleteReportMutation.isLoading}
               >
                 {t('global.cancel')}
               </Button>
-              <Button appearance="error" onClick={handleDelete}>
-                {t('global.delete')}
+              <Button
+                appearance="error"
+                onClick={handleDeleteConfirm}
+                disabled={deleteReportMutation.isLoading}
+              >
+                {deleteReportMutation.isLoading
+                  ? t('global.deleting')
+                  : t('global.delete')}
               </Button>
             </Track>
           }
         >
           <p>
             {t('reports.deleteConfirmation', {
-              agency: deleteModal.agency,
-              domain: deleteModal.domain,
+              agency: deleteModal.agencyName,
+              domain: deleteModal.url,
             })}
           </p>
         </Dialog>

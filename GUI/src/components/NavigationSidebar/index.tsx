@@ -1,13 +1,15 @@
 import React, { FC } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import './NavigationSidebar.scss';
 
 interface MenuItemsProps {
   id: string;
   label: string;
   path: string;
+  activeRoutes?: string[];
   icon?: any;
 }
+
 interface SidebarProps {
   title?: string;
   menuItems: MenuItemsProps[];
@@ -17,6 +19,22 @@ const Sidebar: FC<SidebarProps> = ({
   title = 'Common Knowledge Base',
   menuItems,
 }) => {
+  const location = useLocation();
+
+  const isMenuItemActive = (item: MenuItemsProps): boolean => {
+    // If activeRoutes is defined, check if current pathname matches any of them
+    if (item.activeRoutes && item.activeRoutes.length > 0) {
+      return item.activeRoutes.some((route) =>
+        location.pathname.startsWith(route)
+      );
+    }
+    // Fallback to default behavior - exact match or starts with path
+    return (
+      location.pathname === item.path ||
+      location.pathname.startsWith(item.path + '/')
+    );
+  };
+
   return (
     <aside className="sidebar">
       <div className="sidebar__header">
@@ -29,11 +47,17 @@ const Sidebar: FC<SidebarProps> = ({
             <li key={item.id}>
               <NavLink
                 to={item.path}
-                className={({ isActive }) =>
-                  `sidebar__menu-item ${
-                    isActive ? 'sidebar__menu-item--active' : ''
-                  }`
-                }
+                end={!item.activeRoutes} // Only use end prop when activeRoutes is not provided
+                className={({ isActive }) => {
+                  // Use custom active logic if activeRoutes is provided
+                  const shouldBeActive = item.activeRoutes
+                    ? isMenuItemActive(item)
+                    : isActive;
+
+                  return `sidebar__menu-item ${
+                    shouldBeActive ? 'sidebar__menu-item--active' : ''
+                  }`;
+                }}
               >
                 <div className="sidebar__link">
                   <div className="sidebar__content">

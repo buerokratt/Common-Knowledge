@@ -4,7 +4,7 @@ import { Outlet } from 'react-router-dom';
 import { NavigationSidebar, Header } from 'components';
 import { useToast } from '../../hooks/useToast';
 import './Layout.scss';
-import { MdOutlineStorage, MdOutlineAssessment } from 'react-icons/md';
+import { MdOutlineStorage, MdOutlineAssessment, MdApi } from 'react-icons/md';
 import { useTranslation } from 'react-i18next';
 
 const Layout: FC = () => {
@@ -14,6 +14,7 @@ const Layout: FC = () => {
       id: 'data',
       label: t('menu.data'),
       path: '/agency',
+      activeRoutes: ['/agency', '/source'],
       icon: <MdOutlineStorage />,
     },
     {
@@ -21,6 +22,13 @@ const Layout: FC = () => {
       label: t('menu.reports'),
       path: '/reports',
       icon: <MdOutlineAssessment />,
+    },
+    {
+      id: 'api',
+      label: t('menu.apiIntegrations'),
+      path: '/api',
+      activeRoutes: ['/api'],
+      icon: <MdApi />,
     },
   ];
   return (

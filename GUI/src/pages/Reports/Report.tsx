@@ -1,66 +1,146 @@
-import { FC, useState } from 'react';
+import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
-import { Button, Card, DataTable, Track } from 'components';
-import { ColumnDef } from '@tanstack/react-table';
-import { apiDev } from 'services/api';
+import { Button, Card, DataTable, Track, Tooltip } from 'components';
+import {
+  ColumnDef,
+  PaginationState,
+  SortingState,
+  ColumnFiltersState,
+} from '@tanstack/react-table';
+import {
+  getReport,
+  getReportPages,
+  getDownloadUrl,
+  ReportPage,
+  ReportPagesListParams,
+} from 'services/reports';
 import 'pages/Agency/AgencyList.scss';
-
-interface ReportDetailItem {
-  id: string;
-  url: string;
-  errorType: string;
-  errorMessage: string;
-  scraped: string;
-}
-
-interface ReportDetail {
-  agency: string;
-  domain: string;
-  errors: ReportDetailItem[];
-  total: number;
-}
 
 const Report: FC = () => {
   const { t } = useTranslation();
-  const { agency, domain } = useParams<{ agency: string; domain: string }>();
+  const { id: reportBaseId } = useParams<{ id: string }>();
   const [logType, setLogType] = useState<'cleaning' | 'scraping'>('cleaning');
 
-  // Mock data - replace with actual API call
-  const { data: reportData } = useQuery<ReportDetail>({
-    queryKey: ['report-detail', agency, domain],
-    queryFn: async () => ({
-      agency: agency || 'EMTA',
-      domain: domain || 'www.emta.ee',
-      errors: [
-        {
-          id: '1',
-          url: 'www.emta.ee/eraisik',
-          errorType: '403 Forbidden',
-          errorMessage: '403 Forbidden',
-          scraped: '31.04.2025 14:53',
-        },
-        {
-          id: '2',
-          url: 'www.emta.ee/ettevote',
-          errorType: '404 Not found',
-          errorMessage: '404 Not found',
-          scraped: '31.04.2025 14:53',
-        },
-        {
-          id: '3',
-          url: 'www.emta.ee/kontakt',
-          errorType: '500 Internal server error',
-          errorMessage: '500 Internal server error',
-          scraped: '31.04.2025 14:53',
-        },
-      ],
-      total: 170,
+  // Add table state for server-side pagination and sorting
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  });
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // Convert sorting state to API format
+  const getSortingParam = (sorting: SortingState): string => {
+    if (sorting.length === 0) return 'scraped_at desc';
+
+    const sort = sorting[0];
+    let field = sort.id;
+
+    // Map column IDs to API field names
+    const fieldMap: Record<string, string> = {
+      url: 'url',
+      errorType: 'error_type',
+      errorMessage: 'error_message',
+      scraped: 'scraped_at',
+    };
+
+    field = fieldMap[field] || field;
+    return `${field} ${sort.desc ? 'desc' : 'asc'}`;
+  };
+
+  // API query parameters for pages
+  const pagesQueryParams: ReportPagesListParams = useMemo(
+    () => ({
+      source_run_report_base_id: reportBaseId!,
+      page: pagination.pageIndex + 1,
+      pageSize: pagination.pageSize,
+      sorting: getSortingParam(sorting),
     }),
+    [reportBaseId, pagination.pageIndex, pagination.pageSize, sorting]
+  );
+
+  // Fetch report data
+  const {
+    data: reportData,
+    isLoading: isLoadingReport,
+    error: reportError,
+  } = useQuery({
+    queryKey: ['report', reportBaseId],
+    queryFn: () => getReport(reportBaseId!),
+    enabled: !!reportBaseId,
   });
 
-  const columns: ColumnDef<ReportDetailItem>[] = [
+  // Fetch report pages data
+  const {
+    data: reportPagesData,
+    isLoading: isLoadingPages,
+    error: pagesError,
+  } = useQuery({
+    queryKey: ['report-pages', pagesQueryParams],
+    queryFn: () => getReportPages(pagesQueryParams),
+    enabled: !!reportBaseId,
+    keepPreviousData: true,
+  });
+
+  // Handle log download
+  const handleLogDownload = async (logType: 'cleaning' | 'scraping') => {
+    if (!reportData) return;
+
+    try {
+      const logUrl =
+        logType === 'cleaning'
+          ? reportData.cleaningLogUrl
+          : reportData.scrapingLogUrl;
+
+      if (!logUrl) {
+        console.warn(`No ${logType} log URL available`);
+        return;
+      }
+
+      const downloadData = await getDownloadUrl(logUrl);
+
+      // Open the download URL in a new tab
+      window.open(downloadData.downloadUrl, '_blank');
+    } catch (error) {
+      console.error(`Error downloading ${logType} log:`, error);
+    }
+  };
+
+  // Transform pages data
+  const pagesData = useMemo(() => {
+    if (!reportPagesData) return { data: [], total: 0 };
+
+    return {
+      data: reportPagesData.data,
+      total: reportPagesData.total,
+    };
+  }, [reportPagesData]);
+
+  // Handle pagination change
+  const handlePaginationChange = (newPagination: PaginationState) => {
+    setPagination(newPagination);
+  };
+
+  // Handle sorting change
+  const handleSortingChange = (newSorting: SortingState) => {
+    setSorting(newSorting);
+  };
+
+  // Format date helper
+  const formatDate = (dateString: string) => {
+    if (!dateString) return '';
+    return new Date(dateString).toLocaleDateString('et-EE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  };
+
+  const columns: ColumnDef<ReportPage>[] = [
     {
       accessorKey: 'url',
       header: t('knowledgeBase.url'),
@@ -80,23 +160,39 @@ const Report: FC = () => {
       accessorKey: 'errorType',
       header: t('reports.errorType'),
       enableColumnFilter: false,
-      cell: ({ row }) => <span>{row.original.errorType}</span>,
+      cell: ({ row }) => <span>{row.original.errorType || '-'}</span>,
     },
     {
       accessorKey: 'errorMessage',
       header: t('reports.errorMessage'),
       enableColumnFilter: false,
-      cell: ({ row }) => <span>{row.original.errorMessage}</span>,
+      cell: ({ row }) => <span>{row.original.errorMessage || '-'}</span>,
     },
     {
-      accessorKey: 'scraped',
+      accessorKey: 'scrapedAt',
+      id: 'scraped',
       header: t('knowledgeBase.scraped'),
       enableColumnFilter: false,
+      cell: ({ row }) => formatDate(row.original.scrapedAt),
     },
   ];
 
-  if (!reportData) {
+  // Show loading state
+  if (isLoadingReport || isLoadingPages) {
     return <div>Loading...</div>;
+  }
+
+  // Show error state
+  if (reportError || pagesError) {
+    return (
+      <div>
+        Error loading report: {reportError?.message || pagesError?.message}
+      </div>
+    );
+  }
+
+  if (!reportData) {
+    return <div>Report not found</div>;
   }
 
   return (
@@ -106,9 +202,24 @@ const Report: FC = () => {
         justify="between"
         align="center"
       >
-        <h1 className="h1">
-          {reportData.agency} / {reportData.domain}
-        </h1>
+        <Tooltip
+          content={
+            <>
+              {reportData.agencyName} / {reportData.url}
+            </>
+          }
+        >
+          <h1
+            className="h1"
+            style={{
+              maxWidth: 800,
+              textOverflow: 'ellipsis',
+              overflow: 'hidden',
+            }}
+          >
+            {reportData.agencyName} / {reportData.url}
+          </h1>
+        </Tooltip>
         <Track gap={12}>
           <Button
             appearance="secondary"
@@ -117,7 +228,8 @@ const Report: FC = () => {
               borderColor: '#005AA3 !important',
               boxShadow: 'inset 0 0 0 2px #005AA3',
             }}
-            onClick={() => setLogType('cleaning')}
+            onClick={() => handleLogDownload('cleaning')}
+            disabled={!reportData.cleaningLogUrl}
           >
             {t('reports.cleaningLog')}
           </Button>
@@ -128,7 +240,8 @@ const Report: FC = () => {
               borderColor: '#005AA3 !important',
               boxShadow: 'inset 0 0 0 2px #005AA3',
             }}
-            onClick={() => setLogType('scraping')}
+            onClick={() => handleLogDownload('scraping')}
+            disabled={!reportData.scrapingLogUrl}
           >
             {t('reports.scrapingLog')}
           </Button>
@@ -137,20 +250,23 @@ const Report: FC = () => {
 
       <Card>
         <DataTable
-          data={reportData.errors}
+          data={pagesData?.data ?? []}
           columns={columns}
-          pagination={{
-            pageIndex: 0,
-            pageSize: 10,
-          }}
+          pagination={pagination}
+          setPagination={handlePaginationChange}
+          sorting={sorting}
+          setSorting={handleSortingChange}
+          columnFilters={columnFilters}
+          setFiltering={setColumnFilters}
           sortable
           filterable
-          pagesCount={Math.ceil(reportData.total / 10)}
+          pagesCount={reportPagesData?.totalPages ?? 0}
+          isClientSide={false}
         />
 
         <div className="agencies__footer">
           <span className="agencies__total">
-            {reportData.total} {t('reports.results')}
+            {pagesData?.total ?? 0} {t('knowledgeBase.results')}
           </span>
         </div>
       </Card>

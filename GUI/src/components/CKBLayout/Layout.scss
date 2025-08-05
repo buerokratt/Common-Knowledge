@@ -2,7 +2,7 @@
 @import 'src/styles/tools/color';
 
 .layout {
-  height: 100%;
+  height: 100vh;
   display: flex;
 
   &__wrapper {
@@ -10,7 +10,7 @@
     display: flex;
     flex-direction: column;
     position: relative;
-    overflow: auto;
+    overflow: hidden;
   }
 
   &__main {
@@ -19,10 +19,8 @@
     flex-direction: column;
     gap: get-spacing(haapsalu);
     padding: get-spacing(haapsalu);
-    position: absolute;
-    top: 100px;
-    left: 0;
-    right: 0;
-    bottom: 0;
+    overflow-y: auto;
+    min-height: 0;
+    margin-bottom: 20px;
   }
 }

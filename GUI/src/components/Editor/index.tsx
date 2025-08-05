@@ -1,108 +1,79 @@
-import { FC, useState } from 'react';
+import { FC, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link, useNavigate, useParams } from 'react-router-dom';
-import { useMutation, useQuery } from '@tanstack/react-query';
+import { useNavigate, useParams } from 'react-router-dom';
 import { Button, Card, FormTextarea, Track, Dialog } from 'components';
 import { useToast } from 'hooks/useToast';
-import { apiDev } from 'services/api';
 import './Editor.scss';
+import { EditorState, ScrapedFile } from 'services/files';
 
-interface KnowledgeBaseDetailData {
-  id: string;
-  agency: string;
-  domain: string;
-  url: string;
-  cleanedData: string;
-  lastUpdate: string;
-  originallyScraped: string;
-}
-
-interface KnowledgeBaseUpdateData {
+interface EditorUpdateData {
   cleanedData: string;
 }
-type EditorState = 'raw' | 'cleaned' | 'edited' | null;
 
 interface EditorProps {
   editorState: EditorState;
   changeEditorState: (state: EditorState) => void;
   onCancel: () => void;
-  onSave: () => void;
+  onSave?: (content: string) => void;
+  readonly?: boolean;
 }
 
-const KnowledgeBaseDetail: FC<EditorProps> = ({
+const Editor: FC<EditorProps> = ({
   editorState,
   changeEditorState,
   onCancel,
   onSave,
+  readonly = false,
 }) => {
   const { t } = useTranslation();
   const toast = useToast();
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
-
-  const [formData, setFormData] = useState<KnowledgeBaseUpdateData>({
-    cleanedData: '',
+  const [formData, setFormData] = useState<EditorUpdateData>({
+    cleanedData: editorState.content,
   });
   const [discardModal, setDiscardModal] = useState(false);
 
-  // Mock data - replace with actual API call
-  const { data: knowledgeBaseItem, isLoading } =
-    useQuery<KnowledgeBaseDetailData>({
-      queryKey: ['knowledge-base', id],
-      queryFn: async () => ({
-        id: id || '1',
-        agency: 'Abc',
-        domain: 'Domain 1',
-        url: 'https://www.riigiteataja.ee/akt/324092024001',
-        cleanedData:
-          'Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.\n\nDuis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.\n\nSed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.',
-        lastUpdate: '12.12.2023',
-        originallyScraped: '12.12.2023',
-      }),
-      onSuccess: (data) => {
-        setFormData({
-          cleanedData: data.cleanedData,
-        });
-      },
+  useEffect(() => {
+    setFormData({
+      cleanedData: editorState.content,
     });
+  }, [editorState.content]);
 
-  const updateMutation = useMutation({
-    mutationFn: async (data: KnowledgeBaseUpdateData) => {
-      await apiDev.put(`knowledge-base/${id}`, data);
-    },
-    onSuccess: () => {
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.updateSuccess'),
-      });
-      navigate('/knowledge-base');
-    },
-    onError: (error: any) => {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.updateError'),
-      });
-    },
-  });
+  // Handle view content switching - delegate to parent
+  const handleViewContent = (type: 'raw' | 'cleaned' | 'edited') => {
+    changeEditorState({
+      ...editorState,
+      type,
+    });
+  };
 
   const handleSave = () => {
-    updateMutation.mutate(formData);
-    onSave();
+    if (onSave) onSave(formData.cleanedData);
   };
 
   const handleCancel = () => {
-    navigate('/knowledge-base');
+    if (id) {
+      navigate('/knowledge-base');
+    } else {
+      onCancel();
+    }
   };
 
-  if (isLoading || !knowledgeBaseItem) {
-    return <div>Loading...</div>;
-  }
-  const otherState1 = editorState === 'raw' ? 'edited' : 'raw';
+  // Get the other two states that aren't currently active
+  const getOtherStates = (
+    currentType: 'raw' | 'cleaned' | 'edited'
+  ): ['raw' | 'cleaned' | 'edited', 'raw' | 'cleaned' | 'edited'] => {
+    const allStates: ('raw' | 'cleaned' | 'edited')[] = [
+      'raw',
+      'cleaned',
+      'edited',
+    ];
+    const otherStates = allStates.filter((state) => state !== currentType);
+    return [otherStates[0], otherStates[1]];
+  };
 
-  const otherState2 =
-    editorState === 'edited' || editorState === 'raw' ? 'cleaned' : 'edited';
+  const [otherState1, otherState2] = getOtherStates(editorState.type);
 
   return (
     <>
@@ -139,139 +110,183 @@ const KnowledgeBaseDetail: FC<EditorProps> = ({
           {t('knowledgeBase.confirmDiscardChanges')}
         </Dialog>
       )}
-      <Card
-        header={
-          <Track justify="between">
-            <div className="knowledge-base-detail__agency-domain">
-              {t(`knowledgeBase.${editorState}`)}
-            </div>
-            <Track gap={10}>
-              <Button
-                appearance="secondary"
-                onClick={() => changeEditorState(otherState1)}
-                style={{
-                  color: '#005AA3',
-                  borderColor: '#005AA3',
-                  boxShadow: 'inset 0 0 0 2px #005AA3',
-                  fontWeight: 700,
-                }}
-              >
-                {t('global.view')} {t(`knowledgeBase.${otherState1}`)}
-              </Button>
+      {editorState.loading ? (
+        <div>{t('global.loading')}</div>
+      ) : (
+        <Card
+          header={
+            <Track justify="between">
+              <div className="knowledge-base-detail__agency-domain">
+                {t(`knowledgeBase.${editorState.type}`)}
+              </div>
+              <Track gap={10}>
+                <Button
+                  appearance="secondary"
+                  onClick={() => handleViewContent(otherState1)}
+                  style={{
+                    color: '#005AA3',
+                    borderColor: '#005AA3',
+                    boxShadow: 'inset 0 0 0 2px #005AA3',
+                    fontWeight: 700,
+                  }}
+                >
+                  {t('global.view')} {t(`knowledgeBase.${otherState1}`)}
+                </Button>
 
-              <Button
-                appearance="secondary"
-                onClick={() => changeEditorState(otherState2)}
-                style={{
-                  color: '#005AA3',
-                  borderColor: '#005AA3',
-                  boxShadow: 'inset 0 0 0 2px #005AA3',
-                  fontWeight: 700,
-                }}
-              >
-                {t('global.view')} {t(`knowledgeBase.${otherState2}`)}
-              </Button>
+                <Button
+                  appearance="secondary"
+                  onClick={() => handleViewContent(otherState2)}
+                  disabled={
+                    otherState2 === 'edited'
+                      ? !editorState.file?.editedDataUrl
+                      : !editorState.file?.cleanedDataUrl
+                  }
+                  style={{
+                    color: '#005AA3',
+                    borderColor: '#005AA3',
+                    boxShadow: 'inset 0 0 0 2px #005AA3',
+                    fontWeight: 700,
+                  }}
+                >
+                  {t('global.view')} {t(`knowledgeBase.${otherState2}`)}
+                </Button>
+              </Track>
             </Track>
-          </Track>
-        }
-        footer={
-          <Track
-            gap={16}
-            justify="center"
-            style={{ justifyContent: 'space-between' }}
-          >
-            <Button
-              appearance="secondary"
-              style={{
-                color: '#005AA3',
-                borderColor: '#005AA3',
-                boxShadow: 'inset 0 0 0 2px #005AA3',
-              }}
-              onClick={() => setDiscardModal(true)}
+          }
+          footer={
+            <Track
+              gap={16}
+              justify="center"
+              style={{ justifyContent: 'space-between' }}
             >
-              {t('global.cancel')}
-            </Button>
-            <Button
-              appearance="primary"
-              onClick={handleSave}
-              disabled={updateMutation.isLoading}
-            >
-              {updateMutation.isLoading ? t('global.saving') : t('global.save')}
-            </Button>
-          </Track>
-        }
-      >
-        <div className="knowledge-base-detail__form-group">
-          <div className="knowledge-base-detail__form-label">
-            <label className="knowledge-base-detail__label">
-              {t('knowledgeBase.url')}
-            </label>
-          </div>
-          <div className="knowledge-base-detail__form-value">
-            <span className="knowledge-base-detail__value">
-              {knowledgeBaseItem.url}
-            </span>
-          </div>
-        </div>
-
-        <div className="knowledge-base-detail__form-group knowledge-base-detail__form-group--full">
-          <div className="knowledge-base-detail__form-label">
-            <label className="knowledge-base-detail__label">
-              {t('knowledgeBase.cleanedData')}
-            </label>
-          </div>
-          <div className="knowledge-base-detail__form-input">
-            <FormTextarea
-              label=""
-              name="cleanedData"
-              hideLabel
-              value={formData.cleanedData}
-              maxLengthBottom={false}
-              minRows={500}
-              maxRows={500}
-              maxLength={1 / 0}
-              disabled={editorState === 'raw'}
-              onChange={(e) => {
-                if (editorState === 'raw') return;
-                setFormData((prev) => ({
-                  ...prev,
-                  cleanedData: e.target.value,
-                }));
-              }}
-            />
-          </div>
-        </div>
-
-        <div className="knowledge-base-detail__metadata-row">
-          <div className="knowledge-base-detail__form-group knowledge-base-detail__form-group--half">
+              <Button
+                appearance="secondary"
+                style={{
+                  color: '#005AA3',
+                  borderColor: '#005AA3',
+                  boxShadow: 'inset 0 0 0 2px #005AA3',
+                }}
+                onClick={() => {
+                  if (editorState.content !== formData.cleanedData) {
+                    setDiscardModal(true);
+                    return;
+                  }
+                  setDiscardModal(false);
+                  onCancel();
+                }}
+                disabled={editorState.saving}
+              >
+                {t('global.cancel')}
+              </Button>
+              {!readonly && onSave && (
+                <Button
+                  appearance="primary"
+                  onClick={handleSave}
+                  disabled={editorState.saving}
+                >
+                  {editorState.saving ? t('global.saving') : t('global.save')}
+                </Button>
+              )}
+            </Track>
+          }
+        >
+          <div className="knowledge-base-detail__form-group">
             <div className="knowledge-base-detail__form-label">
               <label className="knowledge-base-detail__label">
-                {t('knowledgeBase.lastUpdate')}
+                {editorState.sourceType === 'scraped'
+                  ? t('knowledgeBase.url')
+                  : t('global.name')}
               </label>
             </div>
             <div className="knowledge-base-detail__form-value">
               <span className="knowledge-base-detail__value">
-                {knowledgeBaseItem.lastUpdate}
+                {editorState.sourceType === 'scraped'
+                  ? editorState.file?.url
+                  : editorState.file?.fileName}
               </span>
             </div>
           </div>
 
-          <div className="knowledge-base-detail__form-group knowledge-base-detail__form-group--half">
+          <div className="knowledge-base-detail__form-group knowledge-base-detail__form-group--full">
             <div className="knowledge-base-detail__form-label">
               <label className="knowledge-base-detail__label">
-                {t('knowledgeBase.originallyScraped')}
+                {editorState.type === 'cleaned'
+                  ? t('knowledgeBase.cleanedData')
+                  : t('knowledgeBase.editedData')}
               </label>
             </div>
-            <div className="knowledge-base-detail__form-value">
-              <span className="knowledge-base-detail__value">
-                {knowledgeBaseItem.originallyScraped}
-              </span>
+            <div className="knowledge-base-detail__form-input">
+              <FormTextarea
+                label=""
+                name="cleanedData"
+                hideLabel
+                value={formData.cleanedData}
+                maxLengthBottom={false}
+                minRows={500}
+                maxRows={500}
+                maxLength={1 / 0}
+                disabled={readonly || editorState.saving}
+                onChange={(e) => {
+                  if (readonly || editorState.saving) return;
+                  setFormData((prev) => ({
+                    ...prev,
+                    cleanedData: e.target.value,
+                  }));
+                }}
+              />
             </div>
           </div>
-        </div>
-      </Card>
+
+          {editorState.file && (
+            <div className="knowledge-base-detail__metadata-row">
+              <div className="knowledge-base-detail__form-group knowledge-base-detail__form-group--half">
+                <div className="knowledge-base-detail__form-label">
+                  <label className="knowledge-base-detail__label">
+                    {t('knowledgeBase.lastUpdate')}
+                  </label>
+                </div>
+                <div className="knowledge-base-detail__form-value">
+                  <span className="knowledge-base-detail__value">
+                    {new Date(editorState.file.updatedAt).toLocaleDateString(
+                      'et-EE',
+                      {
+                        day: '2-digit',
+                        month: '2-digit',
+                        year: 'numeric',
+                      }
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="knowledge-base-detail__form-group knowledge-base-detail__form-group--half">
+                <div className="knowledge-base-detail__form-label">
+                  <label className="knowledge-base-detail__label">
+                    {editorState.sourceType === 'uploaded'
+                      ? t('global.uploaded')
+                      : t('knowledgeBase.originallyScraped')}
+                  </label>
+                </div>
+                <div className="knowledge-base-detail__form-value">
+                  <span className="knowledge-base-detail__value">
+                    {new Date(
+                      editorState.sourceType === 'uploaded'
+                        ? editorState.file.createdAt
+                        : (editorState.file as ScrapedFile).originallyScraped
+                    ).toLocaleDateString('et-EE', {
+                      day: '2-digit',
+                      month: '2-digit',
+                      year: 'numeric',
+                    })}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
     </>
   );
 };
 
-export default KnowledgeBaseDetail;
+export default Editor;
