@@ -238,6 +238,53 @@ services:
       - 9876:5432
     networks:
       - bykstack
+
+  scrapper-server:
+    container_name: scrapper-server
+    build:
+      context: ./scrapper
+      target: server
+    ports:
+      - 8080:8080
+    volumes:
+      - ./scrapped-data:/scrapped-data
+      - ./scrapper:/app
+    environment:
+      - RUUTER_INTERNAL=http://ruuter-internal:8089
+      - BROKER_URL=pyamqp://admin:admin@rabbit-scrapper/scrapper
+    depends_on:
+      - rabbit-scrapper
+    networks:
+      - bykstack
+
+  scrapper-celery:
+    container_name: scrapper-celery
+    build:
+      context: ./scrapper
+      target: celery
+    volumes:
+      - ./scrapped-data:/scrapped-data
+      - ./scrapper:/app
+    environment:
+      - RUUTER_INTERNAL=http://ruuter-internal:8089
+      - BROKER_URL=pyamqp://admin:admin@rabbit-scrapper/scrapper
+    depends_on:
+      - rabbit-scrapper
+    networks:
+      - bykstack
+
+  rabbit-scrapper:
+    image: rabbitmq:4-management
+    container_name: rabbit-scrapper
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+      - RABBITMQ_DEFAULT_VHOST=scrapper
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    networks:
+      - bykstack
 networks:
   bykstack:
     name: bykstack
