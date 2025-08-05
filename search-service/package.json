@@ -1,0 +1,23 @@
+{
+    "name": "search-service",
+    "version": "1.0.0",
+    "description": "Search service for document indexing and searching",
+    "main": "index.js",
+    "scripts": {
+      "start": "node index.js",
+      "dev": "nodemon index.js"
+    },
+    "dependencies": {
+      "@opensearch-project/opensearch": "^2.5.0",
+      "express": "^4.18.2",
+      "cors": "^2.8.5"
+    },
+    "devDependencies": {
+      "nodemon": "^3.0.1"
+    },
+    "engines": {
+      "node": ">=18.0.0"
+    },
+    "author": "",
+    "license": "MIT"
+}
