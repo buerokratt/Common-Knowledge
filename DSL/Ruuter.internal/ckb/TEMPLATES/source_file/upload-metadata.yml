@@ -1,0 +1,45 @@
+extractRequestData:
+  assign:
+    file_type: ${incoming.body.file_type}
+    source_url: ${incoming.body.source_url}
+    type: ${incoming.body.type || 'raw'}
+    version: ${incoming.body.version || '1.0'}
+    created_at: ${incoming.body.created_at || new Date().toISOString().replace('T', ' ').replace('Z', '')}
+    file_path: ${incoming.body.file_path}
+    content_type: ${incoming.body.content_type || 'application/json'}
+
+generateMetadata:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/generate_source_file_metadata"
+    body:
+      file_type: ${file_type}
+      source_url: ${source_url}
+      type: ${type}
+      version: ${version}
+      created_at: ${created_at}
+  result: metadataResult
+
+base64EncodeMetadata:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER]/encryption/base64"
+    body:
+      content: ${metadataResult.response.body}
+  result: encodedMetadata
+
+uploadMetadataToFileService:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/upload-file-content"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      file_content: ${encodedMetadata.response.body.cipher}
+      file_path: ${file_path}
+      content_type: ${content_type}
+  result: uploadResult
+
+returnResult:
+  return: ${uploadResult.response.body}

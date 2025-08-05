@@ -1,0 +1,57 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "clean scrapped files"
+  method: post
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body:
+      - field: file_path
+        type: string
+        description: "filename with scraped data"
+      - field: meta_data_path
+        type: string
+        description: "filename with metadata for scrapped data"
+      - field: directory_path
+        type: string
+        description: "directory, where to save cleaned data"
+      - field: source_file_id
+        type: string
+        description: "id of source file"
+      - field: logs_path
+        type: string
+        description: "logs path for cleaning task"
+      - field: url
+        type: string
+        description: "scraped url"
+      - field: source_base_id
+        type: string
+        description: "source base id"
+      - field: agency_base_id
+        type: string
+        description: "agency base id"
+      - field: source_run_report_base_id
+        type: string
+        description: "source run report base id"
+
+
+cleanScrapedData:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/clean-file"
+  requestType: templates
+  body:
+    file_path: ${incoming.body.file_path}
+    meta_data_path: ${incoming.body.meta_data_path}
+    directory_path: ${incoming.body.directory_path}
+    source_file_id: ${incoming.body.source_file_id}
+    logs_path: ${incoming.body.logs_path}
+    url: ${incoming.body.url}
+    source_base_id: ${incoming.body.source_base_id}
+    agency_base_id: ${incoming.body.agency_base_id}
+    source_run_report_base_id: ${incoming.body.source_run_report_base_id}
+  result: res
+
+
+return_result:
+  return: ${incoming.body}

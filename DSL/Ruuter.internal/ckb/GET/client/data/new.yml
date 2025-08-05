@@ -1,0 +1,29 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Return data hashes forclients"
+  method: get
+  accepts: json
+  returns: json
+  namespace: client
+  allowlist:
+    params:
+      - field: clientIds
+        type: string
+        description: "Base IDs of the clients"
+
+extractRequestData:
+  assign:
+    clientIds: "${incoming.params.clientIds}"
+
+getAgenciesData:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/list_agency_data_hash"
+    query:
+      agencyIds: ${clientIds}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

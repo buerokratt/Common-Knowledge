@@ -1,0 +1,44 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Update agency dirty flag"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: agencyId
+        type: string
+        description: "Agency base ID"
+      - field: sourceId
+        type: string
+        description: "sourceId to update status"
+
+updateAgencyDirty:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/update_agency_dirty"
+    headers:
+      type: json
+    body:
+      base_id: ${incoming.body.agencyId}
+
+checkForSourceId:
+  switch:
+    - condition: ${incoming.body.sourceId == null}
+      next: returnSuccess
+  next: updateSourceStatus
+
+updateSourceStatus:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_status"
+    body:
+      base_id: ${incoming.body.sourceId}
+      status: "finished"
+  result: res
+
+returnSuccess:
+  return: "OK"
+  next: end

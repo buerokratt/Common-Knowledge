@@ -1,0 +1,61 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create multiple source run pages in bulk"
+  method: post
+  accepts: json
+  returns: json
+  namespace: logs
+  allowlist:
+    body:
+      - field: url
+        type: string
+        description: "Url with error"
+      - field: scraped_at
+        type: string
+        description: "Timestamp when scraped"
+      - field: error_type
+        type: string
+        description: "Type of error"
+      - field: error_message
+        type: string
+        description: "Error message"
+      - field: source_base_id
+        type: string
+        description: "source base id"
+      - field: agency_base_id
+        type: string
+        description: "agency base id"
+      - field: source_run_report_base_id
+        type: string
+        description: "source run report base id"
+
+
+createSourceRunPage:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_run_page/create_source_run_page"
+    contentType: json
+    body:
+      url: ${incoming.body.url}
+      scraped_at: ${incoming.body.scraped_at}
+      error_type: ${incoming.body.error_type}
+      error_message: ${incoming.body.error_message}
+      source_base_id: ${incoming.body.source_base_id}
+      agency_base_id: ${incoming.body.agency_base_id}
+      source_run_report_base_id: ${incoming.body.source_run_report_base_id}
+  result: res
+
+incrementErrorCount:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/reports/update_source_run_report_increment_errors"
+    contentType: json
+    body:
+      base_id: ${incoming.body.source_run_report_base_id}
+  result: res
+
+
+returnSuccess:
+  return: "OK"
+  next: end

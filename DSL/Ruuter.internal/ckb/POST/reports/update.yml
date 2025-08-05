@@ -1,0 +1,45 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new source run report"
+  method: post
+  accepts: json
+  returns: json
+  namespace: reports
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of report"
+      - field: scrapingFinishedAt
+        type: string
+        description: "Timestamp when scraping finished"
+      - field: scrapingLogUrl
+        type: string
+        description: "URL to the scraping log file"
+      - field: cleaningLogUrl
+        type: string
+        description: "URL to the cleaning log file"
+
+extractRequestData:
+  assign:
+    base_id: ${incoming.body.baseId}
+    scraping_finished_at: ${incoming.body.scrapingFinishedAt}
+    scraping_log_url: ${incoming.body.scrapingLogUrl}
+    cleaning_log_url: ${incoming.body.cleaningLogUrl}
+
+updateSourceRunReport:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/reports/update_source_run_report"
+    contentType: json
+    body:
+      base_id: ${base_id}
+      scraping_finished_at: ${scraping_finished_at}
+      scraping_log_url: ${scraping_log_url}
+      cleaning_log_url: ${cleaning_log_url}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

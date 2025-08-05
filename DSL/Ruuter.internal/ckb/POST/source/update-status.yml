@@ -1,0 +1,37 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "update source status"
+  method: post
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body:
+      - field: source_id
+        type: string
+        description: "source id"
+      - field: status
+        type: string
+        description: "status to set"
+        enum: ['running', 'finished', 'failed']
+
+
+extractRequestData:
+  assign:
+    base_id: ${incoming.body.source_id}
+    status: ${incoming.body.status}
+
+
+updateSourceStatus:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_status"
+    body:
+      base_id: ${base_id}
+      status: ${status}
+  result: res
+
+returnResult:
+  return: "OK"
+  next: end
