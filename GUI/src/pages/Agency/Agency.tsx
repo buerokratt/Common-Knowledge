@@ -1,6 +1,7 @@
-import { FC, useState } from 'react';
+import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useParams, Link } from 'react-router-dom';
 import {
   MdOutlineDeleteOutline,
   MdAccessTime,
@@ -14,32 +15,40 @@ import {
   DataTable,
   Dialog,
   FormInput,
-  FormSelect,
   Icon,
   Track,
   FileUploader,
 } from 'components';
-import { ColumnDef } from '@tanstack/react-table';
+import {
+  ColumnDef,
+  PaginationState,
+  SortingState,
+  ColumnFiltersState,
+} from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
-import { apiDev } from 'services/api';
 import './Agency.scss';
 import './AgencyList.scss';
-import EditAgency from './AddAgency';
-import { Link } from 'react-router-dom';
-import type { FileItem } from 'components/FileUploader/FileUploader';
-
-interface KnowledgeBaseItem {
-  id: string;
-  url: string;
-  domain: string;
-  lastScraped: string;
-  status: string;
-}
+import EditAgency from './SaveAgency';
+import type {
+  FileItem,
+  UploadProgress,
+} from 'components/FileUploader/FileUploader';
+import { getAgency } from 'services/agencies';
+import {
+  getSources,
+  createSourceFile,
+  createSourceUrl,
+  updateSourceSubsector,
+  deleteSource,
+  stopSourceScraping,
+  refreshSource,
+  Source,
+  SourcesListParams,
+  CreateSourceFileRequest,
+} from 'services/sources';
 
 interface KnowledgeBaseFormData {
-  agency: string;
-  domain: string;
-  content?: string;
+  subsector: string;
   files: FileItem[];
   apiUrl?: string;
   websiteUrl?: string;
@@ -48,151 +57,333 @@ interface KnowledgeBaseFormData {
 const Agency: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
+  const queryClient = useQueryClient();
+  const { id: agencyBaseId } = useParams<{ id: string }>();
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress>({
+    isUploading: false,
+    currentFile: 0,
+    totalFiles: 0,
+    currentFileName: '',
+  });
 
   const [uploadModal, setUploadModal] = useState(false);
-  const [addApiModal, setAddApiModal] = useState(false);
   const [addUrlModal, setAddUrlModal] = useState(false);
-  const [editModal, setEditModal] = useState<KnowledgeBaseItem | null>(null);
-  const [deleteModal, setDeleteModal] = useState<KnowledgeBaseItem | null>(
-    null
-  );
+  const [editModal, setEditModal] = useState<Source | null>(null);
+  const [deleteModal, setDeleteModal] = useState<Source | null>(null);
+
+  // Add table state for server-side pagination and sorting
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  });
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
   const [formData, setFormData] = useState<KnowledgeBaseFormData>({
-    agency: '',
-    domain: '',
+    subsector: '',
     files: [],
   });
 
-  // Mock data - replace with actual API call
-  const { data: knowledgeBaseData, refetch } = useQuery<{
-    data: KnowledgeBaseItem[];
-    total: number;
-  }>({
-    queryKey: ['knowledge-base'],
-    queryFn: async () => ({
-      data: [
-        {
-          id: '1',
-          url: 'Abc',
-          domain: 'Domain 1',
-          lastScraped: '31.04.2025',
-          status: 'inProgress',
-        },
-        {
-          id: '2',
-          url: 'Pvc',
-          domain: 'Domain 2',
-          lastScraped: '31.04.2025',
-          status: 'done',
-        },
-        {
-          id: '3',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'done',
-        },
-        {
-          id: '4',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'inProgress',
-        },
-        {
-          id: '5',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'inProgress',
-        },
-        {
-          id: '6',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'inProgress',
-        },
-        {
-          id: '7',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'inProgress',
-        },
-        {
-          id: '8',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'done',
-        },
-        {
-          id: '9',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'done',
-        },
-        {
-          id: '10',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'done',
-        },
-        {
-          id: '11',
-          url: 'Xyz',
-          domain: 'Domain 3',
-          lastScraped: '31.04.2025',
-          status: 'inProgress',
-        },
-      ],
-      total: 170,
+  // Convert sorting state to API format
+  const getSortingParam = (sorting: SortingState): string => {
+    if (sorting.length === 0) return 'last_scraped_at desc';
+
+    const sort = sorting[0];
+    let field = sort.id;
+
+    // Map column IDs to API field names
+    const fieldMap: Record<string, string> = {
+      url: 'url',
+      subsector: 'subsector',
+      lastScraped: 'last_scraped_at',
+      status: 'status',
+    };
+
+    field = fieldMap[field] || field;
+    return `${field} ${sort.desc ? 'desc' : 'asc'}`;
+  };
+
+  // API query parameters
+  const queryParams: SourcesListParams = useMemo(
+    () => ({
+      agencyBaseId: agencyBaseId!,
+      page: pagination.pageIndex + 1,
+      pageSize: pagination.pageSize,
+      sorting: getSortingParam(sorting),
     }),
+    [agencyBaseId, pagination.pageIndex, pagination.pageSize, sorting]
+  );
+
+  // Fetch agency data
+  const { data: agencyData, isLoading: isLoadingAgency } = useQuery({
+    queryKey: ['agency', agencyBaseId],
+    queryFn: () => getAgency(agencyBaseId!),
+    enabled: !!agencyBaseId,
   });
 
-  const handleUpload = async () => {
-    try {
-      // Implement file upload logic
-      await apiDev.post('knowledge-base/upload', formData);
-      setUploadModal(false);
-      setFormData({ agency: '', domain: '' });
-      refetch();
+  // Fetch sources data
+  const {
+    data: sourcesData,
+    isLoading: isLoadingSources,
+    refetch,
+  } = useQuery({
+    queryKey: ['sources', queryParams],
+    queryFn: () => getSources(queryParams),
+    enabled: !!agencyBaseId,
+    keepPreviousData: true,
+  });
+
+  // File upload mutation
+  const uploadMutation = useMutation({
+    mutationFn: async (data: CreateSourceFileRequest) => {
+      // Set initial upload state
+      setUploadProgress({
+        isUploading: true,
+        currentFile: 0,
+        totalFiles: data.files.length,
+        currentFileName: '',
+      });
+
+      return createSourceFile(
+        data,
+        (
+          fileIndex: number,
+          fileName: string,
+          status: 'uploading' | 'success'
+        ) => {
+          // Update overall progress - show which file is currently being uploaded
+          setUploadProgress((prev) => ({
+            ...prev,
+            currentFile:
+              status === 'uploading' ? fileIndex + 1 : prev.currentFile,
+            currentFileName:
+              status === 'uploading' ? fileName : prev.currentFileName,
+          }));
+
+          // Update individual file status in real-time
+          setFormData((prev) => ({
+            ...prev,
+            files: prev.files.map((file, index) => {
+              if (index === fileIndex) {
+                return {
+                  ...file,
+                  status: status as any,
+                };
+              }
+              return file;
+            }),
+          }));
+        }
+      );
+    },
+    onMutate: () => {
+      // Set all valid files to uploading status
+      setFormData((prev) => ({
+        ...prev,
+        files: prev.files.map((file) =>
+          file.status !== 'error'
+            ? { ...file, status: 'uploading' as const }
+            : file
+        ),
+      }));
+    },
+    onSuccess: () => {
+      // Reset upload progress
+      setUploadProgress({
+        isUploading: false,
+        currentFile: 0,
+        totalFiles: 0,
+        currentFileName: '',
+      });
+
+      // All files should already be marked as success from the progress callback
+      // But ensure any remaining files are marked as success
+      setFormData((prev) => ({
+        ...prev,
+        files: prev.files.map((file) => ({
+          ...file,
+          status:
+            file.status === 'uploading' ? ('success' as const) : file.status,
+        })),
+      }));
+
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.uploadSuccess'),
       });
-    } catch (error) {
+
+      // Close modal after a short delay to show success state
+      setTimeout(() => {
+        setUploadModal(false);
+        setFormData({ subsector: '', files: [] });
+      }, 1000);
+
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      // Reset upload progress
+      setUploadProgress({
+        isUploading: false,
+        currentFile: 0,
+        totalFiles: 0,
+        currentFileName: '',
+      });
+
+      // Set failed files to error status
+      setFormData((prev) => ({
+        ...prev,
+        files: prev.files.map((file) => ({
+          ...file,
+          status:
+            file.status === 'uploading' ? ('error' as const) : file.status,
+          message: file.status === 'uploading' ? error.message : file.message,
+        })),
+      }));
+
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: t('knowledgeBase.uploadError'),
+        message: error.message || t('knowledgeBase.uploadError'),
       });
-    }
-  };
+    },
+  });
 
-  const handleAddApi = async () => {
-    try {
-      // Implement API integration logic
-      await apiDev.post('knowledge-base/api', formData);
-      setAddApiModal(false);
-      setFormData({ agency: '', domain: '' });
-      refetch();
+  // URL addition mutation
+  const addUrlMutation = useMutation({
+    mutationFn: createSourceUrl,
+    onSuccess: () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
-        message: t('knowledgeBase.apiSuccess'),
+        message: t('knowledgeBase.urlSuccess'),
       });
-    } catch (error) {
+      setAddUrlModal(false);
+      setFormData({ subsector: '', files: [] });
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: t('knowledgeBase.apiError'),
+        message: error.message || t('knowledgeBase.urlError'),
       });
+    },
+  });
+
+  // Update source mutation
+  const updateMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string; data: any }) =>
+      updateSourceSubsector(id, data),
+    onSuccess: () => {
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.updateSuccess'),
+      });
+      setEditModal(null);
+      setFormData({ subsector: '', files: [] });
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.updateError'),
+      });
+    },
+  });
+
+  // Delete source mutation
+  const deleteMutation = useMutation({
+    mutationFn: deleteSource,
+    onSuccess: () => {
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.deleteSuccess'),
+      });
+      setDeleteModal(null);
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.deleteError'),
+      });
+    },
+  });
+
+  // Stop scraping mutation
+  const stopScrapingMutation = useMutation({
+    mutationFn: stopSourceScraping,
+    onSuccess: () => {
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.stopSuccess'),
+      });
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.stopError'),
+      });
+    },
+  });
+
+  // Refresh source mutation
+  const refreshMutation = useMutation({
+    mutationFn: refreshSource,
+    onSuccess: () => {
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.refreshSuccess'),
+      });
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.refreshError'),
+      });
+    },
+  });
+
+  const handleUpload = () => {
+    if (!agencyBaseId || formData.files.length === 0 || !formData.subsector) {
+      return;
     }
+
+    // Extract actual File objects from FileItem[]
+    const files = formData.files
+      .filter((fileItem) => fileItem.status !== 'error')
+      .map((fileItem) => fileItem.file);
+
+    uploadMutation.mutate({
+      agencyBaseId,
+      subsector: formData.subsector,
+      type: 'file',
+      files,
+    });
+  };
+
+  const handleAddUrl = () => {
+    if (!agencyBaseId || !formData.websiteUrl || !formData.subsector) {
+      return;
+    }
+
+    addUrlMutation.mutate({
+      agencyBaseId,
+      url: formData.websiteUrl,
+      subsector: formData.subsector,
+      type: 'url',
+    });
   };
 
   const handleFilesChange = (files: FileItem[]) => {
@@ -209,86 +400,56 @@ const Agency: FC = () => {
     }));
   };
 
-  const handleAddUrl = async () => {
-    try {
-      // Implement URL integration logic
-      await apiDev.post('knowledge-base/url', formData);
-      setAddUrlModal(false);
-      setFormData({ agency: '', domain: '' });
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.urlSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.urlError'),
-      });
-    }
-  };
-
-  const handleEdit = (item: KnowledgeBaseItem) => {
+  const handleEdit = (item: Source) => {
     setEditModal(item);
     setFormData({
-      agency: item.agency,
-      domain: item.domain,
+      subsector: item.subsector,
+      files: [],
     });
   };
 
-  const handleUpdateItem = async () => {
+  const handleUpdateItem = () => {
     if (!editModal) return;
 
-    try {
-      await apiDev.put(`knowledge-base/${editModal.id}`, formData);
-      setEditModal(null);
-      setFormData({ agency: '', domain: '' });
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.updateSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.updateError'),
-      });
-    }
+    updateMutation.mutate({
+      id: editModal.baseId,
+      data: {
+        subsector: formData.subsector,
+      },
+    });
   };
 
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteModal) return;
-
-    try {
-      await apiDev.delete(`knowledge-base/${deleteModal.id}`);
-      setDeleteModal(null);
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.deleteSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.deleteError'),
-      });
-    }
+    deleteMutation.mutate(deleteModal.baseId);
   };
 
-  const columns: ColumnDef<KnowledgeBaseItem>[] = [
+  const handleStopScraping = (sourceId: string) => {
+    stopScrapingMutation.mutate(sourceId);
+  };
+
+  const handleRefreshSource = (sourceId: string) => {
+    refreshMutation.mutate(sourceId);
+  };
+
+  // Handle pagination change
+  const handlePaginationChange = (newPagination: PaginationState) => {
+    setPagination(newPagination);
+  };
+
+  // Handle sorting change
+  const handleSortingChange = (newSorting: SortingState) => {
+    setSorting(newSorting);
+  };
+
+  const columns: ColumnDef<Source>[] = [
     {
-      accessorKey: 'agency',
+      accessorKey: 'url',
       header: t('knowledgeBase.url'),
       enableColumnFilter: false,
       cell: ({ row }) => (
         <Link
-          to={'/pages'}
+          to={`/source/${row.original.baseId}/files`}
           style={{ textDecoration: 'underline', color: '#005AA3' }}
         >
           <div className="agencies__agency-cell">{row.original.url}</div>
@@ -296,14 +457,24 @@ const Agency: FC = () => {
       ),
     },
     {
-      accessorKey: 'domain',
+      accessorKey: 'subsector',
       header: t('knowledgeBase.subsector'),
       enableColumnFilter: false,
     },
     {
-      accessorKey: 'lastScraped',
+      accessorKey: 'lastScrapedAt',
       header: t('knowledgeBase.lastScraped'),
       enableColumnFilter: false,
+      cell: ({ row }) => (
+        <span>
+          {row.original.lastScrapedAt &&
+            new Date(row.original.lastScrapedAt).toLocaleDateString('et-EE', {
+              day: '2-digit',
+              month: '2-digit',
+              year: 'numeric',
+            })}
+        </span>
+      ),
     },
     {
       accessorKey: 'status',
@@ -312,9 +483,9 @@ const Agency: FC = () => {
         <span
           className={`agencies__status-cell`}
           style={{
-            color: row.original.status === 'inProgress' ? '#005AA3' : '#266B42',
+            color: row.original.status === 'running' ? '#005AA3' : '#266B42',
             borderColor:
-              row.original.status === 'inProgress' ? '#005AA3' : '#266B42',
+              row.original.status === 'running' ? '#005AA3' : '#266B42',
           }}
         >
           {t(`knowledgeBase.${row.original.status}`)}
@@ -327,8 +498,14 @@ const Agency: FC = () => {
       header: '',
       cell: ({ row }) => (
         <Track gap={32} justify="end">
-          {row.original.status === 'inProgress' ? (
-            <Button className="agencies__action-btn" appearance="text" size="s">
+          {row.original.status === 'running' ? (
+            <Button
+              className="agencies__action-btn"
+              appearance="text"
+              size="s"
+              onClick={() => handleStopScraping(row.original.baseId)}
+              disabled={stopScrapingMutation.isLoading}
+            >
               <Icon
                 icon={<MdOutlineStopCircle fontSize={20} />}
                 size="medium"
@@ -336,7 +513,13 @@ const Agency: FC = () => {
               {t('global.stop')}
             </Button>
           ) : (
-            <Button className="agencies__action-btn" appearance="text" size="s">
+            <Button
+              className="agencies__action-btn"
+              appearance="text"
+              size="s"
+              onClick={() => handleRefreshSource(row.original.baseId)}
+              disabled={refreshMutation.isLoading || row.original.type === 'file'}
+            >
               <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
               {t('knowledgeBase.refresh')}
             </Button>
@@ -344,10 +527,10 @@ const Agency: FC = () => {
 
           <Link
             style={{ display: 'flex', textDecoration: 'none' }}
-            to={'/settings'}
+            to={`/source/${row.original.baseId}/schedule`}
           >
             <Button
-              disabled={row.original.status === 'inProgress'}
+              disabled={row.original.status === 'running' || row.original.type === 'file'}
               appearance="text"
               className="agencies__action-btn"
             >
@@ -356,16 +539,16 @@ const Agency: FC = () => {
             </Button>
           </Link>
           <Button
-            disabled={row.original.status === 'inProgress'}
+            disabled={row.original.status === 'running'}
             appearance="text"
             className="agencies__action-btn"
-            onClick={() => setEditModal(true)}
+            onClick={() => handleEdit(row.original)}
           >
             <Icon icon={<MdOutlineEdit fontSize={20} />} size="medium" />
             {t('global.edit')}
           </Button>
           <Button
-            disabled={row.original.status === 'inProgress'}
+            disabled={row.original.status === 'running'}
             appearance="text"
             className="agencies__action-btn"
             onClick={() => setDeleteModal(row.original)}
@@ -381,17 +564,10 @@ const Agency: FC = () => {
     },
   ];
 
-  const agencyOptions = [
-    { label: 'Abc', value: 'abc' },
-    { label: 'Pvc', value: 'pvc' },
-    { label: 'Xyz', value: 'xyz' },
-  ];
-
-  const domainOptions = [
-    { label: 'Domain 1', value: 'domain1' },
-    { label: 'Domain 2', value: 'domain2' },
-    { label: 'Domain 3', value: 'domain3' },
-  ];
+  // Show loading state
+  if (isLoadingAgency || isLoadingSources) {
+    return <div>Loading...</div>;
+  }
 
   return (
     <div className="agency-container">
@@ -412,7 +588,7 @@ const Agency: FC = () => {
                 }}
                 onClick={() => setUploadModal(true)}
               >
-                {t('knowledgeBase.uploadFile')}
+                {t('knowledgeBase.uploadFiles')}
               </Button>
               <Button appearance="primary" onClick={() => setAddUrlModal(true)}>
                 {t('knowledgeBase.addUrl')}
@@ -422,20 +598,23 @@ const Agency: FC = () => {
         }
       >
         <DataTable
-          data={knowledgeBaseData?.data ?? []}
+          data={sourcesData?.data ?? []}
           columns={columns}
-          pagination={{
-            pageIndex: 0,
-            pageSize: 10,
-          }}
+          pagination={pagination}
+          setPagination={handlePaginationChange}
+          sorting={sorting}
+          setSorting={handleSortingChange}
+          columnFilters={columnFilters}
+          setFiltering={setColumnFilters}
           sortable
           filterable
-          pagesCount={Math.ceil((knowledgeBaseData?.total ?? 0) / 10)}
+          pagesCount={sourcesData?.totalPages ?? 0}
+          isClientSide={false}
         />
 
         <div className="agencies__footer">
           <span className="agencies__total">
-            {knowledgeBaseData?.total ?? 0} {t('knowledgeBase.results')}
+            {sourcesData?.total ?? 0} {t('knowledgeBase.results')}
           </span>
         </div>
       </Card>
@@ -443,18 +622,30 @@ const Agency: FC = () => {
       {/* Upload Modal */}
       {uploadModal && (
         <Dialog
-          title={t('knowledgeBase.uploadFile')}
-          onClose={() => setUploadModal(false)}
+          title={t('knowledgeBase.uploadFiles')}
+          onClose={() => !uploadProgress.isUploading && setUploadModal(false)}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
                 onClick={() => setUploadModal(false)}
+                disabled={uploadProgress.isUploading}
               >
                 {t('global.cancel')}
               </Button>
-              <Button appearance="primary" onClick={handleUpload}>
-                {t('knowledgeBase.upload')}
+              <Button
+                appearance="primary"
+                onClick={handleUpload}
+                disabled={
+                  uploadProgress.isUploading ||
+                  !formData.subsector ||
+                  formData.files.length === 0 ||
+                  formData.files.every((file) => file.status === 'error')
+                }
+              >
+                {uploadProgress.isUploading
+                  ? t('fileUpload.uploading')
+                  : t('knowledgeBase.upload')}
               </Button>
             </Track>
           }
@@ -464,9 +655,12 @@ const Agency: FC = () => {
               className="url-input"
               label={t('knowledgeBase.subsector')}
               name="subsector"
+              value={formData.subsector}
               onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
+                setFormData((prev) => ({ ...prev, subsector: e.target.value }))
               }
+              required
+              disabled={uploadProgress.isUploading}
             />
             <FileUploader
               files={formData.files}
@@ -475,61 +669,7 @@ const Agency: FC = () => {
               maxFileSize={30 * 1024 * 1024} // 30MB
               acceptedTypes=".pdf,.doc,.docx,.txt,.html,.htm"
               multiple={true}
-            />
-          </Track>
-        </Dialog>
-      )}
-
-      {/* Add API Modal */}
-      {addApiModal && (
-        <Dialog
-          title={t('knowledgeBase.addApiTitle')}
-          onClose={() => setAddApiModal(false)}
-          footer={
-            <Track gap={16} justify="end">
-              <Button
-                appearance="secondary"
-                onClick={() => setAddApiModal(false)}
-              >
-                {t('global.cancel')}
-              </Button>
-              <Button appearance="primary" onClick={handleAddApi}>
-                {t('knowledgeBase.addApi')}
-              </Button>
-            </Track>
-          }
-        >
-          <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
-            <FormInput
-              label={t('knowledgeBase.apiUrl')}
-              name="apiUrl"
-              type="url"
-              placeholder="https://api.example.com/endpoint"
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, apiUrl: e.target.value }))
-              }
+              uploadProgress={uploadProgress} // Pass upload progress to FileUploader
             />
           </Track>
         </Dialog>
@@ -548,8 +688,18 @@ const Agency: FC = () => {
               >
                 {t('global.cancel')}
               </Button>
-              <Button appearance="primary" onClick={handleAddUrl}>
-                {t('global.add')}
+              <Button
+                appearance="primary"
+                onClick={handleAddUrl}
+                disabled={
+                  addUrlMutation.isLoading ||
+                  !formData.subsector ||
+                  !formData.websiteUrl
+                }
+              >
+                {addUrlMutation.isLoading
+                  ? t('global.adding')
+                  : t('global.add')}
               </Button>
             </Track>
           }
@@ -559,17 +709,21 @@ const Agency: FC = () => {
               className="url-input"
               label={t('knowledgeBase.subsector')}
               name="subsector"
+              value={formData.subsector}
               onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
+                setFormData((prev) => ({ ...prev, subsector: e.target.value }))
               }
+              required
             />
             <FormInput
               className="url-input"
               label={t('knowledgeBase.url')}
               name="websiteUrl"
+              value={formData.websiteUrl || ''}
               onChange={(e) =>
                 setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
               }
+              required
             />
           </Track>
         </Dialog>
@@ -585,8 +739,14 @@ const Agency: FC = () => {
               <Button appearance="secondary" onClick={() => setEditModal(null)}>
                 {t('global.cancel')}
               </Button>
-              <Button appearance="primary" onClick={handleUpdateItem}>
-                {t('global.save')}
+              <Button
+                appearance="primary"
+                onClick={handleUpdateItem}
+                disabled={updateMutation.isLoading || !formData.subsector}
+              >
+                {updateMutation.isLoading
+                  ? t('global.saving')
+                  : t('global.save')}
               </Button>
             </Track>
           }
@@ -596,9 +756,11 @@ const Agency: FC = () => {
               className="url-input"
               label={t('knowledgeBase.subsector')}
               name="subsector"
+              value={formData.subsector}
               onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
+                setFormData((prev) => ({ ...prev, subsector: e.target.value }))
               }
+              required
             />
           </Track>
         </Dialog>
@@ -614,11 +776,18 @@ const Agency: FC = () => {
               <Button
                 appearance="secondary"
                 onClick={() => setDeleteModal(null)}
+                disabled={deleteMutation.isLoading}
               >
                 {t('global.cancel')}
               </Button>
-              <Button appearance="error" onClick={handleDelete}>
-                {t('global.delete')}
+              <Button
+                appearance="error"
+                onClick={handleDelete}
+                disabled={deleteMutation.isLoading}
+              >
+                {deleteMutation.isLoading
+                  ? t('global.deleting')
+                  : t('global.delete')}
               </Button>
             </Track>
           }

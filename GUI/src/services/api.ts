@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
-import { useTranslation } from "react-i18next";
-import { useEffect } from "react";
+import { useTranslation } from 'react-i18next';
+import { useEffect } from 'react';
 
 const api = axios.create({
   baseURL: import.meta.env.BASE_URL,
@@ -13,7 +13,7 @@ const api = axios.create({
 });
 
 const apiDev = axios.create({
-  baseURL: import.meta.env.REACT_APP_RUUTER_PRIVATE_API_URL,
+  baseURL: import.meta.env.REACT_APP_RUUTER_API_URL,
   headers: {
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -30,7 +30,7 @@ const AxiosInterceptor = ({ children }) => {
       import.meta.env.DEBUG_ENABLED && console.debug(response);
 
       return response;
-    }
+    };
 
     const errInterceptor = (error: any) => {
       import.meta.env.DEBUG_ENABLED && console.debug(error);
@@ -38,10 +38,16 @@ const AxiosInterceptor = ({ children }) => {
       let message = t('global.notificationErrorMsg');
 
       return Promise.reject(new Error(message));
-    }
+    };
 
-    const apiInterceptor = api.interceptors.response.use(resInterceptor, errInterceptor);
-    const apiDevInterceptor = apiDev.interceptors.response.use(resInterceptor, errInterceptor);
+    const apiInterceptor = api.interceptors.response.use(
+      resInterceptor,
+      errInterceptor
+    );
+    const apiDevInterceptor = apiDev.interceptors.response.use(
+      resInterceptor,
+      errInterceptor
+    );
 
     return () => {
       api.interceptors.response.eject(apiInterceptor);
@@ -50,7 +56,7 @@ const AxiosInterceptor = ({ children }) => {
   }, [t]);
 
   return children;
-}
+};
 
 const handleRequestError = (error: AxiosError) => {
   import.meta.env.DEBUG_ENABLED && console.debug(error);
@@ -61,7 +67,7 @@ const handleRequestError = (error: AxiosError) => {
     // To be added: handle forbidden requests
   }
   return Promise.reject(new Error(error.message));
-}
+};
 
 api.interceptors.request.use(
   (axiosRequest) => axiosRequest,

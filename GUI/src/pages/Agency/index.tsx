@@ -1,273 +1,161 @@
-import { FC, useState } from 'react';
+import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { MdOutlineDeleteOutline } from 'react-icons/md';
+import { Button, Card, DataTable, Dialog, Icon, Track } from 'components';
 import {
-  Button,
-  Card,
-  DataTable,
-  Dialog,
-  FormInput,
-  FormSelect,
-  FormTextarea,
-  Icon,
-  Track,
-} from 'components';
-import { ColumnDef } from '@tanstack/react-table';
+  ColumnDef,
+  PaginationState,
+  SortingState,
+  ColumnFiltersState,
+} from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
-import { apiDev } from 'services/api';
-import './AgencyList.scss';
 import { Link } from 'react-router-dom';
+import {
+  getAgencies,
+  deleteAgency,
+  Agency,
+  AgencyListParams,
+} from 'services/agencies';
+import './AgencyList.scss';
 
-interface KnowledgeBaseItem {
-  id: string;
-  agency: string;
-  domain: string;
-  lastUpdate: string;
-}
-
-interface KnowledgeBaseFormData {
-  agency: string;
-  domain: string;
-  content?: string;
-  file?: File;
-  apiUrl?: string;
-  websiteUrl?: string;
-}
-
-const Agency: FC = () => {
+const AgencyComponent: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
+  const queryClient = useQueryClient();
 
+  // Keep all your existing modal states
   const [uploadModal, setUploadModal] = useState(false);
   const [addApiModal, setAddApiModal] = useState(false);
   const [addUrlModal, setAddUrlModal] = useState(false);
-  const [editModal, setEditModal] = useState<KnowledgeBaseItem | null>(null);
-  const [deleteModal, setDeleteModal] = useState<KnowledgeBaseItem | null>(
-    null
+  const [deleteModal, setDeleteModal] = useState<Agency | null>(null);
+
+  // Add table state for server-side pagination and sorting
+  const [pagination, setPagination] = useState<PaginationState>({
+    pageIndex: 0,
+    pageSize: 10,
+  });
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // Convert sorting state to API format
+  const getSortingParam = (sorting: SortingState): string => {
+    if (sorting.length === 0) return 'updatedAt desc';
+
+    const sort = sorting[0];
+    let field = sort.id;
+
+    // Map column IDs to API field names
+    const fieldMap: Record<string, string> = {
+      agency: 'name',
+      domain: 'sector',
+      lastUpdate: 'updatedAt',
+    };
+
+    field = fieldMap[field] || field;
+    return `${field} ${sort.desc ? 'desc' : 'asc'}`;
+  };
+
+  // API query parameters
+  const queryParams: AgencyListParams = useMemo(
+    () => ({
+      page: pagination.pageIndex + 1,
+      pageSize: pagination.pageSize,
+      sorting: getSortingParam(sorting),
+    }),
+    [pagination.pageIndex, pagination.pageSize, sorting]
   );
 
-  const [formData, setFormData] = useState<KnowledgeBaseFormData>({
-    agency: '',
-    domain: '',
+  // Fetch agencies data
+  const {
+    data: agencyApiData,
+    isLoading,
+    error,
+    refetch,
+  } = useQuery({
+    queryKey: ['agencies', queryParams],
+    queryFn: () => getAgencies(queryParams),
+    keepPreviousData: true,
   });
 
-  // Mock data - replace with actual API call
-  const { data: knowledgeBaseData, refetch } = useQuery<{
-    data: KnowledgeBaseItem[];
-    total: number;
-  }>({
-    queryKey: ['knowledge-base'],
-    queryFn: async () => ({
-      data: [
-        {
-          id: '1',
-          agency: 'Abc',
-          domain: 'Domain 1',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '2',
-          agency: 'Pvc',
-          domain: 'Domain 2',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '3',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '4',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '5',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '6',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '7',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '8',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '9',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '10',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-        {
-          id: '11',
-          agency: 'Xyz',
-          domain: 'Domain 3',
-          lastUpdate: '31.04.2025',
-        },
-      ],
-      total: 170,
-    }),
-  });
-
-  const handleUpload = async () => {
-    try {
-      // Implement file upload logic
-      await apiDev.post('knowledge-base/upload', formData);
-      setUploadModal(false);
-      setFormData({ agency: '', domain: '' });
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.uploadSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.uploadError'),
-      });
-    }
-  };
-
-  const handleAddApi = async () => {
-    try {
-      // Implement API integration logic
-      await apiDev.post('knowledge-base/api', formData);
-      setAddApiModal(false);
-      setFormData({ agency: '', domain: '' });
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.apiSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.apiError'),
-      });
-    }
-  };
-
-  const handleAddUrl = async () => {
-    try {
-      // Implement URL integration logic
-      await apiDev.post('knowledge-base/url', formData);
-      setAddUrlModal(false);
-      setFormData({ agency: '', domain: '' });
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.urlSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.urlError'),
-      });
-    }
-  };
-
-  const handleEdit = (item: KnowledgeBaseItem) => {
-    setEditModal(item);
-    setFormData({
-      agency: item.agency,
-      domain: item.domain,
-    });
-  };
-
-  const handleUpdateItem = async () => {
-    if (!editModal) return;
-
-    try {
-      await apiDev.put(`knowledge-base/${editModal.id}`, formData);
-      setEditModal(null);
-      setFormData({ agency: '', domain: '' });
-      refetch();
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.updateSuccess'),
-      });
-    } catch (error) {
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: t('knowledgeBase.updateError'),
-      });
-    }
-  };
-
-  const handleDelete = async () => {
-    if (!deleteModal) return;
-
-    try {
-      await apiDev.delete(`knowledge-base/${deleteModal.id}`);
-      setDeleteModal(null);
-      refetch();
+  // Delete agency mutation
+  const deleteAgencyMutation = useMutation({
+    mutationFn: deleteAgency,
+    onSuccess: () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.deleteSuccess'),
       });
-    } catch (error) {
+      setDeleteModal(null);
+      queryClient.invalidateQueries(['agencies']);
+    },
+    onError: (error: any) => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: t('knowledgeBase.deleteError'),
+        message: error.message || t('knowledgeBase.deleteError'),
       });
+    },
+  });
+
+  // Transform API data to match your existing KnowledgeBaseItem interface
+  const knowledgeBaseData = useMemo(() => {
+    if (!agencyApiData) return { data: [], total: 0 };
+
+    return {
+      data: agencyApiData.data,
+      total: agencyApiData.total,
+    };
+  }, [agencyApiData]);
+
+  // Handle pagination change
+  const handlePaginationChange = (newPagination: PaginationState) => {
+    setPagination(newPagination);
+  };
+
+  // Handle sorting change
+  const handleSortingChange = (newSorting: SortingState) => {
+    setSorting(newSorting);
+  };
+
+  // Handle delete confirmation
+  const handleDeleteConfirm = () => {
+    if (deleteModal) {
+      deleteAgencyMutation.mutate(deleteModal.baseId);
     }
   };
 
-  const columns: ColumnDef<KnowledgeBaseItem>[] = [
+  // Keep your existing columns definition with updated delete handler
+  const columns: ColumnDef<Agency>[] = [
     {
-      accessorKey: 'agency',
+      accessorKey: 'name',
       header: t('knowledgeBase.agency'),
       enableColumnFilter: false,
       cell: ({ row }) => (
         <Link
-          to={`/agency/${row.original.id}`}
+          to={`/agency/${row.original.baseId}`}
           style={{ textDecoration: 'underline', color: '#005AA3' }}
         >
-          <div className="agencies__agency-cell">{row.original.agency}</div>
+          <div className="agencies__agency-cell">{row.original.name}</div>
         </Link>
       ),
     },
     {
-      accessorKey: 'domain',
+      accessorKey: 'sector',
       header: t('knowledgeBase.sector'),
       enableColumnFilter: false,
     },
     {
-      accessorKey: 'lastUpdate',
+      accessorKey: 'updatedAt',
       header: t('knowledgeBase.lastUpdate'),
       enableColumnFilter: false,
+      cell: ({ row }) =>
+        new Date(row.original.updatedAt).toLocaleDateString('et-EE', {
+          day: '2-digit',
+          month: '2-digit',
+          year: 'numeric',
+        }),
     },
     {
       id: 'actions',
@@ -278,6 +166,7 @@ const Agency: FC = () => {
             appearance="text"
             onClick={() => setDeleteModal(row.original)}
             className="agencies__action-btn"
+            disabled={deleteAgencyMutation.isLoading}
           >
             <Icon
               icon={<MdOutlineDeleteOutline fontSize={20} />}
@@ -302,6 +191,16 @@ const Agency: FC = () => {
     { label: 'Domain 3', value: 'domain3' },
   ];
 
+  // Show loading state
+  if (isLoading) {
+    return <div>Loading...</div>;
+  }
+
+  // Show error state
+  if (error) {
+    return <div>Error loading agencies: {error.message}</div>;
+  }
+
   return (
     <div className="agencies">
       <Track
@@ -316,17 +215,21 @@ const Agency: FC = () => {
           </Link>
         </Track>
       </Track>
+
       <Card>
         <DataTable
           data={knowledgeBaseData?.data ?? []}
           columns={columns}
-          pagination={{
-            pageIndex: 0,
-            pageSize: 10,
-          }}
+          pagination={pagination}
+          setPagination={handlePaginationChange}
+          sorting={sorting}
+          setSorting={handleSortingChange}
+          columnFilters={columnFilters}
+          setFiltering={setColumnFilters}
           sortable
           filterable
-          pagesCount={Math.ceil((knowledgeBaseData?.total ?? 0) / 10)}
+          pagesCount={agencyApiData?.totalPages ?? 0}
+          isClientSide={false}
         />
 
         <div className="agencies__footer">
@@ -335,224 +238,6 @@ const Agency: FC = () => {
           </span>
         </div>
       </Card>
-
-      {/* Upload Modal */}
-      {uploadModal && (
-        <Dialog
-          title={t('knowledgeBase.uploadTitle')}
-          onClose={() => setUploadModal(false)}
-          footer={
-            <Track gap={16} justify="end">
-              <Button
-                appearance="secondary"
-                onClick={() => setUploadModal(false)}
-              >
-                {t('global.cancel')}
-              </Button>
-              <Button appearance="primary" onClick={handleUpload}>
-                {t('knowledgeBase.upload')}
-              </Button>
-            </Track>
-          }
-        >
-          <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
-            <FormInput
-              label={t('knowledgeBase.file')}
-              name="file"
-              type="file"
-              onChange={(e) => {
-                const file = (e.target as HTMLInputElement).files?.[0];
-                setFormData((prev) => ({ ...prev, file }));
-              }}
-            />
-          </Track>
-        </Dialog>
-      )}
-
-      {/* Add API Modal */}
-      {addApiModal && (
-        <Dialog
-          title={t('knowledgeBase.addApiTitle')}
-          onClose={() => setAddApiModal(false)}
-          footer={
-            <Track gap={16} justify="end">
-              <Button
-                appearance="secondary"
-                onClick={() => setAddApiModal(false)}
-              >
-                {t('global.cancel')}
-              </Button>
-              <Button appearance="primary" onClick={handleAddApi}>
-                {t('knowledgeBase.addApi')}
-              </Button>
-            </Track>
-          }
-        >
-          <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
-            <FormInput
-              label={t('knowledgeBase.apiUrl')}
-              name="apiUrl"
-              type="url"
-              placeholder="https://api.example.com/endpoint"
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, apiUrl: e.target.value }))
-              }
-            />
-          </Track>
-        </Dialog>
-      )}
-
-      {/* Add URL Modal */}
-      {addUrlModal && (
-        <Dialog
-          title={t('knowledgeBase.addUrlTitle')}
-          onClose={() => setAddUrlModal(false)}
-          footer={
-            <Track gap={16} justify="end">
-              <Button
-                appearance="secondary"
-                onClick={() => setAddUrlModal(false)}
-              >
-                {t('global.cancel')}
-              </Button>
-              <Button appearance="primary" onClick={handleAddUrl}>
-                {t('knowledgeBase.addUrl')}
-              </Button>
-            </Track>
-          }
-        >
-          <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
-            <FormInput
-              label={t('knowledgeBase.websiteUrl')}
-              name="websiteUrl"
-              type="url"
-              placeholder="https://example.com"
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
-              }
-            />
-          </Track>
-        </Dialog>
-      )}
-
-      {/* Edit Modal */}
-      {editModal && (
-        <Dialog
-          title={t('knowledgeBase.editTitle')}
-          onClose={() => setEditModal(null)}
-          footer={
-            <Track gap={16} justify="end">
-              <Button appearance="secondary" onClick={() => setEditModal(null)}>
-                {t('global.cancel')}
-              </Button>
-              <Button appearance="primary" onClick={handleUpdateItem}>
-                {t('global.save')}
-              </Button>
-            </Track>
-          }
-        >
-          <Track direction="vertical" gap={16}>
-            <FormSelect
-              label={t('knowledgeBase.agency')}
-              name="agency"
-              options={agencyOptions}
-              defaultValue={formData.agency}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  agency: option?.value ?? '',
-                }))
-              }
-            />
-            <FormSelect
-              label={t('knowledgeBase.domain')}
-              name="domain"
-              options={domainOptions}
-              defaultValue={formData.domain}
-              onSelectionChange={(option) =>
-                setFormData((prev) => ({
-                  ...prev,
-                  domain: option?.value ?? '',
-                }))
-              }
-            />
-            <FormTextarea
-              label={t('knowledgeBase.content')}
-              name="content"
-              placeholder={t('knowledgeBase.contentPlaceholder')}
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, content: e.target.value }))
-              }
-            />
-          </Track>
-        </Dialog>
-      )}
 
       {/* Delete Confirmation Modal */}
       {deleteModal && (
@@ -564,19 +249,26 @@ const Agency: FC = () => {
               <Button
                 appearance="secondary"
                 onClick={() => setDeleteModal(null)}
+                disabled={deleteAgencyMutation.isLoading}
               >
                 {t('global.cancel')}
               </Button>
-              <Button appearance="error" onClick={handleDelete}>
-                {t('global.delete')}
+              <Button
+                appearance="error"
+                onClick={handleDeleteConfirm}
+                disabled={deleteAgencyMutation.isLoading}
+              >
+                {deleteAgencyMutation.isLoading
+                  ? t('global.deleting')
+                  : t('global.delete')}
               </Button>
             </Track>
           }
         >
           <p>
             {t('knowledgeBase.deleteAgencyConfirmation', {
-              agency: deleteModal.agency,
-              domain: deleteModal.domain,
+              agency: deleteModal.name,
+              domain: deleteModal.sector,
             })}
           </p>
         </Dialog>
@@ -585,4 +277,4 @@ const Agency: FC = () => {
   );
 };
 
-export default Agency;
+export default AgencyComponent;

@@ -7,9 +7,17 @@ export interface FileItem {
   id: string;
   name: string;
   size: number;
-  status: 'pending' | 'success' | 'warning' | 'error';
+  status: 'pending' | 'uploading' | 'success' | 'warning' | 'error';
   message?: string;
   url?: string;
+  file: File; // Add actual File object
+}
+
+export interface UploadProgress {
+  isUploading: boolean;
+  currentFile: number;
+  totalFiles: number;
+  currentFileName: string;
 }
 
 interface FileUploaderProps {
@@ -20,6 +28,7 @@ interface FileUploaderProps {
   acceptedTypes?: string;
   multiple?: boolean;
   className?: string;
+  uploadProgress?: UploadProgress; // Add upload progress prop
 }
 
 const FileUploader: FC<FileUploaderProps> = ({
@@ -30,6 +39,7 @@ const FileUploader: FC<FileUploaderProps> = ({
   acceptedTypes = '.pdf,.doc,.docx,.txt,.html,.htm',
   multiple = true,
   className = '',
+  uploadProgress,
 }) => {
   const { t } = useTranslation();
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -43,33 +53,39 @@ const FileUploader: FC<FileUploaderProps> = ({
     return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
   };
 
-  const validateSingleFile = (file: FileItem): FileItem => {
-    // Mock validation logic - you can customize this based on your needs
-    if (file.name.toLowerCase().includes('error')) {
+  const validateSingleFile = (file: File): FileItem => {
+    const fileItem: FileItem = {
+      id: `file-${Date.now()}-${Math.random()}`,
+      name: file.name,
+      size: file.size,
+      status: 'pending',
+      file: file,
+    };
+
+    // Validate file size
+    if (file.size > maxFileSize) {
       return {
-        ...file,
-        status: 'error' as const,
-        message: t('fileUpload.wrongFormat'),
-      };
-    } else if (file.name.toLowerCase().includes('warning')) {
-      return {
-        ...file,
-        status: 'warning' as const,
-        message: t('fileUpload.fileAlreadyExists'),
-        url: file.name,
-      };
-    } else if (file.size > maxFileSize) {
-      return {
-        ...file,
-        status: 'error' as const,
+        ...fileItem,
+        status: 'error',
         message: t('fileUpload.maxSizeExceeded'),
       };
-    } else {
+    }
+
+    // Validate file type
+    const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
+    const allowedTypes = acceptedTypes
+      .split(',')
+      .map((type) => type.trim().toLowerCase());
+
+    if (!allowedTypes.includes(fileExtension)) {
       return {
-        ...file,
-        status: 'success' as const,
+        ...fileItem,
+        status: 'error',
+        message: t('fileUpload.wrongFormat'),
       };
     }
+
+    return fileItem;
   };
 
   const handleFileSelect = () => {
@@ -80,16 +96,8 @@ const FileUploader: FC<FileUploaderProps> = ({
     const selectedFiles = event.target.files;
     if (!selectedFiles) return;
 
-    const newFiles: FileItem[] = Array.from(selectedFiles).map(
-      (file, index) => {
-        const fileItem = {
-          id: `file-${Date.now()}-${index}`,
-          name: file.name,
-          size: file.size,
-          status: 'pending' as const,
-        };
-        return validateSingleFile(fileItem);
-      }
+    const newFiles: FileItem[] = Array.from(selectedFiles).map((file) =>
+      validateSingleFile(file)
     );
 
     const updatedFiles = [...files, ...newFiles];
@@ -118,18 +126,28 @@ const FileUploader: FC<FileUploaderProps> = ({
     const droppedFiles = e.dataTransfer.files;
     if (!droppedFiles) return;
 
-    const newFiles: FileItem[] = Array.from(droppedFiles).map((file, index) => {
-      const fileItem = {
-        id: `file-${Date.now()}-${index}`,
-        name: file.name,
-        size: file.size,
-        status: 'pending' as const,
-      };
-      return validateSingleFile(fileItem);
-    });
+    const newFiles: FileItem[] = Array.from(droppedFiles).map((file) =>
+      validateSingleFile(file)
+    );
 
     const updatedFiles = [...files, ...newFiles];
     onFilesChange(updatedFiles);
+  };
+
+  const renderOverallProgress = () => {
+    if (!uploadProgress?.isUploading) return null;
+
+    return (
+      <div className="file-uploader__overall-progress">
+        <div className="file-uploader__overall-progress-content">
+          <MdAttachFile className="file-uploader__progress-icon" />
+          <div className="file-uploader__progress-text">
+            {t('fileUpload.uploading')} {uploadProgress.currentFile}{' '}
+            {t('fileUpload.of')} {uploadProgress.totalFiles}...
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const renderFileList = () => {
@@ -143,6 +161,10 @@ const FileUploader: FC<FileUploaderProps> = ({
               className={`file-uploader__attachment ${
                 file.status === 'error' || file.status === 'warning'
                   ? 'file-uploader__attachment--error'
+                  : file.status === 'uploading'
+                  ? 'file-uploader__attachment--uploading'
+                  : file.status === 'success'
+                  ? 'file-uploader__attachment--success'
                   : ''
               }`}
             >
@@ -158,6 +180,7 @@ const FileUploader: FC<FileUploaderProps> = ({
                 onClick={() => onFileDelete(file.id)}
                 type="button"
                 aria-label={`Delete ${file.name}`}
+                disabled={uploadProgress?.isUploading}
               >
                 <MdClose />
               </button>
@@ -176,21 +199,25 @@ const FileUploader: FC<FileUploaderProps> = ({
   return (
     <div className={`file-uploader ${className}`}>
       <div className="file-uploader__input-container">
-        <div
-          className={`file-uploader__input ${
-            isDragOver ? 'file-uploader__input--drag-over' : ''
-          }`}
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={handleFileSelect}
-        >
-          <MdAttachFile className="file-uploader__attach-icon" />
-          <div className="file-uploader__instructions">
-            {t('fileUpload.dropFilesOrClick') ||
-              'Drop files here, or click to browse'}
+        {uploadProgress?.isUploading ? (
+          renderOverallProgress()
+        ) : (
+          <div
+            className={`file-uploader__input ${
+              isDragOver ? 'file-uploader__input--drag-over' : ''
+            }`}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+            onClick={handleFileSelect}
+          >
+            <MdAttachFile className="file-uploader__attach-icon" />
+            <div className="file-uploader__instructions">
+              {t('fileUpload.dropFilesOrClick') ||
+                'Drop files here, or click to browse'}
+            </div>
           </div>
-        </div>
+        )}
         <input
           ref={fileInputRef}
           type="file"
