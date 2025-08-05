@@ -1,0 +1,31 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Delete a source run report by base ID"
+  method: post
+  accepts: json
+  returns: json
+  namespace: reports
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source run report to delete"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+
+deleteSourceRunReport:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/reports/delete_source_run_report"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

@@ -1,0 +1,13 @@
+[
+  {{#each upload_urls}}
+  {{#with (lookup ../file_metadata @index)}}
+  {
+    "path": "{{../path}}",
+    "uploadUrl": "{{../upload_url}}",
+    "expiresIn": "{{../expires_at}}",
+    "sourceFileId": "{{source_file_id}}",
+    "fileName": "{{file_name}}"
+  }{{#unless @last}},{{/unless}}
+  {{/with}}
+  {{/each}}
+]

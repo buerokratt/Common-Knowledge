@@ -1,0 +1,10 @@
+{
+  "file_type": "{{file_type}}",
+  "source_url": "{{source_url}}",
+  "metadata": {
+    "cleaned": {{#if (eq type 'cleaned')}}true{{else}}false{{/if}},
+    "edited": {{#if (eq type 'edited')}}true{{else}}false{{/if}}
+  },
+  "version": "{{#if version}}{{version}}{{else}}1.0{{/if}}",
+  "created_at": "{{created_at}}"
+}

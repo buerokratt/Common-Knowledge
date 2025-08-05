@@ -1,7 +1,8 @@
+
 /*
 declaration:
   version: 0.1
-  description: "Fetch the latest non-deleted configuration value for a specified key"
+  description: "Fetch the latest non-deleted configuration entry by key"
   method: get
   namespace: config
   returns: json
@@ -9,18 +10,21 @@ declaration:
     query:
       - field: key
         type: string
-        description: "Configuration key to retrieve the latest value for"
+        description: "Configuration key to filter by"
   response:
     fields:
       - field: id
-        type: string
-        description: "Unique identifier of the configuration entry"
+        type: integer
+        description: "Primary key of the configuration entry"
       - field: key
         type: string
-        description: "Key of the configuration setting"
+        description: "Configuration key"
       - field: value
         type: string
-        description: "Stored value associated with the key"
+        description: "Configuration value"
+      - field: deleted
+        type: boolean
+        description: "Flag indicating whether the entry is deleted"
       - field: created
         type: timestamp
         description: "Timestamp when the configuration entry was created"
@@ -29,12 +33,13 @@ SELECT
     id,
     key,
     value,
+    deleted,
     created
-FROM config.configuration AS c_1
+FROM configuration AS c_1
 WHERE
     key = :key
     AND created = (
-        SELECT MAX(created) FROM config.configuration AS c_2
-        WHERE c_1.key = c_2.key
+        SELECT MAX(c_2.created) FROM configuration AS c_2
+        WHERE c_2.key = c_1.key
     )
     AND NOT deleted;

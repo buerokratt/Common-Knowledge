@@ -1,0 +1,148 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Update source file edited data URL after S3 upload and re-index in search"
+  method: post
+  accepts: json
+  returns: json
+  namespace: file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Base ID of the source file to update"
+      - field: source_file_path
+        type: string
+        description: "S3 path of the source file"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.base_id}"
+    edited_data_url: "uploads/scrapped-data/${incoming.body.source_file_path}/edited.txt"
+    source_file_path: "${incoming.body.source_file_path}"
+
+requestDownloadUrlsForCleanedMetadata:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      paths:
+        - "uploads/scrapped-data/${source_file_path}/cleaned.meta.json"
+  result: downloadResponse
+
+createEditedMetadata:
+  call: http.post
+  args:
+    url: "[#CKB_SCRAPPER_SERVICE]/generate-edited-metadata"
+    headers:
+      type: json
+    contentType: json
+    body:
+      download_url: ${downloadResponse.response.body.download_urls[0].download_url}
+      source_file_id: ${base_id}
+      source_file_path: "/scrapped-data/${source_file_path}"
+  result: createEditedMetadataResponse
+
+updateSourceFileEditedUrl:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_file_edited_data_url"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      edited_data_url: ${edited_data_url}
+      edited_metadata_url: "uploads/scrapped-data/${source_file_path}/edited.meta.json"
+  result: updateResult
+
+zipFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/update-zip-dirty"
+    headers:
+      type: json
+    body:
+      agencyId: "${updateResult.response.body[0].agencyBaseId}"
+  result: zipFilesResult
+
+validateUpdate:
+  switch:
+    - condition: "${updateResult.response.length == 0}"
+      next: fileNotFoundError
+  next: downloadFilesToVolume
+
+downloadFilesToVolume:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-files-to-volume"
+    headers:
+      type: json
+    body:
+      files:
+        - s3_path: ${edited_data_url}
+          local_path: ${edited_data_url}
+  result: downloadResult
+
+prepareSearchDocument:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/prepare_document"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      document_type: "edited_file"
+      content_path: ${edited_data_url}
+      updated_file: ${updateResult.response.body[0]}
+  result: searchDocResult
+
+updateSearchIndex:
+  call: http.post
+  args:
+    url: "[#CKB_SEARCH]/index/${updateResult.response.body[0].sourceBaseId}/bulk"
+    headers:
+      type: json
+    body:
+      documents: ${searchDocResult.response.body}
+  result: searchResult
+
+deleteFileFromVolume:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/delete-files-from-volume"
+    headers:
+      type: json
+    body:
+      files:
+        - local_path: ${edited_data_url}
+  result: deleteResult
+
+handleSearchError:
+  switch:
+    - condition: "${searchResult.response.statusCodeValue >= 400}"
+      next: searchIndexingError
+  next: returnSuccess
+
+searchIndexingError:
+  # Log the error but don't fail the entire operation
+  assign:
+    search_error: "Search indexing failed: ${searchResult.response.body?.error ?? 'Unknown error'}"
+  next: returnSuccessWithWarning
+
+fileNotFoundError:
+  return: "Source file not found or has been updated by another process"
+  status: 404
+  next: end
+
+returnSuccessWithWarning:
+  return: "Source file edited URL updated successfully but error in search indexing"
+  status: 200
+  next: end
+
+returnSuccess:
+  return: "Source file edited URL updated and search index updated successfully"
+  status: 200
+  next: end

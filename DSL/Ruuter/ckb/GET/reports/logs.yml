@@ -1,0 +1,29 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Get latest source run report by base_id"
+  method: get
+  accepts: json
+  returns: json
+  namespace: source_run_report
+  allowlist:
+    path:
+      - field: base_id
+        type: string
+        description: "Base ID of the source run report (UUID)"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.params.base_id}"
+
+getSourceRunReport:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/reports/get_source_report_logs"
+    query:
+      base_id: ${base_id}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

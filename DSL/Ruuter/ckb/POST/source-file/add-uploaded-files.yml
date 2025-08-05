@@ -1,0 +1,80 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Add uploaded files to source_file table"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: agencyId
+        type: string
+        description: "ID of the agency"
+      - field: sourceId
+        type: string
+        description: "Source ID to associate files with"
+      - field: files
+        type: array
+        description: "Array of uploaded file objects"
+
+extractRequestData:
+  assign:
+    agency_id: "${incoming.body.agencyId}"
+    source_id: "${incoming.body.sourceId}"
+    files: "${incoming.body.files}"
+
+validateInput:
+  switch:
+    - condition: ${source_id === null || source_id === ""}
+      next: returnError
+    - condition: ${files === null || files.length === 0}
+      next: returnError
+
+createUploadedSourceFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/create_uploaded_source_files"
+    headers:
+      type: json
+    body:
+      agency_id: ${agency_id}
+      source_id: ${source_id}
+      files: ${files}
+  result: createResult
+
+transformToGetDownloadUrls:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/map_paths_for_source_file"
+    headers:
+      type: json
+    body:
+      source_files: ${createResult.response.body}
+  result: pathsResult
+
+requestDownloadUrls:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      paths: ${pathsResult.response.body}
+  result: downloadResponse
+
+triggerPipelineForUploadedFiles:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-uploaded-files-task"
+  requestType: templates
+  body:
+    source_id: ${source_id}
+    agency_id: ${agency_id}
+    source_files: ${createResult.response.body}
+    download_files: ${downloadResponse.response.body.download_urls}
+  result: res
+
+returnSuccess:
+  return: ${createResult.response.body}
+  status: 200
+  next: end

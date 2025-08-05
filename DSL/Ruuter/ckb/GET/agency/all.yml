@@ -1,0 +1,39 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "List all agencies with pagination and sorting"
+  method: get
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    query:
+      - field: page
+        type: number
+        description: "Page number for pagination"
+      - field: pageSize
+        type: number
+        description: "Number of items per page"
+      - field: sorting
+        type: string
+        description: "Sorting criteria (name asc/desc, sector asc/desc, updated_at asc/desc)"
+
+extractRequestData:
+  assign:
+    page: "${incoming.params.page ?? 1}"
+    page_size: "${incoming.params.pageSize ?? 10}"
+    sorting: "${incoming.params.sorting ?? 'updated_at desc'}"
+
+getAgencies:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/list_agencies"
+    query:
+      page: ${page}
+      page_size: ${page_size}
+      sorting: ${sorting}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

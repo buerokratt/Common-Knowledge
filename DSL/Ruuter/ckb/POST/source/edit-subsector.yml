@@ -1,0 +1,36 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Update subsector of an existing source"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source to update"
+      - field: subsector
+        type: string
+        description: "Updated subsector of the source"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+    subsector: "${incoming.body.subsector}"
+
+updateSourceSubsector:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_subsector"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      subsector: ${subsector}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

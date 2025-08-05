@@ -1,0 +1,77 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Exclude or include an existing source file"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source file to exclude or include"
+      - field: excluded
+        type: boolean
+        description: "Excluded property of the source file"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+    excluded: "${incoming.body.excluded}"
+
+excludeSourceFile:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_file_exclude"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      excluded: ${excluded}
+  result: res
+
+checkExcluded:
+  switch:
+    - condition: ${excluded}
+      next: assignPathsForExclude
+  next: assignPathsForInclude
+
+assignPathsForExclude:
+  assign:
+    s3_from_path: "${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+    s3_to_path: "excluded/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+  next: moveFilesS3
+
+assignPathsForInclude:
+  assign:
+    s3_from_path: "excluded/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+    s3_to_path: "${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+  next: moveFilesS3
+
+moveFilesS3:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/move-files"
+    headers:
+      type: json
+    body:
+      files:
+        - s3_from_path: ${s3_from_path}
+          s3_to_path: ${s3_to_path}
+          is_folder: true
+  result: moveFilesS3Result
+
+zipFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/update-zip-dirty"
+    headers:
+      type: json
+    body:
+      agencyId: "${res.response.body[0].agencyBaseId}"
+  result: zipFilesResult
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

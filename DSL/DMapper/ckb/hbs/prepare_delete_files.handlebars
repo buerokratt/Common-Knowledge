@@ -1,0 +1,10 @@
+[
+  {
+    "s3_path": "{{base_id}}/",
+    "is_folder": true
+  }{{#if agency_data.zippedDataUrl}},
+  {
+    "s3_path": "{{agency_data.zippedDataUrl}}",
+    "is_folder": false
+  }{{/if}}
+]

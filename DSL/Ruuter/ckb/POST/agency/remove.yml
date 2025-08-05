@@ -1,0 +1,59 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Delete an agency by base ID"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the agency to delete"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+
+deleteAgencyFromDatabase:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/delete_agency"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+  result: deleteDbResult
+
+prepareDeleteFiles:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/prepare_delete_files"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      agency_data: ${deleteDbResult.response.body[0]}
+  result: deleteFilesResult
+
+deleteAgencyFilesFromS3:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/delete-files-async"
+    headers:
+      type: json
+    body:
+      files: ${deleteFilesResult.response.body}
+  result: deleteS3Result
+
+assignResponse:
+  assign:
+    response:
+      s3_delete_task_id: ${deleteS3Result.response.body.task_id}
+      s3_delete_status: ${deleteS3Result.response.body.status}
+      message: "Agency deleted from database and S3 deletion task started"
+
+returnSuccess:
+  return: ${response}
+  next: end

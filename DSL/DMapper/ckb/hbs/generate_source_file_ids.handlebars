@@ -1,0 +1,9 @@
+[
+    {{#each files}}
+    {
+        "id": "{{getUuid @root}}",
+        "content_type": "{{this.contentType}}",
+        "name": "{{this.name}}"
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+]

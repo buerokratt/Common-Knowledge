@@ -1,0 +1,49 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Get a signed download URL for a file"
+  method: get
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    query:
+      - field: path
+        type: string
+        description: "File path in blob storage"
+
+extractRequestData:
+  assign:
+    file_path: "${incoming.params.path}"
+
+validatePath:
+  switch:
+    - condition: ${file_path == null || file_path == ''}
+      next: returnError
+  next: requestDownloadUrl
+
+returnError:
+  return: "Path parameter is required"
+  status: 400
+  next: end
+
+requestDownloadUrl:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      paths: ${[file_path]}
+  result: downloadResponse
+
+prepareResponse:
+  assign:
+    response:
+      downloadUrl: "${downloadResponse.response.body.download_urls?.[0]?.download_url}"
+      expiresAt: "${downloadResponse.response.body.download_urls?.[0]?.expires_at}"
+
+returnResponse:
+  return: ${response}
+  next: end

@@ -1,0 +1,31 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Stop a source by base ID"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: baseId
+        type: string
+        description: "Base ID of the source to stop"
+
+extractRequestData:
+  assign:
+    base_id: "${incoming.body.baseId}"
+
+setStoppingFlag:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_set_stopping_flag"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

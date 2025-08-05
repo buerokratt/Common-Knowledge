@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "s3_path": "{{agencyId}}/",
+      "s3_zip_path": "{{zipPath}}",
+      "excluded_folders": [
+        {{#each excludedFiles}}
+        "{{sourceBaseId}}/{{baseId}}/"{{#unless @last}},{{/unless}}
+        {{/each}}
+      ]
+    }
+  ]
+}

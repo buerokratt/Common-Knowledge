@@ -1,0 +1,50 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Decription placeholder for 'TARA'"
+  method: post
+  accepts: json
+  returns: json
+  namespace: service
+  allowlist:
+    headers:
+      - field: cookie
+        type: string
+        description: "Cookie field"
+
+check_for_body:
+  switch:
+    - condition: ${incoming.headers == null || incoming.headers.cookie == null}
+      next: missing_cookie
+  next: get_cookie_info
+
+get_cookie_info:
+  call: http.post
+  args:
+    url: "[#CKB_TIM]/jwt/custom-jwt-userinfo"
+    contentType: plaintext
+    headers:
+      cookie: ${incoming.headers.cookie}
+    plaintext: "customJwtCookie"
+  result: res
+  next: check_cookie_info_response
+
+check_cookie_info_response:
+  switch:
+    - condition: ${200 <= res.response.statusCodeValue && res.response.statusCodeValue < 300}
+      next: return_auth_result
+  next: return_bad_request
+
+return_auth_result:
+  return: ${res.response.body}
+  next: end
+
+return_bad_request:
+  status: 400
+  return: false
+  next: end
+
+missing_cookie:
+  status: 401
+  return: "no authentication cookie"
+  next: end

@@ -1,0 +1,57 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new source for an agency"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: agencyBaseId
+        type: string
+        description: "Base ID of the agency"
+      - field: url
+        type: string
+        description: "URL to scrape"
+      - field: subsector
+        type: string
+        description: "Subsector of the source"
+      - field: type
+        type: string
+        description: "Type of the source"
+
+extractRequestData:
+  assign:
+    agency_base_id: "${incoming.body.agencyBaseId}"
+    url: "${incoming.body.url}"
+    subsector: "${incoming.body.subsector}"
+    type: "${incoming.body.type}"
+
+createSource:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/create_source"
+    headers:
+      type: json
+    body:
+      agency_base_id: ${agency_base_id}
+      url: ${url}
+      subsector: ${subsector}
+      type: ${type}
+  result: res
+
+
+triggerPipeline:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-sitemap-collect"
+  requestType: templates
+  body:
+    agency_id: ${agency_base_id}
+    source_id: ${res.response.body[0].baseId}
+    url: ${url}
+  result: triggerResult
+
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

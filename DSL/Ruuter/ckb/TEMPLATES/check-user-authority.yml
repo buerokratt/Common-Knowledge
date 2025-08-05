@@ -1,0 +1,31 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Decription placeholder for 'CHECK-USER-AUTHORITY'"
+  method: post
+  accepts: json
+  returns: json
+  namespace: service
+
+get_tara_info:
+  template: "[#CKB_PROJECT_LAYER]/tara"
+  requestType: templates
+  headers:
+    cookie: ${incoming.headers.cookie}
+  result: tara_res
+
+check_user_authority:
+  switch:
+    - condition: ${tara_res?.authorities.includes("ROLE_ADMINISTRATOR")}
+      next: return_authorized
+    - condition: ${tara_res?.authorities.includes("ROLE_SERVICE_MANAGER")}
+      next: return_authorized
+  next: return_unauthorized
+
+return_unauthorized:
+  return: "unauthorized"
+  status: 401
+  next: end
+
+return_authorized:
+  return: ${tara_res}
