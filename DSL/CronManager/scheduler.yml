@@ -1,0 +1,17 @@
+trigger_scheduler:
+  trigger: "0 */5 * * * ?"
+  type: http
+  method: GET
+  url: http://ruuter-internal:8089/ckb/pipeline/scheduler-check-for-unscheduled-records
+
+trigger_pipeline_for_scheduled_entities:
+  trigger: "0 */5 * * * ?"
+  type: http
+  method: GET
+  url: http://ruuter-internal:8089/ckb/pipeline/trigger-pipeline-for-sceduled-sources
+
+trigger_zipping:
+  trigger: "0 0 */1 * * ?"
+  type: http
+  method: GET
+  url: http://ruuter-internal:8089/ckb/pipeline/zip

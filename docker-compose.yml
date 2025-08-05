@@ -163,22 +163,6 @@ services:
       - 9010:9010
     networks:
       - bykstack
-  tim:
-    container_name: tim
-    image: tim
-    depends_on:
-      - tim-postgresql
-    environment:
-      - SECURITY_ALLOWLIST_JWT=ruuter-private,ruuter-public,data-mapper,resql,tim,tim-postgresql,chat-widget,authentication-layer,127.0.0.1,::1
-      - JWT_INTEGRATION_SIGNATURE_KEY_STORE_PASSWORD=defaultpassword
-    ports:
-      - 8085:8085
-    networks:
-      - bykstack
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    cpus: "0.5"
-    mem_limit: "512M"
 
   opensearch-node:
     image: opensearchproject/opensearch:2.11.1
@@ -224,19 +208,22 @@ services:
       - ./search-data:/app/data
     restart: unless-stopped
 
-  cleaning-server:
-    container_name: cleaning-server
-    build:
-      context: ./cleaning
-    ports:
-      - 8123:8123
-    volumes:
-      - ./scrapped-data:/scrapped-data
-      - ./cleaning:/app
+  tim:
+    container_name: tim
+    image: tim
+    depends_on:
+      - tim-postgresql
     environment:
-      - RUUTER_INTERNAL=http://ruuter-internal:8089
+      - SECURITY_ALLOWLIST_JWT=ruuter,ruuter-internal,data-mapper,resql,tim,tim-postgresql,chat-widget,authentication-layer,127.0.0.1,::1
+      - JWT_INTEGRATION_SIGNATURE_KEY_STORE_PASSWORD=defaultpassword
+    ports:
+      - 8085:8085
     networks:
       - bykstack
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    cpus: "0.5"
+    mem_limit: "512M"
 
   tim-postgresql:
     container_name: tim-postgresql
@@ -287,6 +274,20 @@ services:
     networks:
       - bykstack
 
+  cleaning-server:
+    container_name: cleaning-server
+    build:
+      context: ./cleaning
+    ports:
+      - 8123:8123
+    volumes:
+      - ./scrapped-data:/scrapped-data
+      - ./cleaning:/app
+    environment:
+      - RUUTER_INTERNAL=http://ruuter-internal:8089
+    networks:
+      - bykstack
+
   rabbit-scrapper:
     image: rabbitmq:4-management
     container_name: rabbit-scrapper
@@ -299,6 +300,19 @@ services:
       - "15672:15672"
     networks:
       - bykstack
+
+  scheduler:
+    container_name: scheduler
+    build:
+      context: ./scheduler
+    ports:
+      - "8124:8124"
+    networks:
+      - bykstack
+
+volumes:
+  opensearch-data:
+
 networks:
   bykstack:
     name: bykstack
