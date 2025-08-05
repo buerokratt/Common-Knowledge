@@ -13,6 +13,42 @@ services:
     networks:
       - bykstack
 
+  file-processing-api:
+    container_name: file-processing-api
+    build:
+      context: ./file-processing
+      dockerfile: Dockerfile
+    ports:
+      - 8888:8888
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME}
+      - SOURCE_PATH=/app/data
+      - S3_PRESIGNED_URL_EXPIRATION=${S3_PRESIGNED_URL_EXPIRATION:-3600}
+      - S3_UPLOAD_URL_EXPIRATION=${S3_UPLOAD_URL_EXPIRATION:-3600}
+      - AUTO_CLEANUP_COMPLETED_TASKS=${AUTO_CLEANUP_COMPLETED_TASKS:-true}
+      - COMPLETED_TASK_CLEANUP_DELAY_MINUTES=${COMPLETED_TASK_CLEANUP_DELAY_MINUTES:-5}
+      - PERIODIC_CLEANUP_INTERVAL_MINUTES=${PERIODIC_CLEANUP_INTERVAL_MINUTES:-60}
+      - MAX_TASK_AGE_HOURS=${MAX_TASK_AGE_HOURS:-24}
+    volumes:
+      - ./scrapped-data:/scrapped-data
+      - ./search-data:/app/data:rw
+      - ./file-processing/logs:/app/logs:rw
+      - ./file-processing/app:/app/app:rw
+    networks:
+      - bykstack
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8888/docs"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    cpus: "0.5"
+    mem_limit: "512M"
+
   resql-users:
     container_name: resql-users
     image: resql

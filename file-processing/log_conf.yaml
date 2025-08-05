@@ -1,0 +1,3 @@
+version: 1
+disable_existing_loggers: False
+# this is needed to set format programmatially
