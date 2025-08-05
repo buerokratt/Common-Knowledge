@@ -224,6 +224,20 @@ services:
       - ./search-data:/app/data
     restart: unless-stopped
 
+  cleaning-server:
+    container_name: cleaning-server
+    build:
+      context: ./cleaning
+    ports:
+      - 8123:8123
+    volumes:
+      - ./scrapped-data:/scrapped-data
+      - ./cleaning:/app
+    environment:
+      - RUUTER_INTERNAL=http://ruuter-internal:8089
+    networks:
+      - bykstack
+
   tim-postgresql:
     container_name: tim-postgresql
     image: postgres:14.1
