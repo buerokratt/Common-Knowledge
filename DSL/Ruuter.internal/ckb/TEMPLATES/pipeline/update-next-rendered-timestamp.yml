@@ -1,0 +1,26 @@
+extractRequestData:
+  assign:
+    base_id: ${incoming.body.base_id}
+    cron_expression: ${incoming.body.cron_expression}
+
+
+scheduleEntities:
+  call: http.post
+  args:
+    url: "[#CKB_SCHEDULER_SERVICE]/render_next_run"
+    body:
+      cron_expression: ${cron_expression}
+  result: renderedTimestamp
+
+
+updateSchedulerEntities:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_next_run_timestamp"
+    body:
+      next_scrapping_at: ${renderedTimestamp.response.body.timestamp}
+      base_id: ${base_id}
+  result: some
+
+returnResult:
+  return: "OK"

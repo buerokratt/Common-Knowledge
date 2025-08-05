@@ -1,0 +1,62 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "run zipper for dirty agencies"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body: []
+
+# it works like this:
+#
+# while True:
+#     agency = get_one_dirty_agency()
+#     if agency == 'false':
+#         break
+#     update_agency_zipping(agency, true)
+#     triggerAgencyZip(agency)
+#
+# return "OK"
+
+getDirtyAgency:
+  maxRecursions: 999
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/get_dirty_agency"
+    contentType: json
+  result: dirtyAgency
+  next: checkIfAgencyFound
+
+checkIfAgencyFound:
+  maxRecursions: 999
+  switch:
+    - condition: ${dirtyAgency.response.body[0].baseId != ''}
+      next: setAgencyZipping
+  next: returnSuccess
+
+setAgencyZipping:
+  maxRecursions: 999
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/update_agency_zipping"
+    contentType: json
+    body:
+      base_id: ${dirtyAgency.response.body[0].baseId}
+      zipping: true
+  result: zippingUpdate
+  next: triggerAgencyZip
+
+triggerAgencyZip:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/agency/zip"
+  requestType: templates
+  body:
+    agencyId: ${dirtyAgency.response.body[0].baseId}
+  result: res
+  next: getDirtyAgency
+
+returnSuccess:
+  return: "OK"
+  next: end

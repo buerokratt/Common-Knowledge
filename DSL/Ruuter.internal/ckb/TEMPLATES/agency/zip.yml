@@ -1,0 +1,53 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Zip and upload agency folders excluding specified files"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: agencyId
+        type: string
+        description: "Agency base ID to process"
+      - field: zipPath
+        type: string
+        description: "S3 path where the zip file should be uploaded"
+
+extractRequestData:
+  assign:
+    agency_base_id: "${incoming.body.agencyId}"
+    zip_path: "${incoming.body.zipPath ?? 'zipped/' + incoming.body.agencyId + '.zip'}"
+
+validateInput:
+  switch:
+    - condition: ${agency_base_id === null || agency_base_id === ""}
+      next: returnError
+
+zipAndUploadFolders:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/zip-and-upload-folders-async"
+    headers:
+      type: json
+    body:
+      folders:
+        - s3_path: "uploads/scrapped-data/${agency_base_id}/"
+          s3_zip_path: ${zip_path}
+      callback:
+        url: "[#CKB_RUUTER_INTERNAL]/agency/update-data-hash"
+        method: POST
+        body:
+          agency_id: ${agency_base_id}
+          zip_path: ${zip_path}
+  result: zipResult
+
+returnSuccess:
+  return: ${zipResult.response.body}
+  next: end
+
+returnError:
+  return: "Missing required parameter: agencyId"
+  status: 400
+  next: end

@@ -1,0 +1,46 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Zip and upload agency folders excluding specified files"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: agency_id
+        type: string
+        description: "Agency base ID to process"
+      - field: results
+        type: array
+        items:
+          type: object
+          properties:
+            data_hash:
+              type: string
+        description: "result of zip and upload"
+      - field: zip_path
+        type: string
+        description: "ZIP path"
+
+updateAgencyDataHash:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/update_agency_zip_and_data_hash"
+    headers:
+      type: json
+    body:
+      zip_data_url: ${incoming.body.zip_path}
+      base_id: ${incoming.body.agency_id}
+      data_hash: ${incoming.body.results[0].data_hash}
+  result: res
+
+scheduleSource:
+  call: http.get
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/pipeline/scheduler-check-for-unscheduled-records"
+  result: res
+
+returnSuccess:
+  return: "OK"
+  next: end

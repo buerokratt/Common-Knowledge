@@ -1,0 +1,53 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Add uploaded files to source_file table"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: agency_id
+        type: string
+        description: "ID of the the agency"
+      - field: source_id
+        type: string
+        description: "Source ID to associate files with"
+      - field: url
+        type: string
+        description: "scrapped url"
+      - field: page_title
+        type: string
+        description: "Title of the scraped page"
+      - field: original_data_hash
+        type: string
+        description: "hash of scrapped data"
+      - field: scraped_at
+        type: string
+        description: "When the source was scraped"
+      - field: type
+        type: string
+        description: "Type of source file (API or Scraped)"
+      - field: external_id
+        type: string
+        description: "Optional external id"
+
+addScrappedFile:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/create_scraped_source_file"
+    body:
+      source_base_id: ${incoming.body.source_id}
+      agency_base_id: ${incoming.body.agency_id}
+      url: ${incoming.body.url}
+      page_title: ${incoming.body.page_title}
+      original_data_hash: ${incoming.body.original_data_hash}
+      scraped_at: ${incoming.body.scraped_at}
+      external_id: ${incoming.body.external_id}
+      type: ${incoming.body.type}
+  result: res
+
+returnResult:
+  return: ${res.response.body[0].baseId}
+  next: end

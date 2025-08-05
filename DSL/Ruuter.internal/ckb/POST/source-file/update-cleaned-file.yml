@@ -1,0 +1,89 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "update cleaned file table"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source file ID"
+      - field: cleaned_data_url
+        type: string
+        description: "cleaned data url"
+      - field: cleaned_metadata_url
+        type: string
+        description: "cleaned data's metadata url"
+
+
+assignParams:
+  assign:
+    cleaned_data_url: ${incoming.body.cleaned_data_url}
+    base_id: ${incoming.body.base_id}
+    cleaned_metadata_url: ${incoming.body.cleaned_metadata_url}
+
+updateScrappedFile:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_file_cleaned"
+    body:
+      base_id: ${base_id}
+      cleaned_data_url: ${cleaned_data_url}
+      cleaned_metadata_url: ${cleaned_metadata_url}
+  result: sourceFile
+
+assignDownloadData:
+  assign:
+    data:
+      { "s3_path": "${cleaned_data_url}", "local_path": "${cleaned_data_url}" }
+    file: ${sourceFile.response.body[0]}
+
+downloadFilesToVolume:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-files-to-volume"
+    headers:
+      type: json
+    body:
+      files: ${[data]}
+  result: downloadResult
+
+prepareSearchDocument:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/prepare_document"
+    headers:
+      type: json
+    body:
+      base_id: ${base_id}
+      document_type: "cleaned_file"
+      content_path: ${cleaned_data_url}
+      updated_file: ${file}
+  result: searchDocResult
+
+updateSearchIndex:
+  call: http.post
+  args:
+    url: "[#CKB_SEARCH]/index/${file.sourceBaseId}/bulk"
+    headers:
+      type: json
+    body:
+      documents: ${searchDocResult.response.body}
+  result: searchResult
+
+assignDeleteData:
+  assign:
+    delete_data: { "local_path": "${cleaned_data_url}" }
+
+deleteFileFromVolume:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/delete-files-from-volume"
+    headers:
+      type: json
+    body:
+      files: ${[delete_data]}
+  result: deleteResult

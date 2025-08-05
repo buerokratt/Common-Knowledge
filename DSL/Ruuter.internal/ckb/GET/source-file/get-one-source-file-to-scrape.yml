@@ -1,0 +1,29 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "get and update one source-file of source to be scrapped if exists"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    params:
+      - field: source_id
+        type: string
+        description: "source base id"
+      - field: reference_time
+        type: string
+        description: "fetch source which were scrapped before"
+
+getSourceFilesForSource:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_file_to_scraping_by_source_base_id"
+    body:
+      source_base_id: ${incoming.params.source_id}
+      reference_time: ${incoming.params.reference_time}
+  result: sourceFiles
+
+returnResult:
+  return: ${sourceFiles.response.body}
+  next: end

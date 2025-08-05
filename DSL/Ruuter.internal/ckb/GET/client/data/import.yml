@@ -1,0 +1,61 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Return signed urls for clients"
+  method: get
+  accepts: json
+  returns: json
+  namespace: client
+  allowlist:
+    params:
+      - field: clientIds
+        type: string
+        description: "Base IDs of the clients"
+
+extractRequestData:
+  assign:
+    clientIds: "${incoming.params.clientIds}"
+
+getAgenciesData:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/list_agency_data_hash_and_url"
+    query:
+      agencyIds: ${clientIds}
+  result: agencyRes
+
+mapPaths:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/map_paths"
+    headers:
+      type: json
+    body:
+      agencies: ${agencyRes.response.body}
+  result: pathsResult
+
+requestDownloadUrls:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-urls"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      paths: ${pathsResult.response.body}
+  result: downloadResponse
+
+enrich_result_with_signed_urls:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/enrich_signed_urls"
+    headers:
+      type: json
+    body:
+      agencies: ${agencyRes.response.body}
+      downloadUrls: ${downloadResponse.response.body.download_urls}
+  result: result
+
+returnSuccess:
+  return: ${result.response.body}
+  next: end

@@ -1,0 +1,29 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "update scrapped file table"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source file ID"
+      - field: status
+        type: string
+        description: "status of source file"
+
+updateScrappedFile:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_file_scraped_stop"
+    body:
+      base_id: ${incoming.body.base_id}
+      status: ${incoming.body.status}
+  result: res
+
+returnResult:
+  return: "OK"
+  next: end

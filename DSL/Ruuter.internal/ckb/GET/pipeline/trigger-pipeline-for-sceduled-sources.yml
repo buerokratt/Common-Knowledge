@@ -1,0 +1,75 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "run trigger scrapper for scheduled sources"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body: []
+
+# it works like  this:
+#
+# entities_to_run_exists = get_entities_to_run_exists()
+# while entities_to_run_exists:
+#     entity = get_one_entity_to_run()
+#     trigger_pipeline(entity)
+#     entities_to_run_exists = get_entities_to_run_exists()
+#
+# return "OK"
+
+checkSourceToRunExists:
+  maxRecursions: 999
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source/get_source_to_run_exists"
+    contentType: json
+  result: exists
+  next: checkIfExists
+
+checkIfExists:
+  maxRecursions: 999
+  switch:
+    - condition: ${exists.response.body[0].exists}
+      next: getOneSourceToRun
+  next: returnSuccess
+
+getOneSourceToRun:
+  maxRecursions: 999
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_is_running"
+    contentType: json
+  result: sourceToRun
+
+assignPipelineTemplate:
+  maxRecursions: 999
+  switch:
+    - condition: ${sourceToRun.response.body[0].type == "api"}
+      next: triggerApiPipelineForSource
+  next: triggerScrapperPipelineForSource
+
+triggerApiPipelineForSource:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-eesti-api-source"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+  result: res
+  next: checkSourceToRunExists
+
+triggerScrapperPipelineForSource:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-entire-source"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+  result: res
+  next: checkSourceToRunExists
+
+returnSuccess:
+  return: "OK"
+  next: end

@@ -1,0 +1,67 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new source run report"
+  method: post
+  accepts: json
+  returns: json
+  namespace: reports
+  allowlist:
+    body:
+      - field: agencyBaseId
+        type: string
+        description: "Base ID of the agency (UUID)"
+      - field: sourceBaseId
+        type: string
+        description: "Base ID of the source (UUID)"
+      - field: agencyName
+        type: string
+        description: "Name of the agency"
+      - field: url
+        type: string
+        description: "URL that was scraped"
+      - field: scrapingStartedAt
+        type: string
+        description: "Timestamp when scraping started"
+      - field: scrapingFinishedAt
+        type: string
+        description: "Timestamp when scraping finished"
+      - field: errors
+        type: number
+        description: "Number of errors encountered"
+      - field: scrapingLogUrl
+        type: string
+        description: "URL to the scraping log file"
+      - field: cleaningLogUrl
+        type: string
+        description: "URL to the cleaning log file"
+
+extractRequestData:
+  assign:
+    agency_base_id: "${incoming.body.agencyBaseId}"
+    source_base_id: "${incoming.body.sourceBaseId}"
+    agency_name: "${incoming.body.agencyName}"
+    url: "${incoming.body.url}"
+    scraping_started_at: "${incoming.body.scrapingStartedAt}"
+    scraping_finished_at: "${incoming.body.scrapingFinishedAt}"
+    errors: "${incoming.body.errors}"
+    scraping_log_url: "${incoming.body.scrapingLogUrl}"
+    cleaning_log_url: "${incoming.body.cleaningLogUrl}"
+
+createSourceRunReport:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/reports/create_source_run_report"
+    headers:
+      type: json
+    body:
+      agency_base_id: ${agency_base_id}
+      source_base_id: ${source_base_id}
+      agency_name: ${agency_name}
+      url: ${url}
+      scraping_started_at: ${scraping_started_at}
+  result: res
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

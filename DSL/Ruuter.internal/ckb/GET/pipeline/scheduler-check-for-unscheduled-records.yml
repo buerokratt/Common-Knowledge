@@ -1,0 +1,63 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "run scheduler check"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body: []
+
+
+# it works like  this:
+#
+# not_scheduled_exists = get_not_scheduled_exists()
+# while not_scheduled_exists:
+#     entity = get_one_not_scheduled_entity()
+#     timestamp = schedule_entity(entity)
+#     update_not_scheduled_entity(entity, timestamp)
+#     not_scheduled_exists = get_not_scheduled_exists()
+#
+# return "OK"
+
+checkNotScheduledEntitiesExists:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source/get_source_not_scheduled_exists"
+  result: notScheduledExists
+  next: checkIfExists
+  maxRecursions: 999
+
+
+checkIfExists:
+  maxRecursions: 999
+  switch:
+    - condition: ${notScheduledExists.response.body[0].exists}
+      next: getNotScheduledEntities
+  next: returnSuccess
+
+
+getNotScheduledEntities:
+  maxRecursions: 999
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source/get_source_not_scheduled"
+  result: notScheduledRes
+  next: updateNextRenderedRun
+
+
+updateNextRenderedRun:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/pipeline/update-next-rendered-timestamp"
+  requestType: templates
+  body:
+    base_id: ${notScheduledRes.response.body[0].baseId}
+    cron_expression: ${notScheduledRes.response.body[0].cronSchedule}
+  result: some
+  next: checkNotScheduledEntitiesExists
+
+
+returnSuccess:
+  return: "OK"
+  next: end

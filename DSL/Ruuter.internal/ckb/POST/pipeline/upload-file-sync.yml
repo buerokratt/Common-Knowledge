@@ -1,0 +1,26 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Add uploaded files to source_file table"
+  method: post
+  accepts: json
+  returns: json
+  namespace: pipeline
+  allowlist:
+    body:
+      - field: source_file_path
+        type: string
+        description: "upload file to S3"
+
+
+uploadFile:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/upload-sync"
+    body:
+      source_file_path: ${incoming.body.source_file_path}
+  result: res
+
+returnResult:
+  return: ${res.response.body.source_file_path}
+

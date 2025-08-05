@@ -1,0 +1,89 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Generate file metadata and upload to file service"
+  method: post
+  accepts: json
+  returns: json
+  namespace: metadata
+  allowlist:
+    body:
+      - field: file_type
+        type: string
+        description: "File extension (e.g., .html, .pdf)"
+      - field: source_url
+        type: string
+        description: "URL of the source file"
+      - field: file_path
+        type: string
+        description: "Path where metadata file should be stored"
+      - field: type
+        type: string
+        description: "Processing type: cleaned, edited, or raw"
+        optional: true
+      - field: version
+        type: string
+        description: "Version number"
+        optional: true
+      - field: created_at
+        type: string
+        description: "Creation timestamp"
+        optional: true
+      - field: content_type
+        type: string
+        description: "Content type for the uploaded file"
+        optional: true
+
+extractRequestData:
+  assign:
+    file_type: "${incoming.body.file_type}"
+    source_url: "${incoming.body.source_url}"
+    file_path: "${incoming.body.file_path}"
+    type: "${incoming.body.type || 'raw'}"
+    version: "${incoming.body.version || '1.0'}"
+    created_at: "${incoming.body.created_at || new Date().toISOString().replace('T', ' ').replace('Z', '')}"
+    content_type: "${incoming.body.content_type || 'application/json'}"
+
+generateMetadata:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/generate_source_file_metadata"
+    body:
+      file_type: ${file_type}
+      source_url: ${source_url}
+      type: ${type}
+      version: ${version}
+      created_at: ${created_at}
+  result: metadataResult
+
+base64EncodeMetadata:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER]/encryption/base64"
+    body:
+      content: ${metadataResult.response.body}
+  result: encodedMetadata
+
+uploadMetadataToFileService:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/upload-file-content"
+    headers:
+      Content-Type: application/json
+      accept: application/json
+    body:
+      file_content: ${encodedMetadata.response.body.cipher}
+      file_path: ${file_path}
+      content_type: ${content_type}
+  result: uploadResult
+
+prepareResponse:
+  assign:
+    response:
+      success: true
+      file_path: ${file_path}
+      upload_result: ${uploadResult.response.body}
+
+returnResponse:
+  return: ${response}
+  next: end
