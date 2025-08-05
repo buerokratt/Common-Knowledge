@@ -7,3 +7,12 @@ node_modules
 **/package-lock.json
 .vscode
 exported-data
+.env
+/search-data
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+__pycache__
+.DS_Store
+scrapped-data

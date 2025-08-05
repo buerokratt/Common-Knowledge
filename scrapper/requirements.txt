@@ -1,0 +1,8 @@
+scrapy==2.13.2
+fastapi==0.115.12
+uvicorn==0.34.2
+celery==5.5.3
+pydantic-settings==2.10.1
+scrapy-playwright==0.0.43
+fake-useragent==2.2.0
+beautifulsoup4==4.13.4
