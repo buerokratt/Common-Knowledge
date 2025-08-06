@@ -21,14 +21,14 @@ declaration:
 
 */
 SELECT
-    base_id AS client_id,
+    external_id AS client_id,
     CASE 
         WHEN zipped_data_url IS NOT NULL AND zipped_data_url != '' 
         THEN TRUE 
         ELSE FALSE 
     END AS is_data_available
 FROM agency a1
-WHERE base_id = ANY(STRING_TO_ARRAY(:agencyIds, ',')::UUID[])
+WHERE external_id = ANY(STRING_TO_ARRAY(:agencyIds, ','))
   AND updated_at = (
       SELECT MAX(updated_at) 
       FROM agency a2
