@@ -1,3 +1,28 @@
+/*
+declaration:
+  version: 0.1
+  description: "Update data_hash, zipped_data_url and zipping status of the latest agency record by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Agency base ID"
+      - field: data_hash
+        type: string
+        description: "Data hash value"
+      - field: zip_data_url
+        type: string
+        description: "URL of zipped data"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+*/
 SELECT copy_row_with_modifications(
     'agency',
     'id', '::UUID', id::VARCHAR,

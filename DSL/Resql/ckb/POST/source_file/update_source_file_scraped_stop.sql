@@ -1,3 +1,25 @@
+/*
+declaration:
+  version: 0.1
+  description: "Update status and last_scraped_at timestamp of source_file by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source file base ID"
+      - field: status
+        type: string
+        description: "Status to set"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+*/
 SELECT copy_row_with_modifications(
     'source_file',
     'id', '::UUID', id::VARCHAR,

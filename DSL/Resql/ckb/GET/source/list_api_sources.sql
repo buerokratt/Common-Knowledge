@@ -1,3 +1,56 @@
+/*
+declaration:
+  version: 0.1
+  description: "List latest API sources with pagination and sorting"
+  method: get
+  namespace: source
+  returns: json
+  allowlist:
+    query:
+      - field: page
+        type: integer
+        description: "Current page number"
+      - field: page_size
+        type: integer
+        description: "Number of results per page"
+      - field: sorting
+        type: string
+        enum: [
+          'url asc', 'url desc',
+          'last_scraped_at asc', 'last_scraped_at desc',
+          'status asc', 'status desc'
+        ]
+        description: "Sorting method for the result set"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Primary key of the source entry"
+      - field: base_id
+        type: string
+        description: "Base identifier for the source"
+      - field: agency_base_id
+        type: string
+        description: "Base ID of the associated agency"
+      - field: url
+        type: string
+        description: "URL of the source"
+      - field: status
+        type: string
+        description: "Status of the source"
+      - field: last_scraped_at
+        type: timestamp
+        description: "Timestamp of the last scraping operation"
+      - field: page
+        type: integer
+        description: "Current page number"
+      - field: total_pages
+        type: integer
+        description: "Total number of pages"
+      - field: total
+        type: integer
+        description: "Total number of matching records"
+*/
 WITH latest_sources AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, agency_base_id, url, status, last_scraped_at, type, is_deleted

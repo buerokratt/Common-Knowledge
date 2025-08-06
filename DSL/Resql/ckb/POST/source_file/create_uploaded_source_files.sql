@@ -1,3 +1,40 @@
+/*
+declaration:
+  version: 0.1
+  description: "Insert multiple source_file records from JSON array of files"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: source_id
+        type: string
+        description: "Source base ID"
+      - field: agency_id
+        type: string
+        description: "Agency base ID"
+      - field: files
+        type: array
+        description: "Array of file objects with base_id, file_name, subsector, original_data_url"
+  response:
+    fields:
+      - field: url
+        type: string
+        description: "URL (null)"
+      - field: id
+        type: string
+        description: "Base ID of inserted file"
+      - field: hash
+        type: string
+        description: "Empty hash"
+      - field: original_data_url
+        type: string
+        description: "Original data URL"
+      - field: path
+        type: string
+        description: "Path (same as original_data_url)"
+*/
 INSERT INTO source_file (
     source_base_id, agency_base_id, base_id, file_name, subsector, original_data_url, type
 )

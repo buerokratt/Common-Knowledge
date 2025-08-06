@@ -1,3 +1,25 @@
+/*
+declaration:
+  version: 0.1
+  description: "Update cleaned_data_url and mark source_file as finished by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source file base ID"
+      - field: cleaned_data_url
+        type: string
+        description: "URL of cleaned data"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+*/
 SELECT copy_row_with_modifications(
     'source_file',
     'id', '::UUID', id::VARCHAR,

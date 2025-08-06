@@ -1,3 +1,51 @@
+/*
+declaration:
+  version: 0.1
+  description: "Get the latest source by agency_base_id, url, subsector, and type"
+  method: get
+  namespace: source
+  returns: json
+  allowlist:
+    query:
+      - field: agency_base_id
+        type: string
+        description: "Base ID of the associated agency"
+      - field: url
+        type: string
+        description: "URL of the source"
+      - field: subsector
+        type: string
+        description: "Subsector classification"
+      - field: type
+        type: string
+        enum: ['url_to_scrape', 'file', 'api']
+        description: "Type of the source"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Primary key of the source entry"
+      - field: base_id
+        type: string
+        description: "Base identifier for the source"
+      - field: agency_base_id
+        type: string
+        description: "Base ID of the associated agency"
+      - field: url
+        type: string
+        description: "URL of the source"
+      - field: subsector
+        type: string
+        description: "Subsector classification"
+      - field: type
+        type: string
+        enum: ['url_to_scrape', 'file', 'api']
+        description: "Type of the source"
+      - field: status
+        type: string
+        enum: ['new', 'running', 'finished', 'failed']
+        description: "Status of the source"
+*/
 SELECT id, base_id, agency_base_id, url, subsector, type, status
 FROM source
 WHERE (base_id, updated_at) IN (

@@ -1,3 +1,47 @@
+ChatGPT said:
+sql
+Copy
+Edit
+/*
+declaration:
+  version: 0.1
+  description: "Update source_file fields and set status to 'cleaning' by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source file base ID"
+      - field: url
+        type: string
+        description: "URL"
+      - field: page_title
+        type: string
+        description: "Page title"
+      - field: original_data_url
+        type: string
+        description: "Original data URL"
+      - field: original_metadata_url
+        type: string
+        description: "Original metadata URL"
+      - field: original_data_hash
+        type: string
+        description: "Original data hash"
+      - field: scraped_at
+        type: string
+        description: "Last scraped timestamp"
+      - field: external_id
+        type: string
+        description: "External identifier"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+*/
 SELECT copy_row_with_modifications(
     'source_file',
     'id', '::UUID', id::VARCHAR,

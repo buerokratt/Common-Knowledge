@@ -1,3 +1,46 @@
+/*
+declaration:
+  version: 0.1
+  description: "Update cleaned URLs and mark source_file as finished by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source file base ID"
+      - field: cleaned_data_url
+        type: string
+        description: "URL of cleaned data"
+      - field: cleaned_metadata_url
+        type: string
+        description: "URL of cleaned metadata"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+      - field: page_title
+        type: string
+        description: "Page title"
+      - field: file_name
+        type: string
+        description: "File name"
+      - field: url
+        type: string
+        description: "Original URL"
+      - field: subsector
+        type: string
+        description: "Subsector"
+      - field: source_base_id
+        type: string
+        description: "Source base ID"
+      - field: base_id
+        type: string
+        description: "Base ID"
+*/
 SELECT copy_row_with_modifications(
     'source_file',
     'id', '::UUID', id::VARCHAR,
