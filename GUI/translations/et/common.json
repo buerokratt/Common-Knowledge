@@ -58,7 +58,8 @@
     "selectOption": "- Valige valik -",
     "stop": "Peatus",
     "uploaded": "Üles laaditud",
-    "adding": "Lisamine"
+    "adding": "Lisamine",
+    "retry": "Proovi uuesti"
   },
   "sorting": {
     "desc": "kahanevalt",
@@ -578,7 +579,9 @@
     "scrapeSettings": "Kraapimise ajakava",
     "downloadError": "Faili allalaadimine ebaõnnestus",
     "contentLoadError": "Sisu laadimine ebaõnnestus",
-    "contentSaved": "Fail salvestati edukalt"
+    "contentSaved": "Fail salvestati edukalt",
+    "centopsLoadError": "Centopsi valikute laadimine ebaõnnestus",
+    "loadingCentopsOptions": "Centopsi valikute laadimine..."
   },
   "urlWizard": {
     "title": "Uus URL",

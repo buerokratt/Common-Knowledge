@@ -58,7 +58,8 @@
     "selectOption": "-  Select option -",
     "stop": "Stop",
     "uploaded": "Uploaded",
-    "adding": "Adding"
+    "adding": "Adding",
+    "retry": "Retry"
   },
   "sorting": {
     "desc": "descending",
@@ -579,7 +580,9 @@
     "scrapeSettings": "Scraping schedule",
     "downloadError": "Failed to download file",
     "contentLoadError": "Failed to load content",
-    "contentSaved": "File saved successfully"
+    "contentSaved": "File saved successfully",
+    "centopsLoadError": "Failed to load Centops options",
+    "loadingCentopsOptions": "Loading Centops options..."
   },
  "fileUpload": {
     "title": "Upload file",

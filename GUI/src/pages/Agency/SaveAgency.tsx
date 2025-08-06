@@ -12,6 +12,7 @@ import {
   UpdateAgencyRequest,
   Agency,
 } from 'services/agencies';
+import { getCentopsOptions, CentopsOption } from 'services/centops';
 import './SaveAgency.scss';
 
 interface AgencyFormData {
@@ -19,13 +20,6 @@ interface AgencyFormData {
   sector: string;
   externalId: string;
 }
-
-// You'll need to replace this with actual API call to get centops options
-const centopsOptions = [
-  { label: 'Abc', value: 'abc' },
-  { label: 'Pvc', value: 'pvc' },
-  { label: 'Xyz', value: 'xyz' },
-];
 
 const SaveAgency: FC = () => {
   const { t } = useTranslation();
@@ -44,6 +38,26 @@ const SaveAgency: FC = () => {
   });
 
   const [formErrors, setFormErrors] = useState<Partial<AgencyFormData>>({});
+
+  // Fetch Centops options
+  const {
+    data: centopsOptions = [],
+    isLoading: isLoadingCentops,
+    error: centopsError,
+  } = useQuery({
+    queryKey: ['centops-options'],
+    queryFn: getCentopsOptions,
+    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
+    retry: 3,
+    onError: (error: any) => {
+      console.error('Failed to load Centops options:', error);
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.centopsLoadError'),
+      });
+    },
+  });
 
   // Fetch existing agency data if in edit mode
   const {
@@ -282,7 +296,13 @@ const SaveAgency: FC = () => {
               label={t('knowledgeBase.centops')}
               name="externalId"
               hideLabel
-              placeholder={t('global.selectOption')}
+              placeholder={
+                isLoadingCentops
+                  ? t('global.loading')
+                  : centopsError
+                  ? t('knowledgeBase.centopsLoadError')
+                  : t('global.selectOption')
+              }
               style={{ maxWidth: 808 }}
               options={centopsOptions}
               value={formData.externalId}
@@ -292,8 +312,33 @@ const SaveAgency: FC = () => {
               }
               error={formErrors.externalId}
               required
+              disabled={isLoadingCentops || !!centopsError}
             />
           </Track>
+
+          {/* Show loading indicator for Centops data */}
+          {isLoadingCentops && (
+            <div style={{ textAlign: 'center', color: '#666' }}>
+              {t('knowledgeBase.loadingCentopsOptions')}
+            </div>
+          )}
+
+          {/* Show error state for Centops data */}
+          {centopsError && (
+            <div style={{ textAlign: 'center', color: '#d32f2f' }}>
+              {t('knowledgeBase.centopsLoadError')}
+              <Button
+                appearance="text"
+                size="s"
+                onClick={() =>
+                  queryClient.invalidateQueries(['centops-options'])
+                }
+                style={{ marginLeft: 8 }}
+              >
+                {t('global.retry')}
+              </Button>
+            </div>
+          )}
         </Track>
       </Card>
     </div>
