@@ -1,0 +1,2 @@
+id,base_id,agency_base_id,source_base_id,source_run_report_base_id,url,created_at,updated_at,scraped_at,error_type,error_message,is_deleted
+7596b767-6c4f-4923-8e0c-a389213e73b7,cb5f5144-1caf-488a-8886-1a0b8f8e3f94,9a46eb9e-f860-4347-b88c-7a2deb022384,aef56a1f-b82b-4d3a-b050-4dfac7810ce5,c5ea832e-92cf-4880-a4c1-31a6d7c7fe9c,https://elron.ee,'2025-08-06 17:57:19.649880 +00:00'::TIMESTAMP WITH TIME ZONE,'2025-08-06 17:57:19.649880 +00:00'::TIMESTAMP WITH TIME ZONE,'2025-08-06 17:57:19.649880 +00:00'::TIMESTAMP WITH TIME ZONE,TEST,TEST,false

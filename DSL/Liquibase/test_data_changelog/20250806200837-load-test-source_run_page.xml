@@ -3,14 +3,14 @@
                    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
                    xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
 http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.1.xsd">
-    <changeSet id="20250717133553" author="Artsiom Beida">
+    <changeSet id="20250806200837" author="Artsiom Beida">
         <loadData
-                file="data/test-fixtures/agency.csv"
-                tableName="agency"
+                file="data/test-fixtures/source_run_page.csv"
+                tableName="source_run_page"
         >
             <column name="created_at" type="COMPUTED"/>
             <column name="updated_at" type="COMPUTED"/>
-            <column name="type" type="other"/>
+            <column name="scraped_at" type="COMPUTED"/>
         </loadData>
     </changeSet>
 </databaseChangeLog>
