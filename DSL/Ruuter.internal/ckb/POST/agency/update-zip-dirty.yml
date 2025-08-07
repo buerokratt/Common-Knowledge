@@ -23,10 +23,11 @@ updateAgencyDirty:
       type: json
     body:
       base_id: ${incoming.body.agencyId}
+  result: resAgency
 
 checkForSourceId:
   switch:
-    - condition: ${incoming.body.sourceId == null}
+    - condition: ${incoming.body.sourceId ?? '' === ''}
       next: returnSuccess
   next: updateSourceStatus
 

@@ -1,3 +1,22 @@
+/*
+declaration:
+  version: 0.1
+  description: "Mark the latest running source record as stopping by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source base ID"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+*/
 SELECT copy_row_with_modifications(
     'source',
     'id', '::UUID', id::VARCHAR,

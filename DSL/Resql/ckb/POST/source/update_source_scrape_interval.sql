@@ -1,3 +1,28 @@
+/*
+declaration:
+  version: 0.1
+  description: "Update source cron schedule and update_automatically flags by base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: base_id
+        type: string
+        description: "Source base ID"
+      - field: cron_schedule
+        type: string
+        description: "Cron schedule expression"
+      - field: updateAutomatically
+        type: boolean
+        description: "Flag to update automatically"
+  response:
+    fields:
+      - field: id
+        type: string
+        description: "Record ID"
+*/
 SELECT copy_row_with_modifications(
     'source',
     'id', '::UUID', id::VARCHAR,

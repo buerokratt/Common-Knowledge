@@ -1,3 +1,18 @@
+/*
+declaration:
+  version: 0.1
+  description: "Mark source_run_page rows as deleted by source_run_report_base_id"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_run_page
+  allowlist:
+    body:
+      - field: source_run_report_base_id
+        type: string
+        description: "Source run report base ID"
+*/
+
 SELECT copy_row_with_modifications(
     'source_run_page',
     'id', '::UUID', id::VARCHAR,

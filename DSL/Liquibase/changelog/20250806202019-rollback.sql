@@ -1,0 +1,28 @@
+-- liquibase formatted sql
+-- changeset ahmer-mt:20250806202019 ignore:true
+
+-- AGENCY TABLE INDEXES
+DROP INDEX IF EXISTS idx_agency_base_deleted_updated;
+DROP INDEX IF EXISTS idx_agency_base_updated_deleted_all;
+
+-- SOURCE TABLE INDEXES
+DROP INDEX IF EXISTS idx_source_base_updated_deleted_agency_url_subsector_type;
+DROP INDEX IF EXISTS idx_source_base_updated_deleted_auto_scrapping_status;
+DROP INDEX IF EXISTS idx_source_base_deleted_updated;
+DROP INDEX IF EXISTS idx_source_agency_base_updated_deleted_url_subsector_scraped_status;
+DROP INDEX IF EXISTS idx_source_type_base_updated_deleted_url_scraped_status;
+
+-- SOURCE_FILE TABLE INDEXES
+DROP INDEX IF EXISTS idx_source_file_base_deleted_updated;
+DROP INDEX IF EXISTS idx_source_file_agency_excluded_deleted;
+DROP INDEX IF EXISTS idx_source_file_type_base_updated_deleted_url_title_excluded_status_scraped_external;
+DROP INDEX IF EXISTS idx_source_file_type_source_base_updated_deleted_url_title_excluded_status_scraped_external;
+DROP INDEX IF EXISTS idx_source_file_type_base_updated_deleted_filename_subsector_excluded_created;
+DROP INDEX IF EXISTS idx_source_file_type_source_base_updated_deleted_filename_subsector_excluded_status_created;
+
+-- SOURCE_RUN_REPORT TABLE INDEXES
+DROP INDEX IF EXISTS idx_source_run_report_base_deleted_updated;
+DROP INDEX IF EXISTS idx_source_run_report_base_updated_deleted_agency_url_errors_started_finished;
+
+-- SOURCE_RUN_PAGE TABLE INDEXES
+DROP INDEX IF EXISTS idx_source_run_page_report_base_updated_deleted_url_error_type_message_scraped;

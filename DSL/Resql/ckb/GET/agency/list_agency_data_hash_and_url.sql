@@ -24,11 +24,11 @@ declaration:
 
 */
 SELECT
-    base_id AS client_id,
+    external_id AS client_id,
     data_hash AS client_data_hash,
     zipped_data_url AS path
 FROM agency a1
-WHERE base_id = ANY(STRING_TO_ARRAY(:agencyIds, ',')::UUID[])
+WHERE external_id = ANY(STRING_TO_ARRAY(:agencyIds, ','))
   AND updated_at = (
       SELECT MAX(updated_at) 
       FROM agency a2
