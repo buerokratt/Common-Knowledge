@@ -9,31 +9,15 @@ declaration:
   allowlist:
     body: []
 
-# it works like  this:
+# it works like this:
 #
-# entities_to_run_exists = get_entities_to_run_exists()
-# while entities_to_run_exists:
-#     entity = get_one_entity_to_run()
+# while True:
+#     entity = get_one_entity_to_run_and_mark_running()
+#     if entity == 'empty':
+#         break
 #     trigger_pipeline(entity)
-#     entities_to_run_exists = get_entities_to_run_exists()
 #
 # return "OK"
-
-checkSourceToRunExists:
-  maxRecursions: 999
-  call: http.get
-  args:
-    url: "[#CKB_RESQL]/source/get_source_to_run_exists"
-    contentType: json
-  result: exists
-  next: checkIfExists
-
-checkIfExists:
-  maxRecursions: 999
-  switch:
-    - condition: ${exists.response.body[0].exists}
-      next: getOneSourceToRun
-  next: returnSuccess
 
 getOneSourceToRun:
   maxRecursions: 999
@@ -42,6 +26,14 @@ getOneSourceToRun:
     url: "[#CKB_RESQL]/source/update_source_is_running"
     contentType: json
   result: sourceToRun
+  next: checkIfSourceFound
+
+checkIfSourceFound:
+  maxRecursions: 999
+  switch:
+    - condition: ${sourceToRun.response.body.length > 0}
+      next: assignPipelineTemplate
+  next: returnSuccess
 
 assignPipelineTemplate:
   maxRecursions: 999
@@ -58,7 +50,7 @@ triggerApiPipelineForSource:
     source_id: ${sourceToRun.response.body[0].baseId}
     agency_id: ${sourceToRun.response.body[0].agencyBaseId}
   result: res
-  next: checkSourceToRunExists
+  next: getOneSourceToRun
 
 triggerScrapperPipelineForSource:
   maxRecursions: 999
@@ -68,7 +60,7 @@ triggerScrapperPipelineForSource:
     source_id: ${sourceToRun.response.body[0].baseId}
     agency_id: ${sourceToRun.response.body[0].agencyBaseId}
   result: res
-  next: checkSourceToRunExists
+  next: getOneSourceToRun
 
 returnSuccess:
   return: "OK"
