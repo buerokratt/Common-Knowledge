@@ -1,4 +1,4 @@
-FROM python:3.13 AS build
+FROM python:3.13-bookworm AS build
 
 WORKDIR /app
 RUN mkdir /scrapped-data
@@ -8,11 +8,9 @@ RUN pip install -r requirements.txt
 
 COPY . .
 
-EXPOSE 8080
-
-
 FROM build AS server
 
+EXPOSE 8080
 CMD ["uvicorn", "api.app:app", "--port", "8080", "--host", "0.0.0.0"]
 
 FROM build AS celery
