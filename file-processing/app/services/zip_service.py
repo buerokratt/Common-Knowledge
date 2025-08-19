@@ -125,7 +125,7 @@ def process_single_folder_zip(folder_item: FolderZipItem) -> FolderZipResult:
         successful_count, failed_count, download_results, excluded_paths = storage_provider.download_folder(
             clean_s3_path, local_folder_path, exclusion_filter
         )
-        
+
         # Extract unique excluded subfolders from excluded paths
         excluded_subfolders_found = []
         for excluded_path in excluded_paths:
@@ -138,11 +138,12 @@ def process_single_folder_zip(folder_item: FolderZipItem) -> FolderZipResult:
             logger.info(f"No files found in {clean_s3_path}, creating zip with empty folder")
         
         # Create zip file in temp directory
-        temp_zip_path = os.path.join(temp_dir, "folder_content.zip")
+        base_name = os.path.join(temp_dir, "folder_content")
         
         logger.info(f"Creating zip file {temp_zip_path} with {successful_count} files")
         
-        shutil.make_archive(local_folder_path, 'zip')
+        shutil.make_archive(base_name, 'zip', local_folder_path)
+        temp_zip_path = base_name + ".zip"
 
         # Get zip file size
         zip_size = os.path.getsize(temp_zip_path)
