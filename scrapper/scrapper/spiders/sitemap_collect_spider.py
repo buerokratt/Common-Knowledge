@@ -121,6 +121,7 @@ class SitemapCollectSpider(BaseSpider):
                 self.logger.info(
                     f'Skipping {scrapped_item.metadata.source_url} because file type '
                     f'is {scrapped_item.metadata.file_type} and it is not allowed')
+                continue
 
             if scrapped_item.hash in self.hashes:
                 self.logger.info(

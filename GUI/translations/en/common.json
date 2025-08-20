@@ -582,7 +582,8 @@
     "contentLoadError": "Failed to load content",
     "contentSaved": "File saved successfully",
     "centopsLoadError": "Failed to load Centops options",
-    "loadingCentopsOptions": "Loading Centops options..."
+    "loadingCentopsOptions": "Loading Centops options...",
+    "failed": "Failed"
   },
  "fileUpload": {
     "title": "Upload file",

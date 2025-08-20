@@ -1,7 +1,6 @@
 import datetime
 import json
 import os
-import shutil
 import logging
 
 import requests
@@ -118,8 +117,6 @@ class TriggerCleaningPipeline:
                 'source_run_report_base_id': spider.report_id,
             }
         )
-
-        shutil.rmtree(item.path)
 
         return item
 

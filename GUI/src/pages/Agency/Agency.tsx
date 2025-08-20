@@ -18,6 +18,7 @@ import {
   Icon,
   Track,
   FileUploader,
+  Tooltip,
 } from 'components';
 import {
   ColumnDef,
@@ -452,7 +453,18 @@ const Agency: FC = () => {
           to={`/source/${row.original.baseId}/files`}
           style={{ textDecoration: 'underline', color: '#005AA3' }}
         >
-          <div className="agencies__agency-cell">{row.original.url}</div>
+          <Tooltip content={row.original.url}>
+            <div
+              className="agencies__agency-cell"
+              style={{
+                maxWidth: 250,
+                textOverflow: 'ellipsis',
+                overflow: 'hidden',
+              }}
+            >
+              {row.original.url}
+            </div>
+          </Tooltip>
         </Link>
       ),
     },
@@ -518,7 +530,9 @@ const Agency: FC = () => {
               appearance="text"
               size="s"
               onClick={() => handleRefreshSource(row.original.baseId)}
-              disabled={refreshMutation.isLoading || row.original.type === 'file'}
+              disabled={
+                refreshMutation.isLoading || row.original.type === 'file'
+              }
             >
               <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
               {t('knowledgeBase.refresh')}
@@ -530,7 +544,10 @@ const Agency: FC = () => {
             to={`/source/${row.original.baseId}/schedule`}
           >
             <Button
-              disabled={row.original.status === 'running' || row.original.type === 'file'}
+              disabled={
+                row.original.status === 'running' ||
+                row.original.type === 'file'
+              }
               appearance="text"
               className="agencies__action-btn"
             >

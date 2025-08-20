@@ -210,7 +210,7 @@ const ScrapedFiles: FC = () => {
       return updateFileEditedContentWithUpload(
         editorState.file,
         content,
-        sourcePath,
+        sourcePath
       );
     },
     onSuccess: () => {
@@ -423,9 +423,9 @@ const ScrapedFiles: FC = () => {
           style={{ width: 'max-content' }}
         >
           <Button
-            disabled={
-              row.original.status === 'cleaning' || refreshMutation.isLoading
-            }
+            // disabled={
+            //   row.original.status === 'cleaning' || refreshMutation.isLoading
+            // }
             appearance="text"
             className="agencies__action-btn"
             size="s"

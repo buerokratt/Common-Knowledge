@@ -89,6 +89,9 @@ class BaseSpider(Spider):
         else:
             url = request.url
 
+        # Log to file as well as database
+        self.logger.error(f"[{error_type}] {url}: {error_message}")
+
         send_error(
             self.settings.get('RUUTER_INTERNAL'),
             url, error_type, error_message,

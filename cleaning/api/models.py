@@ -6,4 +6,5 @@ class EntityToClean(BaseModel):
     meta_data_path: FilePath
     directory_path: DirectoryPath
     source_file_id: str
+    url: str
     logs_path: FilePath
