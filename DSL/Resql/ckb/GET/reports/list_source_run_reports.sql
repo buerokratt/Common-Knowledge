@@ -57,7 +57,7 @@ WITH latest_reports AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, agency_base_id, agency_name, url, errors, 
         scraping_started_at, scraping_finished_at, is_deleted
-    FROM source_run_report 
+    FROM monitoring.source_run_report 
     ORDER BY base_id, updated_at DESC
 )
 SELECT 

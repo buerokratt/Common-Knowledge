@@ -47,7 +47,7 @@ declaration:
 WITH latest_agencies AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, name, sector, type, is_deleted, updated_at
-    FROM agency 
+    FROM agency_management.agency 
     ORDER BY base_id, updated_at DESC
 )
 SELECT 

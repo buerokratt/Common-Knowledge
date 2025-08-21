@@ -21,7 +21,7 @@ declaration:
         description: "Record ID"
 */
 SELECT copy_row_with_modifications(
-    'source',
+    'data_collection.source',
     'id', '::UUID', id::VARCHAR,
     ARRAY[
         'status', '::source_status_type', :status,
@@ -36,11 +36,11 @@ SELECT copy_row_with_modifications(
         'next_scrapping_at', '::TIMESTAMP WITH TIME ZONE', NULL
     ]::VARCHAR[]
 ) as id
-FROM source
+FROM data_collection.source
 WHERE base_id = :base_id::UUID
   AND updated_at = (
       SELECT MAX(updated_at) 
-      FROM source 
+      FROM data_collection.source 
       WHERE base_id = :base_id::UUID
   )
   AND is_deleted = FALSE;

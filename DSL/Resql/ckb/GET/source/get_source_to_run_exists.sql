@@ -13,9 +13,9 @@ declaration:
         description: "at least one scheduled record to run exists"
 */
 SELECT count(*) > 0 AS exists
-FROM source
+FROM data_collection.source
 WHERE (base_id, updated_at) IN (
-    SELECT base_id, max(updated_at) FROM source
+    SELECT base_id, max(updated_at) FROM data_collection.source
     GROUP BY base_id
 )
     AND is_deleted = FALSE

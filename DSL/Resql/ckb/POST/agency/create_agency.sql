@@ -41,6 +41,6 @@ declaration:
         type: string
         description: "Record last update timestamp"
 */
-INSERT INTO agency (name, sector, external_id)
+INSERT INTO agency_management.agency (name, sector, external_id)
 VALUES (:name, :sector, :external_id)
 RETURNING id, base_id, name, sector, external_id, created_at, updated_at;

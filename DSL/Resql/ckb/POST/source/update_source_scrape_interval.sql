@@ -24,7 +24,7 @@ declaration:
         description: "Record ID"
 */
 SELECT copy_row_with_modifications(
-    'source',
+    'data_collection.source',
     'id', '::UUID', id::VARCHAR,
     CASE
         WHEN :updateAutomatically::BOOLEAN = FALSE OR cron_schedule != :cron_schedule
@@ -43,11 +43,11 @@ SELECT copy_row_with_modifications(
             ]::VARCHAR[]
         END
 ) as id
-FROM source
+FROM data_collection.source
 WHERE base_id = :base_id::UUID
   AND updated_at = (
       SELECT MAX(updated_at) 
-      FROM source 
+      FROM data_collection.source 
       WHERE base_id = :base_id::UUID
   )
   AND is_deleted = FALSE;

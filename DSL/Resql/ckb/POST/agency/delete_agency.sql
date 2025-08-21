@@ -21,18 +21,18 @@ declaration:
         description: "Zipped data URL"
 */
 SELECT copy_row_with_modifications(
-    'agency',
+    'agency_management.agency',
     'id', '::UUID', id::VARCHAR,
     ARRAY[
         'is_deleted', '::BOOLEAN', 'TRUE',
         'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR
     ]::VARCHAR[]
 ) as id, zipped_data_url
-FROM agency
+FROM agency_management.agency
 WHERE base_id = :base_id::UUID
   AND is_deleted = FALSE
   AND updated_at = (
       SELECT MAX(updated_at) 
-      FROM agency 
+      FROM agency_management.agency 
       WHERE base_id = :base_id::UUID
   );

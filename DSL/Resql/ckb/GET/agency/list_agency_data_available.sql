@@ -27,11 +27,11 @@ SELECT
         THEN TRUE 
         ELSE FALSE 
     END AS is_data_available
-FROM agency a1
+FROM agency_management.agency a1
 WHERE external_id = ANY(STRING_TO_ARRAY(:agencyIds, ','))
   AND updated_at = (
       SELECT MAX(updated_at) 
-      FROM agency a2
+      FROM agency_management.agency a2
       WHERE a2.base_id = a1.base_id
         AND a2.is_deleted = FALSE
   )

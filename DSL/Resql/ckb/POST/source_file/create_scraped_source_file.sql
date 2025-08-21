@@ -38,7 +38,7 @@ declaration:
         type: string
         description: "Base ID of the inserted source file"
 */
-INSERT INTO source_file (
+INSERT INTO data_collection.source_file (
     source_base_id, agency_base_id, url, page_title,
     last_scraped_at, originally_scraped, original_data_hash, type, status, external_id
 )
