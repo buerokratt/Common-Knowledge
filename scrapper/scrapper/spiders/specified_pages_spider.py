@@ -53,7 +53,7 @@ class SpecifiedPagesSpider(BaseSpider):
 
             if obj.metadata.file_type not in self.settings.get('ALLOWED_FILETYPES'):
                 self.logger.info(
-                    f'Skipping {obj.url} because file type '
+                    f'Skipping {obj.metadata.source_url} because file type '
                     f'is {obj.metadata.file_type} and it is not allowed')
                 requests.post(
                     f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",

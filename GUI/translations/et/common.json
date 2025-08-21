@@ -581,7 +581,8 @@
     "contentLoadError": "Sisu laadimine ebaõnnestus",
     "contentSaved": "Fail salvestati edukalt",
     "centopsLoadError": "Centopsi valikute laadimine ebaõnnestus",
-    "loadingCentopsOptions": "Centopsi valikute laadimine..."
+    "loadingCentopsOptions": "Centopsi valikute laadimine...",
+    "failed": "Ebaõnnestunud"
   },
   "urlWizard": {
     "title": "Uus URL",

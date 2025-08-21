@@ -4,7 +4,7 @@ declaration:
   description: "Get 1 not scheduled source"
   method: get
   returns: json
-  namespace: scheduler
+  namespace: source
   allowlist: {}
   response:
     fields:
@@ -16,12 +16,16 @@ declaration:
         description: "cron schedule"
 */
 WITH latest_records AS (
-    SELECT DISTINCT ON (base_id) base_id, cron_schedule, is_deleted, update_automatically, next_scrapping_at
+    SELECT DISTINCT ON (base_id) base_id, cron_schedule, is_deleted, update_automatically, next_scrapping_at, status
     FROM source
     ORDER BY base_id, updated_at DESC
 )
-SELECT base_id, cron_schedule
+SELECT 
+    base_id::text,
+    cron_schedule
 FROM latest_records
 WHERE is_deleted = FALSE 
   AND update_automatically = TRUE 
-  AND next_scrapping_at IS NULL;
+  AND next_scrapping_at IS NULL
+  AND status NOT IN ('running', 'failed')
+LIMIT 1;

@@ -3,6 +3,10 @@ import datetime
 import requests
 from api.config import settings
 from api.models import EntityToClean
+import logging
+import shutil
+
+logger = logging.getLogger(__name__)
 
 
 def send_error(
@@ -27,7 +31,19 @@ def catch_error(entity: EntityToClean):
     try:
         yield
     except Exception as e:
+        # Log to file as well as database
+        logger.error(f"[cleaning] {entity.url}: {str(e)}")
+        
         send_error(
             entity.url, 'cleaning', str(e),
             entity.source_base_id, entity.agency_base_id, entity.source_run_report_base_id
         )
+    finally:
+        # Always clean up the directory, whether success or failure
+        try:
+            if entity.directory_path.exists():
+                shutil.rmtree(entity.directory_path)
+                logger.info(f'Cleaned up directory: {entity.directory_path}')
+        except Exception as cleanup_error:
+            logger.error(f'Failed to cleanup directory: {cleanup_error}')
+

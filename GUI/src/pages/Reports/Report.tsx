@@ -146,14 +146,16 @@ const Report: FC = () => {
       header: t('knowledgeBase.url'),
       enableColumnFilter: false,
       cell: ({ row }) => (
-        <a
-          href={`https://${row.original.url}`}
-          target="_blank"
-          rel="noopener noreferrer"
-          style={{ textDecoration: 'underline', color: '#005AA3' }}
-        >
-          {row.original.url}
-        </a>
+        <Tooltip content={row.original.url}>
+          <a
+            href={`https://${row.original.url}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ textDecoration: 'underline', color: '#005AA3' }}
+          >
+            {row.original.url}
+          </a>
+        </Tooltip>
       ),
     },
     {
@@ -166,7 +168,19 @@ const Report: FC = () => {
       accessorKey: 'errorMessage',
       header: t('reports.errorMessage'),
       enableColumnFilter: false,
-      cell: ({ row }) => <span>{row.original.errorMessage || '-'}</span>,
+      cell: ({ row }) => (
+        <div
+          style={{
+            maxWidth: 300,
+            overflow: 'hidden',
+            textOverflow: 'ellipsis',
+          }}
+        >
+          <Tooltip content={row.original.errorMessage || '-'}>
+            <span>{row.original.errorMessage || '-'}</span>
+          </Tooltip>
+        </div>
+      ),
     },
     {
       accessorKey: 'scrapedAt',

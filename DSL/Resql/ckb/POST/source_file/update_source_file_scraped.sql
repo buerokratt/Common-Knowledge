@@ -1,7 +1,3 @@
-ChatGPT said:
-sql
-Copy
-Edit
 /*
 declaration:
   version: 0.1

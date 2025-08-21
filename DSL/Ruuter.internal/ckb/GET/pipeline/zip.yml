@@ -32,7 +32,7 @@ getDirtyAgency:
 checkIfAgencyFound:
   maxRecursions: 999
   switch:
-    - condition: ${dirtyAgency.response.body[0].baseId != ''}
+    - condition: ${dirtyAgency.response.body.length > 0}
       next: setAgencyZipping
   next: returnSuccess
 
