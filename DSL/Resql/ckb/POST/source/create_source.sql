@@ -45,7 +45,7 @@ declaration:
         enum: ['new', 'running', 'finished', 'failed']
         description: "Source status"
 */
-INSERT INTO source (
+INSERT INTO data_collection.source (
     agency_base_id, url, subsector, type, status
 )
 VALUES (

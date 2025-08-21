@@ -35,7 +35,7 @@ declaration:
         type: string
         description: "Path (same as original_data_url)"
 */
-INSERT INTO source_file (
+INSERT INTO data_collection.source_file (
     source_base_id, agency_base_id, base_id, file_name, subsector, original_data_url, type
 )
 SELECT

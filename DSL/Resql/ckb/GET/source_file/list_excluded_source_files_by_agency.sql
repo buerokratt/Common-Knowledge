@@ -30,7 +30,7 @@ SELECT
     base_id, 
     agency_base_id, 
     source_base_id
-FROM source_file
+FROM data_collection.source_file
 WHERE 
     agency_base_id = :agency_base_id::UUID 
     AND is_excluded = true 

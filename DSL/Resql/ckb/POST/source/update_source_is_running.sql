@@ -15,7 +15,7 @@ declaration:
         description: "agency base id"
 */
 SELECT copy_row_with_modifications(
-    'source',
+    'data_collection.source',
        'id', '::UUID', id::VARCHAR,
        ARRAY[
            'last_scrapping_at', '::TIMESTAMP WITH TIME ZONE', next_scrapping_at::VARCHAR,
@@ -24,9 +24,9 @@ SELECT copy_row_with_modifications(
            'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR
        ]::VARCHAR[]
 ), base_id, agency_base_id, type
-FROM source
+FROM data_collection.source
 WHERE (base_id, updated_at) IN (
-    SELECT base_id, max(updated_at) FROM source
+    SELECT base_id, max(updated_at) FROM data_collection.source
     GROUP BY base_id
 )
     AND is_deleted = FALSE

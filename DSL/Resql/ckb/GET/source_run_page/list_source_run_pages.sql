@@ -56,7 +56,7 @@ declaration:
 WITH latest_run_pages AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, source_run_report_base_id, url, error_type, error_message, scraped_at, is_deleted
-    FROM source_run_page 
+    FROM monitoring.source_run_page 
     WHERE (:source_run_report_base_id IS NULL OR source_run_report_base_id = :source_run_report_base_id::UUID)
     ORDER BY base_id, updated_at DESC
 )

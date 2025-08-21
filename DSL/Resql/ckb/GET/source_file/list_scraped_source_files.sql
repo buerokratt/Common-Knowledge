@@ -90,7 +90,7 @@ WITH latest_scraped_pages AS (
         id, base_id, source_base_id, url, page_title, status,
         original_data_url, cleaned_data_url, edited_data_url, external_id,
         is_excluded, updated_at, originally_scraped, last_scraped_at, is_deleted
-    FROM source_file
+    FROM data_collection.source_file
     WHERE type = :type::source_file_type
       AND (:source_id IS NULL OR source_base_id = :source_id::UUID)
     ORDER BY base_id, updated_at DESC

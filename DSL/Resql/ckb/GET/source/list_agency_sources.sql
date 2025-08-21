@@ -65,7 +65,7 @@ declaration:
 WITH latest_sources AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, agency_base_id, url, subsector, status, last_scraped_at, type, is_deleted
-    FROM source
+    FROM data_collection.source
     WHERE agency_base_id = :agency_base_id::UUID
     ORDER BY base_id, updated_at DESC
 )

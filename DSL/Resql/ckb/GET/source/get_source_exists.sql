@@ -27,10 +27,10 @@ declaration:
         description: "Whether a matching source exists"
 */
 SELECT count(*) > 0 AS exists
-FROM source
+FROM data_collection.source
 WHERE (base_id, updated_at) IN (
     SELECT base_id, max(updated_at)
-    FROM source
+    FROM data_collection.source
     GROUP BY base_id
 ) AND is_deleted = FALSE
     AND agency_base_id = :agency_base_id::UUID

@@ -54,7 +54,7 @@ declaration:
 WITH latest_sources AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, agency_base_id, url, status, last_scraped_at, type, is_deleted
-    FROM source
+    FROM data_collection.source
     WHERE type = 'api'::source_type
     ORDER BY base_id, updated_at DESC
 )

@@ -59,7 +59,7 @@ declaration:
         type: string
         description: "Cleaning log URL"
 */
-INSERT INTO source_run_report (
+INSERT INTO monitoring.source_run_report (
     agency_base_id, source_base_id, agency_name, url, scraping_started_at, 
     scraping_finished_at, errors, scraping_log_url, cleaning_log_url
 )

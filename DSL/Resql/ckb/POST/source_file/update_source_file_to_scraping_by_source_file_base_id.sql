@@ -29,7 +29,7 @@ declaration:
 */
 SELECT
     copy_row_with_modifications(
-        'source_file',
+        'data_collection.source_file',
         'id', '::UUID', id::VARCHAR,
         ARRAY[
             'status', '::SOURCE_FILE_STATUS_TYPE', 'scraping',
@@ -37,11 +37,11 @@ SELECT
         ]::VARCHAR[]
     ),
     base_id as id, url, original_data_hash as hash, source_base_id, agency_base_id, type, external_id
-FROM source_file
+FROM data_collection.source_file
 WHERE base_id = :base_id::UUID AND
     updated_at = (
         SELECT max(updated_at)
-        FROM source_file
+        FROM data_collection.source_file
         WHERE base_id = :base_id::UUID
     )
     AND is_deleted = FALSE

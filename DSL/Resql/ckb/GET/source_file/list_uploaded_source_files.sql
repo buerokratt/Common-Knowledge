@@ -79,7 +79,7 @@ WITH latest_files AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, source_base_id, file_name, subsector, original_data_url, cleaned_data_url, 
         edited_data_url, is_excluded, created_at, updated_at, is_deleted, status
-    FROM source_file 
+    FROM data_collection.source_file 
     WHERE type = 'uploaded_file'
       AND (:source_id IS NULL OR source_base_id = :source_id::UUID)
     ORDER BY base_id, updated_at DESC

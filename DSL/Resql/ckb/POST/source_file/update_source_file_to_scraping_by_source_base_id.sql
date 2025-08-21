@@ -29,7 +29,7 @@ declaration:
 */
 SELECT
     copy_row_with_modifications(
-        'source_file',
+        'data_collection.source_file',
         'id', '::UUID', id::VARCHAR,
         ARRAY[
             'status', '::SOURCE_FILE_STATUS_TYPE', 'scraping',
@@ -37,10 +37,10 @@ SELECT
         ]::VARCHAR[]
     ),
     base_id as id, url, original_data_hash as hash, external_id
-FROM source_file
+FROM data_collection.source_file
 WHERE (base_id, updated_at) IN (
         SELECT base_id, max(updated_at)
-        FROM source_file
+        FROM data_collection.source_file
         WHERE source_base_id = :source_base_id::UUID
         GROUP BY base_id
     )

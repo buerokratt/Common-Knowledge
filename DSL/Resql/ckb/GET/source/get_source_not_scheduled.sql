@@ -17,7 +17,7 @@ declaration:
 */
 WITH latest_records AS (
     SELECT DISTINCT ON (base_id) base_id, cron_schedule, is_deleted, update_automatically, next_scrapping_at, status
-    FROM source
+    FROM data_collection.source
     ORDER BY base_id, updated_at DESC
 )
 SELECT 
