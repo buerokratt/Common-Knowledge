@@ -46,5 +46,3 @@ jobs:
       - name: Push Docker image to GHCR
         run: |
           docker push $IMAGE_NAME:$TAG_VERSION
-          docker tag $IMAGE_NAME:$TAG_VERSION $IMAGE_NAME:dev
-          docker push $IMAGE_NAME:dev
