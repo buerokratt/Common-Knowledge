@@ -28,40 +28,40 @@ jobs:
           echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "FIX=$FIX" >> $GITHUB_ENV
 
-      - name: Prepare repo owner
+      - name: Set image info
         run: |
-          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
-          echo "OWNER=$OWNER" >> $GITHUB_ENV
+          LOWER_CASE_GITHUB_REPOSITORY=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
+          echo "IMAGE_PACKAGE=ghcr.io/${LOWER_CASE_GITHUB_REPOSITORY}" >> $GITHUB_ENV
           TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Log in to GitHub container registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
-      - name: Build & Push each service image
+      - name: Build & Push each service under one repo package
         run: |
           for SERVICE in $(docker-compose config --services); do
-            IMAGE=$(docker-compose config | awk -v srv="$SERVICE" '
+            # Check if service has a build context
+            IMAGE_DEFINED=$(docker-compose config | awk -v srv="$SERVICE" '
               $1=="services:" {in_services=1}
               in_services && $1==srv":" {in_service=1}
               in_service && $1=="image:" {print $2; exit}
               in_service && /^[^[:space:]]/ {in_service=0}
             ')
 
-            if [ -z "$IMAGE" ]; then
+            if [ -z "$IMAGE_DEFINED" ]; then
               echo "🔨 Building $SERVICE..."
               docker-compose build $SERVICE
 
-              IMAGE_NAME=ghcr.io/${OWNER}/common-knowledge-${SERVICE}:${TAG_VERSION}
-              docker tag ${SERVICE} $IMAGE_NAME
-              docker push $IMAGE_NAME
+              # Push two tags per service under the same package
+              docker tag $SERVICE $IMAGE_PACKAGE:$SERVICE-dev
+              docker push $IMAGE_PACKAGE:$SERVICE-dev
 
-              # optional moving tag for convenience
-              docker tag ${SERVICE} ghcr.io/${OWNER}/common-knowledge-${SERVICE}:dev
-              docker push ghcr.io/${OWNER}/common-knowledge-${SERVICE}:dev
+              docker tag $SERVICE $IMAGE_PACKAGE:$SERVICE-$TAG_VERSION
+              docker push $IMAGE_PACKAGE:$SERVICE-$TAG_VERSION
 
-              echo "✅ Pushed $IMAGE_NAME"
+              echo "✅ Pushed $SERVICE images under $IMAGE_PACKAGE"
             else
-              echo "⏭️ Skipping $SERVICE (already has image: $IMAGE)"
+              echo "⏭️ Skipping $SERVICE (external image: $IMAGE_DEFINED)"
             fi
           done
