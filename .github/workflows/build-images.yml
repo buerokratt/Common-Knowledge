@@ -1,4 +1,4 @@
-name: Build and publish images
+name: Build and publish service images
 
 on:
   push:
@@ -6,6 +6,7 @@ on:
       - dev
     paths:
       - '.env.dev'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -27,15 +28,17 @@ jobs:
           echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "FIX=$FIX" >> $GITHUB_ENV
 
-      - name: Prepare vars
+      - name: Prepare repo owner
         run: |
-          echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
-          echo "TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX" >> $GITHUB_ENV
+          OWNER=$(echo "${GITHUB_REPOSITORY_OWNER}" | tr '[:upper:]' '[:lower:]')
+          echo "OWNER=$OWNER" >> $GITHUB_ENV
+          TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX
+          echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Log in to GitHub container registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
-      - name: Build & Push images from docker-compose
+      - name: Build & Push each service image
         run: |
           for SERVICE in $(docker-compose config --services); do
             IMAGE=$(docker-compose config | awk -v srv="$SERVICE" '
@@ -48,9 +51,15 @@ jobs:
             if [ -z "$IMAGE" ]; then
               echo "🔨 Building $SERVICE..."
               docker-compose build $SERVICE
-              IMAGE_NAME=ghcr.io/${OWNER}/${SERVICE}:${TAG_VERSION}
-              docker tag ${SERVICE} ${IMAGE_NAME}
-              docker push ${IMAGE_NAME}
+
+              IMAGE_NAME=ghcr.io/${OWNER}/common-knowledge-${SERVICE}:${TAG_VERSION}
+              docker tag ${SERVICE} $IMAGE_NAME
+              docker push $IMAGE_NAME
+
+              # optional moving tag for convenience
+              docker tag ${SERVICE} ghcr.io/${OWNER}/common-knowledge-${SERVICE}:dev
+              docker push ghcr.io/${OWNER}/common-knowledge-${SERVICE}:dev
+
               echo "✅ Pushed $IMAGE_NAME"
             else
               echo "⏭️ Skipping $SERVICE (already has image: $IMAGE)"
