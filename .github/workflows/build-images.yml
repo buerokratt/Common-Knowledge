@@ -27,10 +27,9 @@ jobs:
           echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "FIX=$FIX" >> $GITHUB_ENV
 
-      - name: Prepare repo vars
+      - name: Prepare vars
         run: |
-          LOWER_CASE_GITHUB_REPOSITORY=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
-          echo "REPO_NAME=$LOWER_CASE_GITHUB_REPOSITORY" >> $GITHUB_ENV
+          echo "OWNER=${GITHUB_REPOSITORY_OWNER,,}" >> $GITHUB_ENV
           echo "TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX" >> $GITHUB_ENV
 
       - name: Log in to GitHub container registry
@@ -49,9 +48,10 @@ jobs:
             if [ -z "$IMAGE" ]; then
               echo "🔨 Building $SERVICE..."
               docker-compose build $SERVICE
-              IMAGE_NAME=ghcr.io/${REPO_NAME}/${SERVICE}:${TAG_VERSION}
+              IMAGE_NAME=ghcr.io/${OWNER}/${SERVICE}:${TAG_VERSION}
               docker tag ${SERVICE} ${IMAGE_NAME}
               docker push ${IMAGE_NAME}
+              echo "✅ Pushed $IMAGE_NAME"
             else
               echo "⏭️ Skipping $SERVICE (already has image: $IMAGE)"
             fi
