@@ -1,4 +1,4 @@
-name: Build and publish service images
+name: Build and publish file-processing Docker image
 
 on:
   push:
@@ -13,10 +13,8 @@ jobs:
     runs-on: ubuntu-22.04
 
     steps:
-      - uses: actions/checkout@v3
-
-      - name: Docker Setup BuildX
-        uses: docker/setup-buildx-action@v2
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
       - name: Load environment variables
         run: |
@@ -28,40 +26,23 @@ jobs:
           echo "BUILD=$BUILD" >> $GITHUB_ENV
           echo "FIX=$FIX" >> $GITHUB_ENV
 
-      - name: Set image info
+      - name: Set Docker image info
         run: |
-          LOWER_CASE_GITHUB_REPOSITORY=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
-          echo "IMAGE_PACKAGE=ghcr.io/${LOWER_CASE_GITHUB_REPOSITORY}" >> $GITHUB_ENV
+          LOWER_CASE_REPO=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
+          IMAGE_NAME=ghcr.io/${LOWER_CASE_REPO}
           TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX
+          echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
-      - name: Log in to GitHub container registry
+      - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
-      - name: Build & Push each service under one repo package
+      - name: Build Docker image
         run: |
-          for SERVICE in $(docker-compose config --services); do
-            # Check if service has a build context
-            IMAGE_DEFINED=$(docker-compose config | awk -v srv="$SERVICE" '
-              $1=="services:" {in_services=1}
-              in_services && $1==srv":" {in_service=1}
-              in_service && $1=="image:" {print $2; exit}
-              in_service && /^[^[:space:]]/ {in_service=0}
-            ')
+          docker build -f file-processing/Dockerfile -t $IMAGE_NAME:$TAG_VERSION .
 
-            if [ -z "$IMAGE_DEFINED" ]; then
-              echo "🔨 Building $SERVICE..."
-              docker-compose build $SERVICE
-
-              # Push two tags per service under the same package
-              docker tag $SERVICE $IMAGE_PACKAGE:$SERVICE-dev
-              docker push $IMAGE_PACKAGE:$SERVICE-dev
-
-              docker tag $SERVICE $IMAGE_PACKAGE:$SERVICE-$TAG_VERSION
-              docker push $IMAGE_PACKAGE:$SERVICE-$TAG_VERSION
-
-              echo "✅ Pushed $SERVICE images under $IMAGE_PACKAGE"
-            else
-              echo "⏭️ Skipping $SERVICE (external image: $IMAGE_DEFINED)"
-            fi
-          done
+      - name: Push Docker image to GHCR
+        run: |
+          docker push $IMAGE_NAME:$TAG_VERSION
+          docker tag $IMAGE_NAME:$TAG_VERSION $IMAGE_NAME:dev
+          docker push $IMAGE_NAME:dev
