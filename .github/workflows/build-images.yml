@@ -39,7 +39,9 @@ jobs:
 
       - name: Build Docker image
         run: |
-          docker build -f file-processing/Dockerfile -t $IMAGE_NAME:$TAG_VERSION .
+          cd file-processing
+          docker build -t $IMAGE_NAME:$TAG_VERSION .
+          cd ../
 
       - name: Push Docker image to GHCR
         run: |
