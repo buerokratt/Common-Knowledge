@@ -1,0 +1,58 @@
+name: Build and publish images
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - '.env.dev'
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Docker Setup BuildX
+        uses: docker/setup-buildx-action@v2
+
+      - name: Load environment variables
+        run: |
+          if [ -f .env.dev ]; then
+            export $(cat .env.dev | grep -v '^#' | xargs)
+          fi
+          echo "RELEASE=$RELEASE" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUILD=$BUILD" >> $GITHUB_ENV
+          echo "FIX=$FIX" >> $GITHUB_ENV
+
+      - name: Prepare repo vars
+        run: |
+          LOWER_CASE_GITHUB_REPOSITORY=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
+          echo "REPO_NAME=$LOWER_CASE_GITHUB_REPOSITORY" >> $GITHUB_ENV
+          echo "TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX" >> $GITHUB_ENV
+
+      - name: Log in to GitHub container registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+
+      - name: Build & Push images from docker-compose
+        run: |
+          for SERVICE in $(docker-compose config --services); do
+            IMAGE=$(docker-compose config | awk -v srv="$SERVICE" '
+              $1=="services:" {in_services=1}
+              in_services && $1==srv":" {in_service=1}
+              in_service && $1=="image:" {print $2; exit}
+              in_service && /^[^[:space:]]/ {in_service=0}
+            ')
+
+            if [ -z "$IMAGE" ]; then
+              echo "🔨 Building $SERVICE..."
+              docker-compose build $SERVICE
+              IMAGE_NAME=ghcr.io/${REPO_NAME}/${SERVICE}:${TAG_VERSION}
+              docker tag ${SERVICE} ${IMAGE_NAME}
+              docker push ${IMAGE_NAME}
+            else
+              echo "⏭️ Skipping $SERVICE (already has image: $IMAGE)"
+            fi
+          done
