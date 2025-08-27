@@ -1,4 +1,4 @@
-name: Build and publish file-processing Docker image
+name: Build and publish Common-Knowledge services
 
 on:
   push:
@@ -30,19 +30,21 @@ jobs:
         run: |
           LOWER_CASE_REPO=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
           IMAGE_NAME=ghcr.io/${LOWER_CASE_REPO}
-          TAG_VERSION=$RELEASE-$VERSION.$BUILD.$FIX
+          TAG_VERSION=${RELEASE}-${VERSION}-${BUILD}-${FIX}
           echo "IMAGE_NAME=$IMAGE_NAME" >> $GITHUB_ENV
           echo "TAG_VERSION=$TAG_VERSION" >> $GITHUB_ENV
 
       - name: Log in to GitHub Container Registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
-      - name: Build Docker image
+      - name: Build and push service images
         run: |
-          cd file-processing
-          docker build -t $IMAGE_NAME:$TAG_VERSION .
-          cd ../
+          SERVICES=("file-processing" "data-export" "search-service" "scrapper-server" "scheduler" "cleaning-server")
 
-      - name: Push Docker image to GHCR
-        run: |
-          docker push $IMAGE_NAME:$TAG_VERSION
+          for SERVICE in "${SERVICES[@]}"; do
+            echo "🔨 Building service: $SERVICE"
+            cd $SERVICE
+            docker build -t $IMAGE_NAME:${SERVICE}-${TAG_VERSION} .
+            cd ..
+            docker push $IMAGE_NAME:${SERVICE}-${TAG_VERSION}
+          done
