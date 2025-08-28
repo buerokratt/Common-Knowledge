@@ -1,0 +1,51 @@
+{{- if .Values.cleaningServer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.cleaningServer.nameOverride }}
+  labels:
+    app: {{ .Values.cleaningServer.nameOverride }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.cleaningServer.nameOverride }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.cleaningServer.nameOverride }}
+    spec:
+      # initContainers:
+      #   - name: git-clone
+      #     image: alpine/git:latest
+      #     volumeMounts:
+      #     - name: dsl
+      #       mountPath: /app
+      #     command:
+      #       - sh
+      #       - -c
+      #       - |
+      #           git clone --single-branch --depth 1 --branch dev https://github.com/buerokratt/Common-Knowledge.git /tmp/ckb &&
+      #           cp -r /tmp/ckb/cleaning/ /app/ 
+      containers:
+        - name: {{ .Values.cleaningServer.nameOverride }}
+          image: "{{ .Values.cleaningServer.image.repository }}:{{ .Values.cleaningServer.image.tag }}"
+          imagePullPolicy: {{ .Values.cleaningServer.image.pullPolicy }}
+          command: ["celery", "-A", "worker.tasks", "worker", "--loglevel=INFO"]
+          env:
+            {{- range .Values.cleaningServer.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.cleaningServer.service.port }}
+          volumeMounts: {{- if .Values.cleaningServer.volumes.enabled }}
+            - name: dsl2
+              mountPath: scrapped-data
+          {{- end }}
+      volumes: {{- if .Values.cleaningServer.volumes.enabled }}
+
+        - name: dsl2
+          emptyDir: {}
+      {{- end }}
+{{- end }}

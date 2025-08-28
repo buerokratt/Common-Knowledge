@@ -1,0 +1,41 @@
+{{- if .Values.authenticationLayer.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+  labels:
+    app: {{ .Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+    spec:
+      containers:
+        - name: {{ .Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+          image: "{{ .Values.authenticationLayer.image.repository }}:{{ .Values.authenticationLayer.image.tag }}"
+          imagePullPolicy: {{ .Values.authenticationLayer.image.pullPolicy }}
+          ports:
+            - containerPort: {{ .Values.authenticationLayer.service.port }}
+          {{- if .Values.authenticationLayer.env }}
+          env:
+          {{- range $key, $value := .Values.authenticationLayer.env }}
+            - name: {{ $key }}
+              value: "{{ $value }}"
+          {{- end }}
+          {{- end }}
+          {{- if .Values.authenticationLayer.enabled }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          {{- end }}
+      {{- if .Values.authenticationLayer.enabled }}
+      volumes:
+        - name: data
+          emptyDir: {}
+      {{- end }}
+{{- end }}
