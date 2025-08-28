@@ -11,3 +11,6 @@ keywords:
 - opensearch
 - postgres
 - rabbitmq
+maintainers:
+  - name: Varmo Helemäe
+    url: https://github.com/varmoh
