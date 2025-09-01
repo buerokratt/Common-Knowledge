@@ -387,3 +387,5 @@ This project is licensed under the terms specified in the [LICENSE](./LICENSE) f
 - **Bürokratt Project**: [Main Bürokratt Repository](https://github.com/buerokratt)
 - **Architecture Documentation**: [ARCHITECTURE.md](./ARCHITECTURE.md)
 - **ETL Process Documentation**: [ETL_PROCESSES.md](./ETL_PROCESSES.md)
+- **API Specifications**: [API_SPECIFICATION.md](./API_SPECIFICATION.md)
+- **Database Schema**: [DATABASE_SCHEMA.md](./DATABASE_SCHEMA.md)
