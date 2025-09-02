@@ -16,28 +16,34 @@ file-processing/
 ├── app/
 │   ├── __init__.py
 │   ├── main.py                 # FastAPI app instance and startup
+│   ├── core/
 │   │   ├── __init__.py
-│   │   ├── config.py           # Settings/configuration
-│   │   └── security.py         # Auth/JWT utilities
+│   │   └── config.py           # Settings/configuration
 │   ├── api/
 │   │   ├── __init__.py
-│   │   ├── api.py              # Main API router
-│   │   ├── upload.py           # Upload endpoints
-│   │   ├── tasks.py            # Task status endpoints
-│   │   └── download.py         # Download endpoints
+│   │   └── endpoints/          # API endpoint modules
+│   │       ├── __init__.py
+│   │       ├── upload.py       # File upload endpoints
+│   │       ├── download.py     # Download URL generation
+│   │       ├── delete.py       # File deletion endpoints
+│   │       ├── move.py         # File movement operations
+│   │       └── zip.py          # Archive creation endpoints
 │   ├── schemas/
-│   │   ├── __init__.py
-│   │   └── upload_task.py      # Pydantic models for requests/responses
+│   │   └── __init__.py         # Pydantic models for requests/responses
 │   ├── services/
 │   │   ├── __init__.py
-│   │   ├── blob_storage.py     # Blob storage service
-│   │   ├── task_service.py     # Task management service
-│   │   └── background_tasks.py # Background task definitions
-│   ├── utils/
-│   │   └── __init__.py
+│   │   ├── blob_storage.py     # Blob storage interface
+│   │   ├── s3_provider.py      # S3 implementation
+│   │   ├── upload_service.py   # Upload operations
+│   │   ├── download_service.py # Download operations
+│   │   ├── delete_service.py   # Deletion operations
+│   │   ├── move_service.py     # File movement
+│   │   ├── zip_service.py      # Archive creation
+│   │   └── background_tasks.py # Async task processing
 │   └── tests/
 │       └── __init__.py
 ├── requirements.txt
+├── Dockerfile
 └── README.md
 ```
 
@@ -52,12 +58,22 @@ file-processing/
 
 ## API Endpoints
 
-### POST /api/v1/upload
+### Upload Operations
 
-Upload a file to blob storage.
+#### POST /upload-urls
+Generate presigned upload URLs for multiple blob paths.
 
 **Request Body:**
+```json
+{
+  "blob_paths": ["path1/file1.txt", "path2/file2.pdf"]
+}
+```
 
+#### POST /upload
+Upload a file with background task tracking.
+
+**Request Body:**
 ```json
 {
   "source_file_path": "path/to/file.txt"
@@ -65,7 +81,6 @@ Upload a file to blob storage.
 ```
 
 **Response:**
-
 ```json
 {
   "task_id": "uuid",
@@ -73,43 +88,168 @@ Upload a file to blob storage.
 }
 ```
 
-### GET /api/v1/tasks/{task_id}
+#### POST /upload-sync
+Upload a file synchronously.
 
+**Request Body:**
+```json
+{
+  "source_file_path": "path/to/file.txt"
+}
+```
+
+**Response:**
+```json
+{
+  "blob_storage_path": "uploads/uuid/file.txt",
+  "source_file_path": "cleaned/path",
+  "status": "completed"
+}
+```
+
+#### POST /upload-file-content
+Upload file content directly to blob storage.
+
+**Request Body:**
+```json
+{
+  "content": "file content as string",
+  "blob_path": "path/to/destination.txt",
+  "content_type": "text/plain"
+}
+```
+
+#### GET /upload/{task_id}
 Get the status of an upload task.
 
 **Response:**
-
 ```json
 {
   "task_id": "uuid",
   "status": "completed",
   "source_file_path": "path/to/file.txt",
-  "blob_storage_path": "s3://bucket/uploads/uuid/file.txt",
+  "blob_storage_path": "uploads/uuid/file.txt",
   "created_at": "2024-01-01T00:00:00Z",
   "updated_at": "2024-01-01T00:00:00Z"
 }
 ```
 
-### POST /api/v1/download
+#### GET /tasks/stats
+Get statistics about upload tasks in memory.
 
-Generate a signed download URL for a file.
+#### DELETE /tasks/cleanup
+Clean up old tasks from memory (default: 24 hours).
+
+### Download Operations
+
+#### POST /download-urls
+Generate presigned download URLs for multiple files.
 
 **Request Body:**
-
 ```json
 {
-  "blob_storage_path": "uploads/uuid/file.txt"
+  "paths": ["path1/file1.txt", "path2/file2.pdf"]
 }
 ```
 
 **Response:**
-
 ```json
 {
-  "download_url": "https://s3.amazonaws.com/...",
-  "expires_at": "2024-01-01T01:00:00"
+  "download_urls": [
+    {
+      "path": "path1/file1.txt",
+      "download_url": "https://s3.amazonaws.com/...",
+      "expires_at": "2024-01-01T01:00:00"
+    }
+  ]
 }
 ```
+
+#### POST /download-files-to-volume
+Download multiple files from blob storage to local volume (synchronous).
+
+**Request Body:**
+```json
+{
+  "blob_paths": ["path1/file1.txt"],
+  "local_base_path": "/local/destination"
+}
+```
+
+#### POST /download-files-to-volume-async
+Start background download of multiple files to local volume.
+
+**Response:**
+```json
+{
+  "task_id": "uuid",
+  "status": "pending"
+}
+```
+
+#### GET /download-task/{task_id}
+Get the status of a download task.
+
+#### POST /delete-files-from-volume
+Delete multiple files from local volume.
+
+### File Management Operations
+
+#### POST /delete-files
+Delete multiple files/folders from blob storage (synchronous).
+
+**Request Body:**
+```json
+{
+  "paths": ["path1/file1.txt", "folder2/"]
+}
+```
+
+#### POST /delete-files-async
+Start background deletion of multiple files/folders.
+
+#### GET /delete-task/{task_id}
+Get the status of a delete task.
+
+#### POST /move-files
+Move multiple files in blob storage (synchronous).
+
+**Request Body:**
+```json
+{
+  "operations": [
+    {
+      "source_path": "old/path/file.txt",
+      "destination_path": "new/path/file.txt"
+    }
+  ]
+}
+```
+
+#### POST /move-files-async
+Start background move of multiple files.
+
+#### GET /move-task/{task_id}
+Get the status of a move task.
+
+### Archive Operations
+
+#### POST /zip-and-upload-folders
+Zip folders from S3 and upload as zip files (synchronous).
+
+**Request Body:**
+```json
+{
+  "folders": ["folder1/", "folder2/"],
+  "zip_destination": "archives/combined.zip"
+}
+```
+
+#### POST /zip-and-upload-folders-async
+Start background zipping and uploading of folders.
+
+#### GET /zip-task/{task_id}
+Get the status of a zip task.
 
 ## Running the Application
 
