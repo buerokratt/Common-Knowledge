@@ -1,0 +1,36 @@
+{{- if .Values.authenticationLayer.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+  annotations:
+{{- range $key, $value := .Values.authenticationLayer.ingress.annotations }}
+    {{ $key }}: {{ $value }}
+{{- end }}
+spec:
+  rules:
+{{- range .Values.authenticationLayer.ingress.hosts }}
+    - host: {{ .host }}
+      http:
+        paths:
+{{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType }}
+            backend:
+              service:
+                name: {{ $.Values.authenticationLayer.nameOverride | default "authentication-layer" }}
+                port:
+                  number: {{ $.Values.authenticationLayer.service.port }}
+{{- end }}
+{{- end }}
+  {{- if .Values.authenticationLayer.ingress.tls }}
+  tls:
+{{- range .Values.authenticationLayer.ingress.tls }}
+    - hosts:
+{{- range .hosts }}
+        - {{ . }}
+{{- end }}
+      secretName: {{ .secretName }}
+{{- end }}
+  {{- end }}
+{{- end }}
