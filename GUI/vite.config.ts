@@ -8,13 +8,14 @@ import path from 'path';
 export default defineConfig({
   envPrefix: 'REACT_APP_',
   plugins: [react(), tsconfigPaths(), svgr()],
-  base: '',
+  base: '/ckb',
   build: {
     outDir: './build',
     target: 'es2015',
     emptyOutDir: true,
   },
   server: {
+    host: true,
     headers: {
       ...(process.env.REACT_APP_CSP && {
         'Content-Security-Policy': process.env.REACT_APP_CSP,
