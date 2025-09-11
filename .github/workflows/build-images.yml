@@ -44,7 +44,7 @@ jobs:
           for SERVICE in "${SERVICES[@]}"; do
             echo "🔨 Building service: $SERVICE"
             cd $SERVICE || cd scrapper
-            docker build -t $IMAGE_NAME:${SERVICE}-${TAG_VERSION} .
+            docker build -t $IMAGE_NAME:${SERVICE}-${TAG_VERSION} ./Dockerfile.dev
             cd ..
             docker push $IMAGE_NAME:${SERVICE}-${TAG_VERSION}
           done
