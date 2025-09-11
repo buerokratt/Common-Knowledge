@@ -39,8 +39,8 @@ jobs:
 
       - name: Build and push service images
         run: |
-          SERVICES=("file-processing" "data-export" "search-service" "scrapper-server" "scheduler" "cleaning-server" "GUI")
-
+          #SERVICES=("file-processing" "data-export" "search-service" "scrapper-server" "scheduler" "cleaning-server" "GUI")
+          SERVICES=("GUI")
           for SERVICE in "${SERVICES[@]}"; do
             echo "🔨 Building service: $SERVICE"
             cd $SERVICE || cd scrapper
