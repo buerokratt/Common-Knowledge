@@ -46,7 +46,8 @@ jobs:
             #cd $SERVICE || cd scrapper
             ls -al
             pwd
-            docker build -t $IMAGE_NAME:${SERVICE}-${TAG_VERSION} ./GUI/Dockerfile.dev
+            #docker build -t $IMAGE_NAME:${SERVICE}-${TAG_VERSION} .
+            docker build -t $IMAGE_NAME:${SERVICE}-${TAG_VERSION} /home/runner/work/Common-Knowledge/Common-Knowledge/GUI/Dockerfile.dev
             cd ..
             docker push $IMAGE_NAME:${SERVICE}-${TAG_VERSION}
           done
