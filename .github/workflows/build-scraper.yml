@@ -48,5 +48,7 @@ jobs:
       - name: Log in to GitHub container registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
 
-      - name: Push Docker image to ghcr
+      - name: Push server image
         run: docker push $DOCKER_TAG_CUSTOM
+      - name: Push celery image
+        run: docker push $DOCKER_TAG_CELERY
