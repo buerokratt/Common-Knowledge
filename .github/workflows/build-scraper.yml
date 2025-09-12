@@ -24,7 +24,7 @@ jobs:
       - name: Load environment variables and set them
         run: |
           if [ -f .env.scrapper ]; then
-            export $(cat env.scrapper | grep -v '^#' | xargs)
+            export $(cat .env.scrapper | grep -v '^#' | xargs)
           fi
           echo "RELEASE=$RELEASE" >> $GITHUB_ENV
           echo "VERSION=$VERSION" >> $GITHUB_ENV
