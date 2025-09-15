@@ -29,12 +29,24 @@ export const getCentopsClients = async (
   pageSize: number = 1000
 ): Promise<CentopsResponse> => {
   const centopsUrl = import.meta.env.REACT_APP_CENTOPS_API_URL;
+  const centopsApiKey = import.meta.env.REACT_APP_CENTOPS_API_KEY;
+  const centopsApiSecret = import.meta.env.REACT_APP_CENTOPS_API_SECRET;
+
+  const getAuthorizationHeader = () => {
+    const token = `${centopsApiKey}:${centopsApiSecret}`;
+    const base64 = btoa(token);
+    return base64;
+  };
+
   const response = await apiDev.get(
     `${centopsUrl}/centops/integration/clients`,
     {
       params: {
         page,
         pageSize,
+      },
+      headers: {
+        Authorization: getAuthorizationHeader(),
       },
     }
   );
