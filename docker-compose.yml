@@ -182,6 +182,8 @@ services:
       BASE_URL: http://localhost:8080/ckb
       REACT_APP_RUUTER_API_URL: http://localhost:8086/ckb
       REACT_APP_CENTOPS_API_URL: https://ruuter.centops.test.buerokratt.ee
+      REACT_APP_CENTOPS_API_KEY: API_KEY
+      REACT_APP_CENTOPS_API_SECRET: API_SECRET
       REACT_APP_CUSTOMER_SERVICE_LOGIN: http://localhost:3004/et/dev-auth
       REACT_APP_CSP: "upgrade-insecure-requests; default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
       DEBUG_ENABLED: true

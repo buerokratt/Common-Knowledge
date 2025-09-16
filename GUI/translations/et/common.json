@@ -552,6 +552,7 @@
     "editedData": "Redigeeritud andmed",
     "originallyScraped": "Algselt kogutud",
     "cleaned": "Puhastatud",
+    "addAgency": "Lisa asutus",
     "urls": "URLid",
     "running": "Pooleli",
     "finished": "Valmis",
@@ -583,19 +584,6 @@
     "centopsLoadError": "Centopsi valikute laadimine ebaõnnestus",
     "loadingCentopsOptions": "Centopsi valikute laadimine...",
     "failed": "Ebaõnnestunud"
-  },
-  "urlWizard": {
-    "title": "Uus URL",
-    "data": "Andmed",
-    "rowSelection": "Ridade valik",
-    "scraping": "Andmete kogumine",
-    "selectAllRows": "Vali kõik read ({{count}})",
-    "saveSuccess": "URL-id salvestati edukalt",
-    "saveError": "URL-ide salvestamine ebaõnnestus",
-    "availableUrls": "Saadaolevad URL-id",
-    "rowsSelected": "rida valitud",
-    "exists": "Eksisteerib?",
-    "scrapingStarted": "Andmete kogumine käib... Kontrolli tulemusi varsti"
   },
   "fileUpload": {
     "title": "Lae fail üles",

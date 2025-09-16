@@ -353,6 +353,10 @@ gui:
       value: http://localhost:8086/ckb
     - name: REACT_APP_CENTOPS_API_URL
       value: https://ruuter.centops.test.buerokratt.ee
+    - name: REACT_APP_CENTOPS_API_KEY
+      value: API_KEY
+    - name: REACT_APP_CENTOPS_API_SECRET
+      value: API_SECRET
     - name: REACT_APP_CUSTOMER_SERVICE_LOGIN
       value: http://localhost:3004/et/dev-auth
     - name: REACT_APP_CSP
