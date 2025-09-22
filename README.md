@@ -51,6 +51,7 @@ DATABASE_URL=postgresql://user:password@localhost:5432/ckb
 # Storage
 AWS_ACCESS_KEY_ID=your_access_key
 AWS_SECRET_ACCESS_KEY=your_secret_key
+S3_ENDPOINT_URL=your_s3_url
 S3_BUCKET_NAME=ckb-storage
 
 # Services
@@ -87,17 +88,17 @@ For detailed architecture information, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Core Services
 
-| Service | Purpose | Technology | Port |
-|---------|---------|------------|------|
-| **GUI** | Web interface for CKB management | React/TypeScript | 3000 |
-| **Ruuter External** | Public API with authentication | Ruuter YAML configs | 8080 |
-| **Ruuter Internal** | Internal service communication | Ruuter YAML configs | 8089 |
-| **Resql** | SQL query engine and database abstraction | SQL with metadata | - |
-| **Scrapper** | Web scraping and content extraction | Python/Scrapy | 8000 |
-| **Cleaning** | Content cleaning and text extraction | Python/FastAPI | 8001 |
-| **File Processing** | File upload and storage management | Python/FastAPI | 8888 |
-| **Scheduler** | Task scheduling and automation | Python/FastAPI | 8003 |
-| **Data Export** | Database export and archival | Python/FastAPI | 8002 |
+| Service             | Purpose                                   | Technology          | Port |
+| ------------------- | ----------------------------------------- | ------------------- | ---- |
+| **GUI**             | Web interface for CKB management          | React/TypeScript    | 3000 |
+| **Ruuter External** | Public API with authentication            | Ruuter YAML configs | 8080 |
+| **Ruuter Internal** | Internal service communication            | Ruuter YAML configs | 8089 |
+| **Resql**           | SQL query engine and database abstraction | SQL with metadata   | -    |
+| **Scrapper**        | Web scraping and content extraction       | Python/Scrapy       | 8000 |
+| **Cleaning**        | Content cleaning and text extraction      | Python/FastAPI      | 8001 |
+| **File Processing** | File upload and storage management        | Python/FastAPI      | 8888 |
+| **Scheduler**       | Task scheduling and automation            | Python/FastAPI      | 8003 |
+| **Data Export**     | Database export and archival              | Python/FastAPI      | 8002 |
 
 ### Supporting Components
 
@@ -111,7 +112,7 @@ For detailed architecture information, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 ### ETL Pipeline
 
 1. **Extract**: Collect data from websites, APIs, and uploads
-2. **Transform**: Clean content and extract text for LLM consumption  
+2. **Transform**: Clean content and extract text for LLM consumption
 3. **Load**: Store processed data in database and blob storage
 
 For detailed ETL process documentation, see [ETL_PROCESSES.md](./ETL_PROCESSES.md).
@@ -126,7 +127,7 @@ sequenceDiagram
     participant Cleaning
     participant Storage
     participant DB
-    
+
     User->>GUI: Configure data source
     GUI->>Scrapper: Trigger scraping
     Scrapper->>Storage: Store raw content
@@ -141,7 +142,7 @@ sequenceDiagram
 Each service has detailed documentation in its respective directory:
 
 - [Scrapper Service](./scrapper/README.md) - Web scraping and content collection
-- [Cleaning Service](./cleaning/README.md) - Content processing and text extraction  
+- [Cleaning Service](./cleaning/README.md) - Content processing and text extraction
 - [File Processing Service](./file-processing/README.md) - File upload and storage management
 - [Data Export Service](./data-export/README.md) - Database export and archival
 - [Scheduler Service](./scheduler/README.md) - Task scheduling and automation
@@ -154,8 +155,9 @@ Each service has detailed documentation in its respective directory:
 The database uses a multi-schema design organized by functional areas:
 
 ### Schema Organization
+
 - **agency_management**: Agency and organizational data
-- **data_collection**: Sources and file metadata  
+- **data_collection**: Sources and file metadata
 - **monitoring**: Processing reports and execution logs
 
 ### Core Tables
@@ -179,15 +181,16 @@ Database schema is managed through Liquibase:
 # Run migrations
 ./migrate.sh
 
-# Load test data  
+# Load test data
 ./load-test-data.sh
 ```
 
 #### Migration Scripts
 
 - **`create-migration.sh`**: Creates new Liquibase migration files with proper timestamps
+
   - Generates SQL migration file (`changelog/YYYYMMDDHHMMSS-name.sql`)
-  - Creates rollback file (`changelog/YYYYMMDDHHMMSS-rollback.sql`) 
+  - Creates rollback file (`changelog/YYYYMMDDHHMMSS-rollback.sql`)
   - Generates Liquibase XML configuration (`changelog/YYYYMMDDHHMMSS-name.xml`)
   - Uses git user.name for author attribution
 
@@ -199,6 +202,7 @@ Database schema is managed through Liquibase:
 ### Local Setup
 
 1. **Prerequisites**
+
    ```bash
    # Install Docker and Docker Compose
    # Ensure PostgreSQL is available
@@ -206,28 +210,31 @@ Database schema is managed through Liquibase:
    ```
 
 2. **Environment Configuration**
+
    ```bash
    # Copy example configuration
    cp .env.example .env
-   
+
    # Edit configuration file
    vim .env
    ```
 
 3. **Database Setup**
+
    ```bash
    # Run database migrations
    ./migrate.sh
-   
+
    # Load test data (optional)
    ./load-test-data.sh
    ```
 
 4. **Start Services**
+
    ```bash
    # Start all services
    docker-compose up -d
-   
+
    # Or start individual services
    docker-compose up gui scrapper cleaning
    ```
@@ -260,6 +267,7 @@ The system uses DSL (Domain Specific Language) configurations for:
 ### Resql Query Engine
 
 Resql provides type-safe database operations:
+
 - **SQL Separation**: Database logic separated from application code
 - **Parameter Binding**: Safe parameterized queries prevent SQL injection
 - **Type Validation**: Parameter and response type checking
@@ -270,6 +278,7 @@ Resql provides type-safe database operations:
 ### Production Deployment
 
 1. **Container Registry**
+
    ```bash
    # Build and push images
    docker build -t ckb/gui ./GUI
@@ -279,6 +288,7 @@ Resql provides type-safe database operations:
    ```
 
 2. **Environment Variables**
+
    - Configure database connections
    - Set up S3 credentials
    - Define service endpoints
@@ -356,11 +366,13 @@ Issues are refined during grooming sessions in collaboration with developers to 
 ### Common Issues
 
 1. **Service Connection Errors**
+
    - Check service health: `docker-compose ps`
    - Verify network connectivity between services
    - Review environment variable configuration
 
 2. **Database Issues**
+
    - Check PostgreSQL connection
    - Verify migration status
    - Review database logs

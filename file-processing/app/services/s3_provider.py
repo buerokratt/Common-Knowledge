@@ -15,14 +15,15 @@ session.set_config_variable('s3', {'signature_version': 's3v4'})
 
 class S3Provider(BlobStorageProvider):
     def __init__(self):
-        self.s3_client = boto3.client(
-            's3',
-            aws_access_key_id=settings.aws_access_key_id,
-            aws_secret_access_key=settings.aws_secret_access_key,
-            region_name=settings.aws_region,
-            config=boto3.session.Config(signature_version='s3v4')
-        )
-        self.bucket_name = settings.s3_bucket_name
+            self.s3_client = boto3.client(
+                's3',
+                aws_access_key_id=settings.aws_access_key_id,
+                aws_secret_access_key=settings.aws_secret_access_key,
+                region_name=settings.aws_region,
+                endpoint_url=settings.s3_endpoint_url,
+                config=boto3.session.Config(signature_version='s3v4')
+            )
+            self.bucket_name = settings.s3_bucket_name
 
     def upload_file_content(self, file_content: bytes, destination_path: str, content_type: str = "application/octet-stream") -> str:
         """Upload file content directly to S3.
