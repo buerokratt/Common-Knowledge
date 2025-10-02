@@ -147,9 +147,7 @@ const SaveAgency: FC = () => {
       errors.sector = t('validation.required');
     }
 
-    if (!formData.externalId) {
-      errors.externalId = t('validation.required');
-    }
+    // externalId is optional - no validation required
 
     setFormErrors(errors);
     return Object.keys(errors).length === 0;
@@ -187,12 +185,8 @@ const SaveAgency: FC = () => {
 
   // Check if form is complete
   const isFormComplete = useMemo(() => {
-    return (
-      formData.name.trim() !== '' &&
-      formData.sector.trim() !== '' &&
-      formData.externalId !== ''
-    );
-  }, [formData.name, formData.sector, formData.externalId]);
+    return formData.name.trim() !== '' && formData.sector.trim() !== '';
+  }, [formData.name, formData.sector]);
 
   // Check if form has changes (for edit mode)
   const hasChanges = useMemo(() => {
@@ -311,7 +305,6 @@ const SaveAgency: FC = () => {
                 handleInputChange('externalId', option?.value ?? '')
               }
               error={formErrors.externalId}
-              required
               disabled={isLoadingCentops || !!centopsError}
             />
           </Track>
