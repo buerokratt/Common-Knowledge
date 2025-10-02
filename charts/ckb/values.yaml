@@ -89,6 +89,8 @@ fileProcessing:
       value: ""
     - name: AWS_REGION
       value: "us-east-1"
+    - name: S3_ENDPOINT_URL
+      value: ""
     - name: S3_BUCKET_NAME
       value: ""
     - name: SOURCE_PATH

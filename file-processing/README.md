@@ -52,6 +52,7 @@ file-processing/
 - `AWS_ACCESS_KEY_ID`: AWS access key
 - `AWS_SECRET_ACCESS_KEY`: AWS secret key
 - `AWS_REGION`: AWS region (default: us-east-1)
+- `S3_ENDPOINT_URL`: S3 endpoint url
 - `S3_BUCKET_NAME`: S3 bucket name
 - `S3_PRESIGNED_URL_EXPIRATION`: URL expiration time in seconds (default: 3600)
 - `SOURCE_PATH`: Source directory path (default: /source).
@@ -61,9 +62,11 @@ file-processing/
 ### Upload Operations
 
 #### POST /upload-urls
+
 Generate presigned upload URLs for multiple blob paths.
 
 **Request Body:**
+
 ```json
 {
   "blob_paths": ["path1/file1.txt", "path2/file2.pdf"]
@@ -71,9 +74,11 @@ Generate presigned upload URLs for multiple blob paths.
 ```
 
 #### POST /upload
+
 Upload a file with background task tracking.
 
 **Request Body:**
+
 ```json
 {
   "source_file_path": "path/to/file.txt"
@@ -81,6 +86,7 @@ Upload a file with background task tracking.
 ```
 
 **Response:**
+
 ```json
 {
   "task_id": "uuid",
@@ -89,9 +95,11 @@ Upload a file with background task tracking.
 ```
 
 #### POST /upload-sync
+
 Upload a file synchronously.
 
 **Request Body:**
+
 ```json
 {
   "source_file_path": "path/to/file.txt"
@@ -99,6 +107,7 @@ Upload a file synchronously.
 ```
 
 **Response:**
+
 ```json
 {
   "blob_storage_path": "uploads/uuid/file.txt",
@@ -108,9 +117,11 @@ Upload a file synchronously.
 ```
 
 #### POST /upload-file-content
+
 Upload file content directly to blob storage.
 
 **Request Body:**
+
 ```json
 {
   "content": "file content as string",
@@ -120,9 +131,11 @@ Upload file content directly to blob storage.
 ```
 
 #### GET /upload/{task_id}
+
 Get the status of an upload task.
 
 **Response:**
+
 ```json
 {
   "task_id": "uuid",
@@ -135,17 +148,21 @@ Get the status of an upload task.
 ```
 
 #### GET /tasks/stats
+
 Get statistics about upload tasks in memory.
 
 #### DELETE /tasks/cleanup
+
 Clean up old tasks from memory (default: 24 hours).
 
 ### Download Operations
 
 #### POST /download-urls
+
 Generate presigned download URLs for multiple files.
 
 **Request Body:**
+
 ```json
 {
   "paths": ["path1/file1.txt", "path2/file2.pdf"]
@@ -153,6 +170,7 @@ Generate presigned download URLs for multiple files.
 ```
 
 **Response:**
+
 ```json
 {
   "download_urls": [
@@ -166,9 +184,11 @@ Generate presigned download URLs for multiple files.
 ```
 
 #### POST /download-files-to-volume
+
 Download multiple files from blob storage to local volume (synchronous).
 
 **Request Body:**
+
 ```json
 {
   "blob_paths": ["path1/file1.txt"],
@@ -177,9 +197,11 @@ Download multiple files from blob storage to local volume (synchronous).
 ```
 
 #### POST /download-files-to-volume-async
+
 Start background download of multiple files to local volume.
 
 **Response:**
+
 ```json
 {
   "task_id": "uuid",
@@ -188,17 +210,21 @@ Start background download of multiple files to local volume.
 ```
 
 #### GET /download-task/{task_id}
+
 Get the status of a download task.
 
 #### POST /delete-files-from-volume
+
 Delete multiple files from local volume.
 
 ### File Management Operations
 
 #### POST /delete-files
+
 Delete multiple files/folders from blob storage (synchronous).
 
 **Request Body:**
+
 ```json
 {
   "paths": ["path1/file1.txt", "folder2/"]
@@ -206,15 +232,19 @@ Delete multiple files/folders from blob storage (synchronous).
 ```
 
 #### POST /delete-files-async
+
 Start background deletion of multiple files/folders.
 
 #### GET /delete-task/{task_id}
+
 Get the status of a delete task.
 
 #### POST /move-files
+
 Move multiple files in blob storage (synchronous).
 
 **Request Body:**
+
 ```json
 {
   "operations": [
@@ -227,17 +257,21 @@ Move multiple files in blob storage (synchronous).
 ```
 
 #### POST /move-files-async
+
 Start background move of multiple files.
 
 #### GET /move-task/{task_id}
+
 Get the status of a move task.
 
 ### Archive Operations
 
 #### POST /zip-and-upload-folders
+
 Zip folders from S3 and upload as zip files (synchronous).
 
 **Request Body:**
+
 ```json
 {
   "folders": ["folder1/", "folder2/"],
@@ -246,9 +280,11 @@ Zip folders from S3 and upload as zip files (synchronous).
 ```
 
 #### POST /zip-and-upload-folders-async
+
 Start background zipping and uploading of folders.
 
 #### GET /zip-task/{task_id}
+
 Get the status of a zip task.
 
 ## Running the Application
@@ -275,6 +311,7 @@ docker run -p 8888:8888 \
   -e DB_URI="postgresql://user:pass@host/dbname" \
   -e AWS_ACCESS_KEY_ID="your_key" \
   -e AWS_SECRET_ACCESS_KEY="your_secret" \
+  -e S3_ENDPOINT_URL="your_s3_url" \
   -e S3_BUCKET_NAME="your_bucket" \
   file-processing
 ```
