@@ -24,6 +24,27 @@ extractRequestData:
     sector: "${incoming.body.sector}"
     external_id: "${incoming.body.externalId}"
 
+checkNameExists:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/check_name_exists"
+    query:
+      name: ${name}
+      exclude_base_id: ""
+  result: nameCheckResult
+  next: validateNameUnique
+
+validateNameUnique:
+  switch:
+    - condition: ${nameCheckResult.response.body[0].exists == true}
+      next: returnError
+  next: createAgency
+
+returnError:
+  return: "Agency with this name already exists"
+  status: 400
+  next: end
+
 createAgency:
   call: http.post
   args:
