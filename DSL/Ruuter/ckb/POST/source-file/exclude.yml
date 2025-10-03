@@ -39,14 +39,14 @@ checkExcluded:
 
 assignPathsForExclude:
   assign:
-    s3_from_path: "${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
-    s3_to_path: "excluded/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+    s3_from_path: "uploads/scrapped-data/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+    s3_to_path: "excluded/uploads/scrapped-data/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
   next: moveFilesS3
 
 assignPathsForInclude:
   assign:
-    s3_from_path: "excluded/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
-    s3_to_path: "${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+    s3_from_path: "excluded/uploads/scrapped-data/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
+    s3_to_path: "uploads/scrapped-data/${res.response.body[0].agencyBaseId}/${res.response.body[0].sourceBaseId}/${base_id}/"
   next: moveFilesS3
 
 moveFilesS3:
