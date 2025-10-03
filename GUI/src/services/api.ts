@@ -33,7 +33,7 @@ const AxiosInterceptor = ({ children }) => {
     };
 
     const errInterceptor = (error: any) => {
-      console.debug(error);
+      import.meta.env.DEBUG_ENABLED && console.debug(error);
 
       let message =
         error?.response?.data?.response || t('global.notificationErrorMsg');
