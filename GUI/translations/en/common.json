@@ -615,7 +615,7 @@
     "startedAt": "Started at",
     "finishedAt": "Finished at",
     "deleteTitle": "Delete Report",
-    "deleteConfirmation": "Are you sure you want to delete the report?",
+    "deleteConfirmation": "Are you sure you want to delete the report {{agency}} - {{domain}}?",
     "deleteSuccess": "Report deleted successfully",
     "deleteError": "Failed to delete report",
     "errorType": "Error type",

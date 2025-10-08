@@ -148,7 +148,7 @@ const Report: FC = () => {
       cell: ({ row }) => (
         <Tooltip content={row.original.url}>
           <a
-            href={`https://${row.original.url}`}
+            href={row.original.url}
             target="_blank"
             rel="noopener noreferrer"
             style={{ textDecoration: 'underline', color: '#005AA3' }}

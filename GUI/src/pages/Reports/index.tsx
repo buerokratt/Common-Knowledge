@@ -285,6 +285,7 @@ const Reports: FC = () => {
             {t('reports.deleteConfirmation', {
               agency: deleteModal.agencyName,
               domain: deleteModal.url,
+              interpolation: { escapeValue: false }
             })}
           </p>
         </Dialog>

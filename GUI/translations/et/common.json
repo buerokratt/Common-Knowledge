@@ -615,7 +615,7 @@
     "startedAt": "Alustatud",
     "finishedAt": "Lõpetatud",
     "deleteTitle": "Kustuta aruanne",
-    "deleteConfirmation": "Kas oled kindel, et soovid kustutada aruande asutusele {agency} - {domain}?",
+    "deleteConfirmation": "Kas oled kindel, et soovid kustutada aruande asutusele {{agency}} - {{domain}}?",
     "deleteSuccess": "Aruanne kustutatud edukalt",
     "deleteError": "Aruande kustutamine ebaõnnestus",
     "errorType": "Vea tüüp",
