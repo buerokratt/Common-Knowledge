@@ -48,7 +48,7 @@ class BaseSpider(Spider):
             'playwright': True,
             'playwright_include_page': True,
             'playwright_page_goto_kwargs': {
-                'timeout': 5_000,
+                'timeout': 30_000,
                 'wait_until': 'load',
             },
             "playwright_context_kwargs": {
