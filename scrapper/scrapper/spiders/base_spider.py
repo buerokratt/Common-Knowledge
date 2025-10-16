@@ -48,7 +48,7 @@ class BaseSpider(Spider):
             'playwright': True,
             'playwright_include_page': True,
             'playwright_page_goto_kwargs': {
-                'timeout': 5_000,
+                'timeout': 30_000,
                 'wait_until': 'load',
             },
             "playwright_context_kwargs": {
@@ -109,17 +109,29 @@ class BaseSpider(Spider):
             await page.close()
 
     async def parse(self, response: Response, **kwargs):
-        async with self.close_page(response) as page:
-            self.check_source_is_stopping()
+        self.check_source_is_stopping()
 
-            page: Page
+        file_extension = self.guess_file_extension(
+            response.headers.get(b'Content-Type', 'text/html').decode('utf-8')
+        )
 
-            file_extension = self.guess_file_extension(
-                response.headers.get(b'Content-Type', 'text/html').decode('utf-8')
-            )
-
+        # Check if Playwright page is available (might not be if direct HTTP download was used)
+        playwright_page = response.meta.get("playwright_page")
+        if playwright_page:
+            # Use Playwright page for title extraction
+            async with self.close_page(response) as page:
+                page: Page
+                if file_extension == '.html':
+                    title = await page.title()
+                else:
+                    title = response.url
+        else:
+            # Direct HTTP download (no Playwright page available)
             if file_extension == '.html':
-                title = await page.title()
+                # Extract title from HTML using BeautifulSoup
+                soup = BeautifulSoup(response.body, 'lxml')
+                title_tag = soup.find('title')
+                title = title_tag.get_text() if title_tag else response.url
             else:
                 title = response.url
 

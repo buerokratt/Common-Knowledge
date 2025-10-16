@@ -36,7 +36,7 @@ const FileUploader: FC<FileUploaderProps> = ({
   onFilesChange,
   onFileDelete,
   maxFileSize = 30 * 1024 * 1024, // 30MB default
-  acceptedTypes = '.pdf,.doc,.docx,.txt,.html,.htm',
+  acceptedTypes = '.pdf,.doc,.docx,.html,.htm',
   multiple = true,
   className = '',
   uploadProgress,
