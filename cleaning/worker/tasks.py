@@ -2,6 +2,7 @@ import json
 import logging
 
 import requests
+from langdetect import detect, LangDetectException
 
 from unstructured.partition.auto import partition
 from bs4 import BeautifulSoup
@@ -55,6 +56,15 @@ def clean_file_task(entity: EntityToClean):
             cleaned_text = clean_any_file(entity)
             logger.info(f'Cleaned as unstructured file for {entity.file_path.as_posix()}')
 
+        # Detect language from cleaned text
+        detected_language = None
+        if cleaned_text and len(cleaned_text.strip()) > 0:
+            try:
+                detected_language = detect(cleaned_text)
+                print(f'Detected language: {detected_language} for {entity.file_path.as_posix()}')
+            except LangDetectException as e:
+                print(f'Language detection failed for {entity.file_path.as_posix()}: {e}')
+
         cleaned_text_filename = entity.directory_path / 'cleaned.txt'
 
         with cleaned_text_filename.open("w") as f:
@@ -74,6 +84,7 @@ def clean_file_task(entity: EntityToClean):
         cleaned_metadata_filename = entity.directory_path / "cleaned.meta.json"
         with cleaned_metadata_filename.open("w") as f:
             metadata['metadata']['cleaned'] = True
+            metadata['language'] = detected_language
             json.dump(metadata, f)
 
         r = requests.post(
