@@ -25,6 +25,7 @@ class MetadataItem:
     version: str = "1.0"
     created_at: str = field(default_factory=lambda: str(datetime.now()))
     edited_at: str | None = None
+    language: Optional[str] = None
 
 
 @dataclass
