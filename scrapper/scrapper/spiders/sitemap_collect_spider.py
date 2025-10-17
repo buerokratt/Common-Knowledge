@@ -6,6 +6,7 @@ from scrapy.http import Response
 
 from api.models import SitemapCollectScrapperTask
 from scrapper.spiders.base_spider import BaseSpider
+from scrapper.utils import is_archive_url
 
 
 class SitemapCollectSpider(BaseSpider):
@@ -141,6 +142,11 @@ class SitemapCollectSpider(BaseSpider):
 
                 # Only follow links within allowed_domains
                 if self.get_pure_domain(next_url) not in self.pure_allowed_domains:
+                    continue
+
+                # Skip archive URLs
+                if is_archive_url(next_url):
+                    self.logger.info(f'Skipping archive URL: {next_url}')
                     continue
 
                 if next_url not in self.visited_urls:

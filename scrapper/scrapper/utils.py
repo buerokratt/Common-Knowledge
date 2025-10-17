@@ -3,6 +3,7 @@ import datetime
 import functools
 import typing
 import requests
+from urllib.parse import urlparse
 
 from scrapper.items import ScrappedItem
 
@@ -66,3 +67,58 @@ def catch_error_spider(f):
         return r
 
     return decorator
+
+
+# Archive URL detection keywords in multiple languages
+ARCHIVE_KEYWORDS = [
+    # Estonian
+    'arhiiv', 'arhiivi', 'archive',
+    # English
+    'archived', 'archives',
+    # Russian transliteration
+    'arkhiv', 'arhiv',
+]
+
+
+def is_archive_url(url: str) -> bool:
+    """
+    Check if a URL points to an archived/historical page.
+
+    Detects archive pages by checking for archive-related keywords in:
+    - Subdomain (e.g., arhiiv.example.ee)
+    - Path segments (e.g., example.ee/arhiiv/2020/)
+
+    Args:
+        url: The URL to check
+
+    Returns:
+        True if the URL appears to be an archive page, False otherwise
+
+    Examples:
+        >>> is_archive_url('https://arhiiv.lastekaitseliit.ee/et/2016/06/7203/')
+        True
+        >>> is_archive_url('https://example.com/arhiiv/old-content')
+        True
+        >>> is_archive_url('https://example.com/current-page')
+        False
+    """
+    try:
+        parsed = urlparse(url.lower())
+
+        # Check subdomain for archive keywords
+        hostname_parts = parsed.hostname.split('.') if parsed.hostname else []
+        for part in hostname_parts:
+            if any(keyword in part for keyword in ARCHIVE_KEYWORDS):
+                return True
+
+        # Check path segments for archive keywords
+        path_parts = parsed.path.split('/')
+        for part in path_parts:
+            if any(keyword in part for keyword in ARCHIVE_KEYWORDS):
+                return True
+
+        return False
+
+    except Exception:
+        # If URL parsing fails, don't filter it out
+        return False
