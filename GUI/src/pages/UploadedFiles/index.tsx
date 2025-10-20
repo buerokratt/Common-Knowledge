@@ -252,21 +252,56 @@ const UploadedFiles: FC = () => {
         currentFileName: '',
       });
 
+      // Extract error message from various formats
+      // Backend returns: {response: {error: "...", duplicateFiles: [...]}}
+      const responseData =
+        error.response?.data?.response || error.response?.data || {};
+
+      const errorMessage =
+        responseData.error || error.message || t('knowledgeBase.uploadError');
+
+      // Get duplicate file names if available
+      const duplicateFiles = responseData.duplicateFiles || [];
+
       // Set failed files to error status
       setFormData((prev) => ({
         ...prev,
-        files: prev.files.map((file) => ({
-          ...file,
-          status:
-            file.status === 'uploading' ? ('error' as const) : file.status,
-          message: file.status === 'uploading' ? error.message : file.message,
-        })),
+        files: prev.files.map((file) => {
+          const isDuplicate = duplicateFiles.some(
+            (df: any) =>
+              df.fileName === file.name ||
+              df.file_name === file.name ||
+              df === file.name
+          );
+
+          // Only mark duplicates as error, leave other files as-is
+          if (isDuplicate) {
+            return {
+              ...file,
+              status: 'error' as const,
+              message: errorMessage,
+            };
+          }
+
+          return file;
+        }),
       }));
+
+      // Build detailed error message
+      let displayMessage = errorMessage;
+      if (duplicateFiles.length > 0) {
+        const fileNames = duplicateFiles
+          .map((df: any) =>
+            typeof df === 'string' ? df : df.fileName || df.file_name
+          )
+          .join(', ');
+        displayMessage = `${errorMessage}: ${fileNames}`;
+      }
 
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.uploadError'),
+        message: displayMessage,
       });
     },
   });
@@ -781,7 +816,7 @@ const UploadedFiles: FC = () => {
                     uploadProgress.isUploading ||
                     !formData.subsector ||
                     formData.files.length === 0 ||
-                    formData.files.every((file) => file.status === 'error')
+                    formData.files.some((file) => file.status === 'error')
                   }
                 >
                   {uploadProgress.isUploading

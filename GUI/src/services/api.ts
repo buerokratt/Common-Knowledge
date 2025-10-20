@@ -35,10 +35,21 @@ const AxiosInterceptor = ({ children }) => {
     const errInterceptor = (error: any) => {
       import.meta.env.DEBUG_ENABLED && console.debug(error);
 
-      let message =
-        error?.response?.data?.response || t('global.notificationErrorMsg');
+      // Keep the original error structure for proper error handling
+      // If there's a response, attach it to a new error with proper message
+      if (error?.response?.data?.response) {
+        const responseData = error.response.data.response;
+        const errorMessage = typeof responseData === 'string'
+          ? responseData
+          : responseData.error || t('global.notificationErrorMsg');
 
-      return Promise.reject(new Error(message));
+        const newError = new Error(errorMessage);
+        // Preserve the original response for error handlers
+        (newError as any).response = error.response;
+        return Promise.reject(newError);
+      }
+
+      return Promise.reject(new Error(error?.message || t('global.notificationErrorMsg')));
     };
 
     const apiInterceptor = api.interceptors.response.use(
