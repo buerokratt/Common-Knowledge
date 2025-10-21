@@ -37,7 +37,7 @@ def clean_html(entity: EntityToClean):
     # Step 1: Check if there's a <main> element and use only that
     main_element = soup.find('main')
     if main_element:
-        print(f'Found <main> element, trying partition_html on main content for {entity.file_path.as_posix()}')
+        logger.info(f'Found <main> element, trying partition_html on main content for {entity.file_path.as_posix()}')
 
         # Try partition_html on main element content first
         main_html = str(main_element)
@@ -49,17 +49,17 @@ def clean_html(entity: EntityToClean):
 
         if len(partitioned) > 0:
             cleaned_text = '\n\n'.join([str(el) for el in partitioned])
-            print(f'partition_html extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
+            logger.info(f'partition_html extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
             return cleaned_text
 
         # If partition_html returns empty, fall back to BeautifulSoup on main
-        print(f'partition_html on <main> returned empty, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
+        logger.info(f'partition_html on <main> returned empty, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
         cleaned_text = main_element.get_text(separator='\n', strip=True)
-        print(f'BeautifulSoup extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
+        logger.info(f'BeautifulSoup extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
         return cleaned_text
 
     # Step 2: Try partition_html with skip_headers_and_footers flag
-    print(f'No <main> element found, trying partition_html with skip_headers_and_footers for {entity.file_path.as_posix()}')
+    logger.info(f'No <main> element found, trying partition_html with skip_headers_and_footers for {entity.file_path.as_posix()}')
     partitioned = partition_html(
         filename=entity.file_path.as_posix(),
         languages=settings.languages,
@@ -69,9 +69,9 @@ def clean_html(entity: EntityToClean):
 
     # Step 3: If partition_html returns empty, fallback to BeautifulSoup
     if len(partitioned) == 0:
-        print(f'partition_html returned empty content, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
+        logger.info(f'partition_html returned empty content, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
         cleaned_text = soup.get_text(separator='\n', strip=True)
-        print(f'BeautifulSoup fallback extracted {len(cleaned_text)} chars for {entity.file_path.as_posix()}')
+        logger.info(f'BeautifulSoup fallback extracted {len(cleaned_text)} chars for {entity.file_path.as_posix()}')
 
     return cleaned_text
 
@@ -120,9 +120,9 @@ def clean_file_task(entity: EntityToClean):
         if cleaned_text and len(cleaned_text.strip()) > 0:
             try:
                 detected_language = detect(cleaned_text)
-                print(f'Detected language: {detected_language} for {entity.file_path.as_posix()}')
+                logger.info(f'Detected language: {detected_language} for {entity.file_path.as_posix()}')
             except LangDetectException as e:
-                print(f'Language detection failed for {entity.file_path.as_posix()}: {e}')
+                logger.error(f'Language detection failed for {entity.file_path.as_posix()}: {e}')
 
         cleaned_text_filename = entity.directory_path / 'cleaned.txt'
 
