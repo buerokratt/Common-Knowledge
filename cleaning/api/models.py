@@ -8,3 +8,6 @@ class EntityToClean(BaseModel):
     source_file_id: str
     url: str
     logs_path: FilePath
+    source_base_id: str
+    agency_base_id: str
+    source_run_report_base_id: str

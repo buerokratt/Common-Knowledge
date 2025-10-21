@@ -221,13 +221,13 @@ const DataTable: FC<DataTableProps> = ({
                               {{
                                 asc: (
                                   <Icon
-                                    icon={<MdExpandMore fontSize={20} />}
+                                    icon={<MdExpandLess fontSize={20} />}
                                     size="medium"
                                   />
                                 ),
                                 desc: (
                                   <Icon
-                                    icon={<MdExpandLess fontSize={20} />}
+                                    icon={<MdExpandMore fontSize={20} />}
                                     size="medium"
                                   />
                                 ),

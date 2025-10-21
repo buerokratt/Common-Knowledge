@@ -37,7 +37,7 @@ const Reports: FC = () => {
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
-    if (sorting.length === 0) return 'scraping_started_at desc';
+    if (sorting.length === 0) return '';
 
     const sort = sorting[0];
     let field = sort.id;
@@ -80,14 +80,34 @@ const Reports: FC = () => {
   // Delete report mutation
   const deleteReportMutation = useMutation({
     mutationFn: deleteReport,
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('reports.deleteSuccess'),
       });
       setDeleteModal(null);
-      queryClient.invalidateQueries(['reports']);
+
+      // Refetch to get updated data
+      await queryClient.invalidateQueries(['reports']);
+
+      // Check if current page is now out of bounds
+      const newTotal = (reportsData.total || 0) - 1;
+      const maxPages = Math.ceil(newTotal / pagination.pageSize);
+
+      // Reset to last valid page if current page is out of bounds
+      if (pagination.pageIndex >= maxPages && maxPages > 0) {
+        setPagination({
+          ...pagination,
+          pageIndex: maxPages - 1,
+        });
+      } else if (maxPages === 0) {
+        // If no data left, reset to page 0
+        setPagination({
+          ...pagination,
+          pageIndex: 0,
+        });
+      }
     },
     onError: (error: any) => {
       toast.open({

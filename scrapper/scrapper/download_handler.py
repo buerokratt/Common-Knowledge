@@ -47,11 +47,17 @@ class DownloadHandler(ScrapyPlaywrightDownloadHandler):
                 r = await super()._download_request(request, spider)
                 spider.logger.info(f'Playwright request finished: {request.url}')
                 return r
+        except TimeoutError:
+            spider.logger.warning(f'request timed out due to playwright: {request.url}. Try again')
+            await self._close()
+            super().__init__(self.crawler)  # Re-initialize with the same crawler
+            await self._launch()
+            return await self._download_request(request, spider)
         except Exception as e:
             # Catch "Download is starting" and similar download errors as safety net
             if "Download is starting" in str(e) or "net::ERR_ABORTED" in str(e):
                 spider.logger.info(f'Download error detected for {request.url}, falling back to direct HTTP download')
-                # Fall back to direct HTTP download using Scrapy's HTTP handler (consistent with Method 1)
+                # Fall back to direct HTTP download
                 try:
                     import requests
                     # Use requests for simplicity in async context
@@ -80,8 +86,3 @@ class DownloadHandler(ScrapyPlaywrightDownloadHandler):
                 # Other Playwright errors - re-raise
                 spider.logger.error(f'Playwright error for {request.url}: {str(e)}')
                 raise
-        except TimeoutError:
-            spider.logger.warning(f'request timed out due to playwright: {request.url}. Try again')
-            await self._close()
-            await self._launch()
-            return await self._download_request(request, spider)

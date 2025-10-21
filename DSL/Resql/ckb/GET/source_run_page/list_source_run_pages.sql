@@ -54,9 +54,9 @@ declaration:
         description: "total number of agencies"
 */
 WITH latest_run_pages AS (
-    SELECT DISTINCT ON (base_id) 
-        id, base_id, source_run_report_base_id, url, error_type, error_message, scraped_at, is_deleted
-    FROM monitoring.source_run_page 
+    SELECT DISTINCT ON (base_id)
+        id, base_id, source_run_report_base_id, url, error_type, error_message, scraped_at, is_deleted, updated_at
+    FROM monitoring.source_run_page
     WHERE (:source_run_report_base_id IS NULL OR source_run_report_base_id = :source_run_report_base_id::UUID)
     ORDER BY base_id, updated_at DESC
 )
@@ -76,6 +76,6 @@ ORDER BY
     CASE WHEN :sorting = 'error_message desc' THEN error_message END DESC,
     CASE WHEN :sorting = 'scraped_at asc' THEN scraped_at END ASC,
     CASE WHEN :sorting = 'scraped_at desc' THEN scraped_at END DESC,
-    scraped_at DESC NULLS LAST
+    updated_at DESC NULLS LAST
 LIMIT :page_size::INTEGER 
 OFFSET ((GREATEST(:page::INTEGER, 1) - 1) * :page_size::INTEGER);

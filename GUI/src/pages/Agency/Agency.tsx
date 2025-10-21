@@ -87,7 +87,7 @@ const Agency: FC = () => {
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
-    if (sorting.length === 0) return 'last_scraped_at desc';
+    if (sorting.length === 0) return '';
 
     const sort = sorting[0];
     let field = sort.id;
@@ -96,7 +96,7 @@ const Agency: FC = () => {
     const fieldMap: Record<string, string> = {
       url: 'url',
       subsector: 'subsector',
-      lastScraped: 'last_scraped_at',
+      lastScrapedAt: 'last_scraped_at',
       status: 'status',
     };
 
@@ -208,17 +208,14 @@ const Agency: FC = () => {
         })),
       }));
 
+      setUploadModal(false);
+      setFormData({ subsector: '', files: [] });
+
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.uploadSuccess'),
       });
-
-      // Close modal after a short delay to show success state
-      setTimeout(() => {
-        setUploadModal(false);
-        setFormData({ subsector: '', files: [] });
-      }, 1000);
 
       queryClient.invalidateQueries(['sources']);
     },
@@ -298,14 +295,34 @@ const Agency: FC = () => {
   // Delete source mutation
   const deleteMutation = useMutation({
     mutationFn: deleteSource,
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.deleteSuccess'),
       });
       setDeleteModal(null);
-      queryClient.invalidateQueries(['sources']);
+
+      // Refetch to get updated data
+      await queryClient.invalidateQueries(['sources']);
+
+      // Check if current page is now out of bounds
+      const newTotal = (sourcesData?.total || 0) - 1;
+      const maxPages = Math.ceil(newTotal / pagination.pageSize);
+
+      // Reset to last valid page if current page is out of bounds
+      if (pagination.pageIndex >= maxPages && maxPages > 0) {
+        setPagination({
+          ...pagination,
+          pageIndex: maxPages - 1,
+        });
+      } else if (maxPages === 0) {
+        // If no data left, reset to page 0
+        setPagination({
+          ...pagination,
+          pageIndex: 0,
+        });
+      }
     },
     onError: (error: any) => {
       toast.open({

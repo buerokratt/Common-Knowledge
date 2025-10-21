@@ -19,11 +19,12 @@ from app.schemas import (
     FileDeleteResult
 )
 from app.services.blob_storage import storage_provider, BlobStorageException
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Volume path configuration
-VOLUME_PATH = '/app/data'
+# Source path configuration from settings
+SOURCE_PATH = settings.source_path
 
 # In-memory task store for download tasks
 _download_tasks: Dict[str, dict] = {}
@@ -77,7 +78,7 @@ def process_single_file_download(file_item: FileDownloadItem) -> FileDownloadRes
                 clean_s3_path = parts[0]
         
         # Use volume path configuration
-        local_path_str = f"{VOLUME_PATH}/{file_item.local_path}"
+        local_path_str = f"{SOURCE_PATH}/{file_item.local_path}"
         local_path = Path(local_path_str)
         
         # Ensure local directory exists
@@ -109,7 +110,7 @@ def process_single_file_download(file_item: FileDownloadItem) -> FileDownloadRes
         error_msg = f"Unexpected error: {str(e)}"
         return FileDownloadResult(
             s3_path=file_item.s3_path,
-            local_path=f"{VOLUME_PATH}/{file_item.local_path}",
+            local_path=f"{SOURCE_PATH}/{file_item.local_path}",
             status="failed",
             error_message=error_msg,
             is_folder=False,
@@ -131,7 +132,7 @@ def process_folder_download(file_item: FileDownloadItem) -> FileDownloadResult:
                 clean_s3_path = parts[0]
         
         # Use volume path configuration
-        local_folder_path = f"{VOLUME_PATH}/{file_item.local_path}"
+        local_folder_path = f"{SOURCE_PATH}/{file_item.local_path}"
         
         # Ensure local directory exists
         Path(local_folder_path).mkdir(parents=True, exist_ok=True)
@@ -176,7 +177,7 @@ def process_folder_download(file_item: FileDownloadItem) -> FileDownloadResult:
         error_msg = f"Folder download error: {str(e)}"
         return FileDownloadResult(
             s3_path=file_item.s3_path,
-            local_path=f"{VOLUME_PATH}/{file_item.local_path}",
+            local_path=f"{SOURCE_PATH}/{file_item.local_path}",
             status="failed",
             error_message=error_msg,
             is_folder=True,
@@ -218,7 +219,7 @@ def process_download_task(task_id: str) -> None:
                 error_msg = f"Unexpected error processing {file_item.s3_path}: {str(e)}"
                 results.append(FileDownloadResult(
                     s3_path=file_item.s3_path,
-                    local_path=f"{VOLUME_PATH}/{file_item.local_path}",
+                    local_path=f"{SOURCE_PATH}/{file_item.local_path}",
                     status="failed",
                     error_message=error_msg,
                     is_folder=file_item.is_folder,
@@ -328,7 +329,7 @@ def delete_files_from_volume(request: DeleteFromVolumeRequest) -> DeleteFromVolu
     for file_item in request.files:
         try:
             # Use volume path configuration
-            local_path_str = f"{VOLUME_PATH}/{file_item.local_path}"
+            local_path_str = f"{SOURCE_PATH}/{file_item.local_path}"
             local_path = Path(local_path_str)
             
             if local_path.exists():
@@ -369,7 +370,7 @@ def delete_files_from_volume(request: DeleteFromVolumeRequest) -> DeleteFromVolu
         except Exception as e:
             error_msg = f"Unexpected error: {str(e)}"
             results.append(FileDeleteResult(
-                local_path=f"{VOLUME_PATH}/{file_item.local_path}",
+                local_path=f"{SOURCE_PATH}/{file_item.local_path}",
                 status="failed",
                 error_message=error_msg
             ))
@@ -445,7 +446,7 @@ def download_files_to_volume(request: DownloadToVolumeRequest) -> DownloadToVolu
             error_msg = f"Unexpected error processing {file_item.s3_path}: {str(e)}"
             results.append(FileDownloadResult(
                 s3_path=file_item.s3_path,
-                local_path=f"{VOLUME_PATH}/{file_item.local_path}",
+                local_path=f"{SOURCE_PATH}/{file_item.local_path}",
                 status="failed",
                 error_message=error_msg,
                 is_folder=file_item.is_folder,

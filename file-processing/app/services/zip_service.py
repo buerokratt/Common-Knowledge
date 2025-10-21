@@ -139,12 +139,13 @@ def process_single_folder_zip(folder_item: FolderZipItem) -> FolderZipResult:
         
         # Create zip file in temp directory
         base_name = os.path.join(temp_dir, "folder_content")
-        
-        logger.info(f"Creating zip file {temp_zip_path} with {successful_count} files")
+    
         
         shutil.make_archive(base_name, 'zip', local_folder_path)
         temp_zip_path = base_name + ".zip"
 
+        logger.info(f"Creating zip file {temp_zip_path} with {successful_count} files")
+        
         # Get zip file size
         zip_size = os.path.getsize(temp_zip_path)
 

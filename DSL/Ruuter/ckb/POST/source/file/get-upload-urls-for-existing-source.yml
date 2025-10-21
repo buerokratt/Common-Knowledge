@@ -29,6 +29,32 @@ extractRequestData:
     files: "${incoming.body.files}"
     expires_in: "${incoming.body.expiresIn || 3600}"
 
+extractFileNames:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/extract_file_names"
+    headers:
+      type: json
+    body:
+      files: ${files}
+  result: fileNamesResult
+
+checkDuplicateFileNames:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/check_duplicate_file_names"
+    headers:
+      type: json
+    body:
+      source_id: ${source_base_id}
+      fileNames: ${fileNamesResult.response.body?.join(',') ?? ''}
+  result: duplicatesResult
+
+validateNoDuplicates:
+  switch:
+    - condition: ${duplicatesResult.response.body !== null && duplicatesResult.response.body.length > 0}
+      next: returnDuplicateError
+
 generateSourceFileIds:
   call: http.post
   args:
@@ -82,4 +108,16 @@ prepareResponse:
 
 returnResponse:
   return: ${response}
+  next: end
+
+returnDuplicateError:
+  assign:
+    errorResponse:
+      error: "Duplicate file names found"
+      duplicateFiles: ${duplicatesResult.response.body}
+  next: returnDuplicateErrorResponse
+
+returnDuplicateErrorResponse:
+  return: ${errorResponse}
+  status: 400
   next: end

@@ -62,7 +62,7 @@ export const getAgencies = async (
     params: {
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'updatedAt desc',
+      sorting: params.sorting || '',
     },
   });
 

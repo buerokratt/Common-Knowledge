@@ -16,7 +16,7 @@ from twisted.python.failure import Failure
 
 from api.models import BaseObject
 from scrapper.items import FileItem, MetadataItem, Metadata, ScrappedItem
-from scrapper.utils import send_error
+from scrapper.utils import send_error, is_archive_url
 
 
 class BaseSpider(Spider):
@@ -110,6 +110,11 @@ class BaseSpider(Spider):
 
     async def parse(self, response: Response, **kwargs):
         self.check_source_is_stopping()
+
+        # Check if URL is an archive page and skip if it is
+        if is_archive_url(response.url):
+            self.logger.info(f'Skipping archive URL: {response.url}')
+            return
 
         file_extension = self.guess_file_extension(
             response.headers.get(b'Content-Type', 'text/html').decode('utf-8')

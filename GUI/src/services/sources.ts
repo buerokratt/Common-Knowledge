@@ -148,7 +148,7 @@ export const getSources = async (
       agencyBaseId: params.agencyBaseId,
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'last_scraped_at desc',
+      sorting: params.sorting || '',
     },
   });
 
@@ -177,7 +177,7 @@ export const getApiIntegrations = async (
     params: {
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'last_scraped_at desc',
+      sorting: params.sorting || '',
     },
   });
 
@@ -230,6 +230,7 @@ export const createSourceFile = async (
           file_name: uploadInfo.uploadItem.fileName,
           subsector: data.subsector,
           original_data_url: uploadInfo.uploadItem.path,
+          file_size: uploadInfo.file.size,
         }));
 
         await registerUploadedFiles(
@@ -295,6 +296,7 @@ export const addFilesToExistingSource = async (
           file_name: uploadInfo.uploadItem.fileName,
           subsector: data.subsector,
           original_data_url: uploadInfo.uploadItem.path,
+          file_size: uploadInfo.file.size,
         }));
 
         await registerUploadedFiles(
@@ -431,7 +433,7 @@ export const getApiSourceFiles = async (
       sourceId: params.sourceId,
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'last_scraped_at desc',
+      sorting: params.sorting || '',
       search: params.search,
       type: params.type,
     },

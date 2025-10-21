@@ -17,12 +17,27 @@ declaration:
       - field: files
         type: array
         description: "Array of uploaded file objects"
+    headers:
+      - field: cookie
+        type: string
+        description: "Cookie field"
+
+getUserInfo:
+  call: http.post
+  args:
+    url: "[#CKB_TIM]/jwt/custom-jwt-userinfo"
+    contentType: plaintext
+    headers:
+      cookie: ${incoming.headers.cookie}
+    plaintext: "customJwtCookie"
+  result: userInfoResult
 
 extractRequestData:
   assign:
     agency_id: "${incoming.body.agencyId}"
     source_id: "${incoming.body.sourceId}"
     files: "${incoming.body.files}"
+    uploaded_by: "${userInfoResult.response.body.idCode}"
 
 validateInput:
   switch:
@@ -30,6 +45,17 @@ validateInput:
       next: returnError
     - condition: ${files === null || files.length === 0}
       next: returnError
+
+enrichFilesWithUploadedBy:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/enrich_files_with_uploaded_by"
+    headers:
+      type: json
+    body:
+      files: ${files}
+      uploaded_by: ${uploaded_by}
+  result: enrichedFilesResult
 
 createUploadedSourceFiles:
   call: http.post
@@ -40,7 +66,7 @@ createUploadedSourceFiles:
     body:
       agency_id: ${agency_id}
       source_id: ${source_id}
-      files: ${files}
+      files: ${enrichedFilesResult.response.body}
   result: createResult
 
 transformToGetDownloadUrls:

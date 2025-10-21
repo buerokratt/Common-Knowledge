@@ -40,7 +40,7 @@ export const getReports = async (
     params: {
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'scraping_started_at desc',
+      sorting: params.sorting || '',
     },
   });
 
@@ -116,7 +116,7 @@ export const getReportPages = async (
       source_run_report_base_id: params.source_run_report_base_id,
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'scraped_at desc',
+      sorting: params.sorting || '',
     },
   });
 

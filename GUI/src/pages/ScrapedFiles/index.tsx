@@ -95,7 +95,7 @@ const ScrapedFiles: FC = () => {
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
-    if (sorting.length === 0) return 'last_scraped_at desc';
+    if (sorting.length === 0) return '';
 
     const sort = sorting[0];
     let field = sort.id;
@@ -160,14 +160,34 @@ const ScrapedFiles: FC = () => {
   // Delete file mutation
   const deleteMutation = useMutation({
     mutationFn: deleteFile,
-    onSuccess: () => {
+    onSuccess: async () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.urlDeleteSuccess'),
       });
       setDeleteModal(null);
-      queryClient.invalidateQueries(['scrapedFiles']);
+
+      // Refetch to get updated data
+      await queryClient.invalidateQueries(['scrapedFiles']);
+
+      // Check if current page is now out of bounds
+      const newTotal = (scrapedFilesData?.total || 0) - 1;
+      const maxPages = Math.ceil(newTotal / pagination.pageSize);
+
+      // Reset to last valid page if current page is out of bounds
+      if (pagination.pageIndex >= maxPages && maxPages > 0) {
+        setPagination({
+          ...pagination,
+          pageIndex: maxPages - 1,
+        });
+      } else if (maxPages === 0) {
+        // If no data left, reset to page 0
+        setPagination({
+          ...pagination,
+          pageIndex: 0,
+        });
+      }
     },
     onError: (error: any) => {
       toast.open({
