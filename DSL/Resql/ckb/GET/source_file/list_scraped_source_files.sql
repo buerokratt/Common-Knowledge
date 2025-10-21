@@ -116,6 +116,6 @@ ORDER BY
     CASE WHEN :sorting = 'last_scraped_at desc' THEN last_scraped_at END DESC,
     CASE WHEN :sorting = 'external_id asc' THEN external_id END ASC,
     CASE WHEN :sorting = 'external_id desc' THEN external_id END DESC,
-    last_scraped_at DESC NULLS LAST
+    updated_at DESC NULLS LAST
 LIMIT :page_size::INTEGER 
 OFFSET ((GREATEST(:page::INTEGER, 1) - 1) * :page_size::INTEGER);

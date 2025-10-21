@@ -101,8 +101,8 @@ ORDER BY
     CASE WHEN :sorting = 'excluded desc' THEN is_excluded END DESC,
     CASE WHEN :sorting = 'status asc' THEN status END ASC,
     CASE WHEN :sorting = 'status desc' THEN status END DESC,
-    CASE WHEN :sorting = 'created_at asc' THEN created_at END ASC,
-    CASE WHEN :sorting = 'created_at desc' THEN created_at END DESC,
-    created_at DESC NULLS LAST
+    CASE WHEN :sorting = 'last_scraped_at asc' THEN created_at END ASC,
+    CASE WHEN :sorting = 'last_scraped_at desc' THEN created_at END DESC,
+    updated_at DESC NULLS LAST
 LIMIT :page_size::INTEGER 
 OFFSET ((GREATEST(:page::INTEGER, 1) - 1) * :page_size::INTEGER);

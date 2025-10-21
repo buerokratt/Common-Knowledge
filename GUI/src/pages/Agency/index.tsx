@@ -40,7 +40,7 @@ const AgencyComponent: FC = () => {
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
-    if (sorting.length === 0) return 'updatedAt desc';
+    if (sorting.length === 0) return '';
 
     const sort = sorting[0];
     let field = sort.id;

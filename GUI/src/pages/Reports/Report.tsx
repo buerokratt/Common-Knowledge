@@ -33,7 +33,7 @@ const Report: FC = () => {
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
-    if (sorting.length === 0) return 'scraped_at desc';
+    if (sorting.length === 0) return '';
 
     const sort = sorting[0];
     let field = sort.id;

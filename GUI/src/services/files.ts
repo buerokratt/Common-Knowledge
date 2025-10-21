@@ -97,7 +97,7 @@ export const getScrapedFiles = async (
       isExcluded: params.isExcluded,
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'last_scraped_at desc',
+      sorting: params.sorting || '',
       search: params.search,
     },
   });
@@ -128,7 +128,7 @@ export const getUploadedFiles = async (
       isExcluded: params.isExcluded,
       page: params.page || 1,
       pageSize: params.pageSize || 10,
-      sorting: params.sorting || 'last_scraped_at desc',
+      sorting: params.sorting || '',
       search: params.search,
     },
   });

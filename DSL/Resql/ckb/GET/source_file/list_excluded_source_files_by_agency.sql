@@ -25,13 +25,19 @@ declaration:
         type: string
         description: "Base ID of the source"
 */
+WITH latest_files AS (
+    SELECT DISTINCT ON (base_id)
+        id, base_id, agency_base_id, source_base_id, is_deleted, updated_at
+    FROM data_collection.source_file
+    WHERE agency_base_id = :agency_base_id::UUID
+      AND is_excluded = true
+    ORDER BY base_id, updated_at DESC
+)
 SELECT
-    id, 
-    base_id, 
-    agency_base_id, 
+    id,
+    base_id,
+    agency_base_id,
     source_base_id
-FROM data_collection.source_file
-WHERE 
-    agency_base_id = :agency_base_id::UUID 
-    AND is_excluded = true 
-    AND is_deleted = false;
+FROM latest_files
+WHERE is_deleted = false
+ORDER BY updated_at DESC NULLS LAST;

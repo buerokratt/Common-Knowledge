@@ -87,7 +87,7 @@ const Agency: FC = () => {
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
-    if (sorting.length === 0) return 'last_scraped_at desc';
+    if (sorting.length === 0) return '';
 
     const sort = sorting[0];
     let field = sort.id;
@@ -96,7 +96,7 @@ const Agency: FC = () => {
     const fieldMap: Record<string, string> = {
       url: 'url',
       subsector: 'subsector',
-      lastScraped: 'last_scraped_at',
+      lastScrapedAt: 'last_scraped_at',
       status: 'status',
     };
 
