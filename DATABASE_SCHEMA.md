@@ -69,6 +69,8 @@ erDiagram
         TEXT file_name "Original filename"
         TEXT external_id "External system ID"
         TEXT subsector "Data subsector"
+        BIGINT file_size "File size in bytes"
+        TEXT uploaded_by "User ID who uploaded (uploaded_file only)"
         BOOLEAN is_excluded "Excluded from processing"
         BOOLEAN is_deleted "Soft delete flag"
     }

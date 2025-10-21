@@ -230,6 +230,7 @@ export const createSourceFile = async (
           file_name: uploadInfo.uploadItem.fileName,
           subsector: data.subsector,
           original_data_url: uploadInfo.uploadItem.path,
+          file_size: uploadInfo.file.size,
         }));
 
         await registerUploadedFiles(
@@ -295,6 +296,7 @@ export const addFilesToExistingSource = async (
           file_name: uploadInfo.uploadItem.fileName,
           subsector: data.subsector,
           original_data_url: uploadInfo.uploadItem.path,
+          file_size: uploadInfo.file.size,
         }));
 
         await registerUploadedFiles(

@@ -1,0 +1,12 @@
+[
+    {{#each files}}
+    {
+        "base_id": "{{this.base_id}}",
+        "file_name": "{{this.file_name}}",
+        "subsector": "{{this.subsector}}",
+        "original_data_url": "{{this.original_data_url}}",
+        "file_size": {{this.file_size}},
+        "uploaded_by": "{{@root.uploaded_by}}"
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+]

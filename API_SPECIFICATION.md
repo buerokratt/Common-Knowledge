@@ -262,19 +262,40 @@ List source files.
 #### POST /ckb/source-file/add-uploaded-files
 Add uploaded files to a source.
 
+**Request Headers:**
+- `Cookie`: Contains JWT with user information for tracking uploader
+
 **Request Body:**
 ```json
 {
-  "source_base_id": "uuid",
+  "agencyId": "uuid",
+  "sourceId": "uuid",
   "files": [
     {
+      "base_id": "uuid",
       "file_name": "document.pdf",
       "original_data_url": "s3://bucket/uploads/file",
-      "external_id": "ext_123"
+      "subsector": "Legal",
+      "file_size": 13264
     }
   ]
 }
 ```
+
+**Response:**
+```json
+[
+  {
+    "id": "uuid",
+    "url": null,
+    "hash": "",
+    "original_data_url": "s3://bucket/uploads/file",
+    "path": "s3://bucket/uploads/file"
+  }
+]
+```
+
+**Note:** The `uploaded_by` field is automatically populated from the JWT cookie (user's `idCode`).
 
 #### POST /ckb/source-file/get-upload-urls
 Get presigned upload URLs.

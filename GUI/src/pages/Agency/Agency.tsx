@@ -208,17 +208,14 @@ const Agency: FC = () => {
         })),
       }));
 
+      setUploadModal(false);
+      setFormData({ subsector: '', files: [] });
+
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.uploadSuccess'),
       });
-
-      // Close modal after a short delay to show success state
-      setTimeout(() => {
-        setUploadModal(false);
-        setFormData({ subsector: '', files: [] });
-      }, 1000);
 
       queryClient.invalidateQueries(['sources']);
     },

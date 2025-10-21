@@ -229,17 +229,14 @@ const UploadedFiles: FC = () => {
         })),
       }));
 
+      setUploadModal(false);
+      setFormData({ search: '', files: [], subsector: '' });
+
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.uploadSuccess'),
       });
-
-      // Close modal after a short delay to show success state
-      setTimeout(() => {
-        setUploadModal(false);
-        setFormData({ search: '', files: [], subsector: '' });
-      }, 1000);
 
       queryClient.invalidateQueries(['uploadedFiles']);
     },
