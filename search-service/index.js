@@ -231,17 +231,31 @@ app.get("/search/:sourceId", async (req, res) => {
           size: 1000, // Get more docs to find unique source_file_ids
           query: {
             bool: {
-              must: q.trim()
+              should: q.trim()
                 ? [
+                    {
+                      term: {
+                        url: {
+                          value: q.trim(),
+                          boost: 100,
+                        },
+                      },
+                    },
                     {
                       multi_match: {
                         query: q.trim(),
-                        fields: ["content^3", "page_title^2", "file_name^2"],
+                        fields: [
+                          "url^5",
+                          "content^3",
+                          "page_title^2",
+                          "file_name^2",
+                        ],
                         type: "best_fields",
                       },
                     },
                   ]
                 : [{ match_all: {} }],
+              minimum_should_match: q.trim() ? 1 : 0,
             },
           },
           _source: ["source_file_id"],
@@ -285,17 +299,31 @@ app.get("/search/:sourceId", async (req, res) => {
           size: parseInt(size),
           query: {
             bool: {
-              must: q.trim()
+              should: q.trim()
                 ? [
+                    {
+                      term: {
+                        url: {
+                          value: q.trim(),
+                          boost: 100,
+                        },
+                      },
+                    },
                     {
                       multi_match: {
                         query: q.trim(),
-                        fields: ["content^3", "page_title^2", "file_name^2"],
+                        fields: [
+                          "url^5",
+                          "content^3",
+                          "page_title^2",
+                          "file_name^2",
+                        ],
                         type: "best_fields",
                       },
                     },
                   ]
                 : [{ match_all: {} }],
+              minimum_should_match: q.trim() ? 1 : 0,
             },
           },
           highlight: {

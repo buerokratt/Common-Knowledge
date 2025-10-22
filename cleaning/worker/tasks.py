@@ -54,7 +54,7 @@ def clean_html(entity: EntityToClean):
 
         # If partition_html returns empty, fall back to BeautifulSoup on main
         logger.info(f'partition_html on <main> returned empty, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
-        cleaned_text = main_element.get_text(separator='\n', strip=True)
+        cleaned_text = main_element.get_text(separator='\n\n', strip=True)
         logger.info(f'BeautifulSoup extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
         return cleaned_text
 
@@ -70,7 +70,7 @@ def clean_html(entity: EntityToClean):
     # Step 3: If partition_html returns empty, fallback to BeautifulSoup
     if len(partitioned) == 0:
         logger.info(f'partition_html returned empty content, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
-        cleaned_text = soup.get_text(separator='\n', strip=True)
+        cleaned_text = soup.get_text(separator='\n\n', strip=True)
         logger.info(f'BeautifulSoup fallback extracted {len(cleaned_text)} chars for {entity.file_path.as_posix()}')
 
     return cleaned_text

@@ -33,6 +33,10 @@ class BaseSpider(Spider):
             self.task = kwargs['task']
 
     def check_source_is_stopping(self):
+        # Skip check if this is a manual file refresh (ignore_stopping flag set)
+        if hasattr(self.task, 'ignore_stopping') and self.task.ignore_stopping:
+            return
+
         try:
             is_stopping = requests.get(
                 f'{self.settings.get('RUUTER_INTERNAL')}/ckb/source/get',

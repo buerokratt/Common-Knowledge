@@ -175,7 +175,7 @@ class ScrappingFinishedPipeline:
     def close_spider(self, spider: Spider):
         if not hasattr(spider, 'task'):
             return
-    
+
         spider: BaseSpider
         task: BaseObject = spider.task
 
@@ -193,6 +193,11 @@ class SetSourceStatusRunningPipeline:
 
         spider: BaseSpider
         task: BaseObject = spider.task
+
+        # Skip updating source status for manual file refresh (ignore_stopping flag)
+        # This prevents clearing is_stopping flag when refreshing individual files
+        if hasattr(task, 'ignore_stopping') and task.ignore_stopping:
+            return
 
         requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status', json={
             'source_id': task.source_id,

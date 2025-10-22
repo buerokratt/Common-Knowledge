@@ -4,6 +4,7 @@ from pydantic import BaseModel, HttpUrl
 class BaseObject(BaseModel):
     agency_id: str
     source_id: str
+    ignore_stopping: bool = False
 
 
 class LinkToScrape(BaseModel):

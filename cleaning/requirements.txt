@@ -1,6 +1,6 @@
 fastapi==0.115.12
 uvicorn==0.34.2
-unstructured[pdf,docx,doc]==0.18.2
+unstructured[pdf,docx,doc]==0.18.5
 pydantic-settings==2.10.1
 beautifulsoup4==4.13.4
 langdetect==1.0.9
