@@ -136,7 +136,16 @@ class SitemapCollectSpider(BaseSpider):
             if scrapped_item.metadata.file_type != '.html':
                 continue
 
-            for href in response.css("a::attr(href)").getall():
+            # Use rendered HTML for link extraction if available (for SPAs)
+            rendered_html = response.meta.get('rendered_html')
+            if rendered_html:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(rendered_html, 'lxml')
+                links = [a.get('href') for a in soup.find_all('a', href=True)]
+            else:
+                links = response.css("a::attr(href)").getall()
+
+            for href in links:
                 next_url = urljoin(response.url, href)
                 next_url = next_url.split('#')[0]
 

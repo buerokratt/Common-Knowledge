@@ -33,6 +33,10 @@ class BaseSpider(Spider):
             self.task = kwargs['task']
 
     def check_source_is_stopping(self):
+        # Skip check if this is a manual file refresh (ignore_stopping flag set)
+        if hasattr(self.task, 'ignore_stopping') and self.task.ignore_stopping:
+            return
+
         try:
             is_stopping = requests.get(
                 f'{self.settings.get('RUUTER_INTERNAL')}/ckb/source/get',
@@ -122,12 +126,29 @@ class BaseSpider(Spider):
 
         # Check if Playwright page is available (might not be if direct HTTP download was used)
         playwright_page = response.meta.get("playwright_page")
+        rendered_html = None
+
         if playwright_page:
-            # Use Playwright page for title extraction
+            # Use Playwright page for title extraction and get rendered HTML
             async with self.close_page(response) as page:
                 page: Page
-                if file_extension == '.html':
+
+                # Check if this is a sitemap or XML file - don't wait or render, use raw content
+                is_sitemap = 'sitemap' in response.url.lower() or file_extension == '.xml'
+
+                if file_extension == '.html' and not is_sitemap:
+                    # Wait for content to actually render (check if body has meaningful content)
+                    try:
+                        self.logger.info('Waiting for dynamic content to render...')
+                        await page.wait_for_load_state('networkidle')
+                        self.logger.info('Content detected, proceeding...')
+                    except Exception as e:
+                        # If timeout or error, proceed anyway
+                        self.logger.warning(f'Timeout waiting for content, proceeding anyway: {e}')
+
                     title = await page.title()
+                    # Get the fully rendered HTML after JavaScript execution
+                    rendered_html = await page.content()
                 else:
                     title = response.url
         else:
@@ -140,18 +161,26 @@ class BaseSpider(Spider):
             else:
                 title = response.url
 
+        # Use rendered HTML if available, otherwise use response.body
+        body_to_save = rendered_html.encode('utf-8') if rendered_html else response.body
+
         if file_extension == '.html':
-            soup = BeautifulSoup(response.body, 'lxml')
+            soup = BeautifulSoup(body_to_save, 'lxml')
             text = soup.get_text()
             hashed = hashlib.sha1(text.encode()).hexdigest()
         else:
-            hashed = hashlib.sha1(response.body).hexdigest()
+            hashed = hashlib.sha1(body_to_save).hexdigest()
 
-        file_item = FileItem(body=response.body, source_url=response.url, extension=file_extension)
+        file_item = FileItem(body=body_to_save, source_url=response.url, extension=file_extension)
 
         metadata_item = MetadataItem(
             file_type=file_extension, metadata=Metadata(), source_url=response.url, page_title=title
         )
 
         scrapped_item = ScrappedItem(file=file_item, metadata=metadata_item, hash=hashed)
+
+        # Store rendered HTML in response meta for link extraction by subclasses
+        if rendered_html:
+            response.meta['rendered_html'] = rendered_html
+
         yield scrapped_item

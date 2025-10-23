@@ -23,6 +23,8 @@ app = FastAPI()
 
 @app.post('/specified-pages-scrapper-task')
 def trigger_specified_pages_scrapper_task(task: SpecifiedLinksScrapeTask):
+    # Always ignore stopping for manual file refresh
+    task.ignore_stopping = True
     specified_links_scrapper_task.delay(task.model_dump(mode='json'))
 
 
@@ -59,6 +61,8 @@ def trigger_eesti_scrapper_task(task: EestiScrapperTask):
 
 @app.post('/specified-api-files-scrapper-task')
 def trigger_specified_api_files_scrapper_task(task: SpecifiedApiFilesScrapeTask):
+    # Always ignore stopping for manual file refresh
+    task.ignore_stopping = True
     specified_api_files_scrapper_task.delay(task.model_dump(mode='json'))
 
 @app.post('/generate-edited-metadata')
