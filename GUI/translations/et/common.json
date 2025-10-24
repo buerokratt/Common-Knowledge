@@ -601,6 +601,7 @@
     "allowedFormats": "Lubatud formaadid: ",
     "maxSizeExceeded": "Maksimaalne suurus ületatud.",
     "fileAlreadyExists": "Fail on juba olemas.",
+    "duplicateFile": "Sama nimega fail on juba valitud.",
     "success": "Edukas",
     "fileExists": "Fail eksisteerib",
     "fileExceedsLimit": "Failisuurus ületab maksimaalset piiri",
