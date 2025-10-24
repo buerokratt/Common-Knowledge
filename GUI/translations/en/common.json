@@ -601,6 +601,7 @@
     "allowedFormats": "Allowed formats: ",
     "maxSizeExceeded": "Maximum size exceeded.",
     "fileAlreadyExists": "File already exists.",
+    "duplicateFile": "A file with the same name is already selected.",
     "success": "Success",
     "fileExists": "File exists",
     "fileExceedsLimit": "File size exceeds the maximum limit",

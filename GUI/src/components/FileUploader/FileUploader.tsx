@@ -96,9 +96,22 @@ const FileUploader: FC<FileUploaderProps> = ({
     const selectedFiles = event.target.files;
     if (!selectedFiles) return;
 
-    const newFiles: FileItem[] = Array.from(selectedFiles).map((file) =>
-      validateSingleFile(file)
-    );
+    const newFiles: FileItem[] = Array.from(selectedFiles).map((file) => {
+      const validatedFile = validateSingleFile(file);
+
+      // Check for duplicate filename in existing files
+      const isDuplicate = files.some(existingFile => existingFile.name === file.name);
+
+      if (isDuplicate && validatedFile.status === 'pending') {
+        return {
+          ...validatedFile,
+          status: 'error' as const,
+          message: t('fileUpload.duplicateFile'),
+        };
+      }
+
+      return validatedFile;
+    });
 
     const updatedFiles = [...files, ...newFiles];
     onFilesChange(updatedFiles);
@@ -126,9 +139,22 @@ const FileUploader: FC<FileUploaderProps> = ({
     const droppedFiles = e.dataTransfer.files;
     if (!droppedFiles) return;
 
-    const newFiles: FileItem[] = Array.from(droppedFiles).map((file) =>
-      validateSingleFile(file)
-    );
+    const newFiles: FileItem[] = Array.from(droppedFiles).map((file) => {
+      const validatedFile = validateSingleFile(file);
+
+      // Check for duplicate filename in existing files
+      const isDuplicate = files.some(existingFile => existingFile.name === file.name);
+
+      if (isDuplicate && validatedFile.status === 'pending') {
+        return {
+          ...validatedFile,
+          status: 'error' as const,
+          message: t('fileUpload.duplicateFile'),
+        };
+      }
+
+      return validatedFile;
+    });
 
     const updatedFiles = [...files, ...newFiles];
     onFilesChange(updatedFiles);
