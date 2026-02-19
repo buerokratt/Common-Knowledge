@@ -1,0 +1,94 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Delete multiple source files by base IDs including search index cleanup"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: baseIds
+        type: array
+        description: "Array of base IDs of the source files to delete"
+
+extractRequestData:
+  assign:
+    base_ids: "${incoming.body.baseIds}"
+
+deleteSourceFilesFromDatabase:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/delete_source_files_batch"
+    headers:
+      type: json
+    body:
+      base_ids: ${base_ids}
+  result: deleteDbResult
+
+validateDatabaseDeletion:
+  switch:
+    - condition: "${deleteDbResult.response.length == 0 || deleteDbResult.response.statusCodeValue >= 400}"
+      next: databaseDeleteError
+  next: transformToS3Paths
+
+transformToS3Paths:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/transform_source_files_to_s3_paths"
+    headers:
+      type: json
+    body:
+      files: ${deleteDbResult.response.body}
+  result: transformedPaths
+
+transformToSearchDeletes:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/transform_source_files_to_search_deletes"
+    headers:
+      type: json
+    body:
+      files: ${deleteDbResult.response.body}
+  result: searchDeletes
+
+deleteFromSearchIndex:
+  call: http.post
+  args:
+    url: "[#CKB_SEARCH]/documents/bulk-delete"
+    headers:
+      type: json
+    body: ${searchDeletes.response.body}
+  result: searchDeleteResult
+
+deleteSourceFilesFromS3:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/delete-files-async"
+    headers:
+      type: json
+    body:
+      files: ${transformedPaths.response.body.s3_files}
+      callback:
+        url: "[#CKB_RUUTER_INTERNAL]/agency/update-zip-dirty"
+        method: "POST"
+        body:
+          agencyId: "${deleteDbResult.response.body[0].agencyBaseId}"
+  result: deleteS3Result
+
+assignSuccessResponse:
+  assign:
+    response:
+      message: "Source files deleted from database, search index, and S3 deletion task started"
+      deleted_count: ${deleteDbResult.response.body.length}
+      deleted_files: ${deleteDbResult.response.body}
+
+returnSuccess:
+  return: ${response}
+  status: 200
+  next: end
+
+databaseDeleteError:
+  return: "No source files found or they have been updated by another process"
+  status: 404
+  next: end
