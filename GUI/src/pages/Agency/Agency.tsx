@@ -692,13 +692,13 @@ const Agency: FC = () => {
   // Define multiselect actions
   const multiselectActions: MultiselectAction[] = [
     {
-      label: 'Include',
+      label: t('global.include'),
       icon: <MdCheckCircle />,
       variant: 'secondary',
       onClick: handleBulkInclude,
     },
     {
-      label: 'Exclude',
+      label: t('global.exclude'),
       icon: <MdCancel />,
       variant: 'secondary',
       onClick: handleBulkExclude,
@@ -973,7 +973,10 @@ const Agency: FC = () => {
             </Track>
           }
         >
-          Are you sure you want to delete {bulkDeleteConfirm.length} selected {bulkDeleteConfirm.length === 1 ? 'source' : 'sources'}?
+          {t('global.confirmBulkDelete', {
+            count: bulkDeleteConfirm.length,
+            unit: bulkDeleteConfirm.length === 1 ? t('global.source') : t('global.sources')
+          })}
         </Dialog>
       )}
 
@@ -999,14 +1002,17 @@ const Agency: FC = () => {
             </Track>
           }
         >
-          Are you sure you want to refresh {bulkRefreshConfirm.length} selected {bulkRefreshConfirm.length === 1 ? 'source' : 'sources'}?
+          {t('global.confirmBulkRefresh', {
+            count: bulkRefreshConfirm.length,
+            unit: bulkRefreshConfirm.length === 1 ? t('global.source') : t('global.sources')
+          })}
         </Dialog>
       )}
 
       {/* Bulk Include Confirmation Modal */}
       {bulkIncludeConfirm && (
         <Dialog
-          title="Include Sources"
+          title={t('global.includeSources')}
           onClose={() => setBulkIncludeConfirm(null)}
           footer={
             <Track gap={16} justify="end">
@@ -1020,19 +1026,22 @@ const Agency: FC = () => {
                 appearance="primary"
                 onClick={confirmBulkInclude}
               >
-                Include
+                {t('global.include')}
               </Button>
             </Track>
           }
         >
-          Are you sure you want to include {bulkIncludeConfirm.length} selected {bulkIncludeConfirm.length === 1 ? 'source' : 'sources'}?
+          {t('global.confirmBulkInclude', {
+            count: bulkIncludeConfirm.length,
+            unit: bulkIncludeConfirm.length === 1 ? t('global.source') : t('global.sources')
+          })}
         </Dialog>
       )}
 
       {/* Bulk Exclude Confirmation Modal */}
       {bulkExcludeConfirm && (
         <Dialog
-          title="Exclude Sources"
+          title={t('global.excludeSources')}
           onClose={() => setBulkExcludeConfirm(null)}
           footer={
             <Track gap={16} justify="end">
@@ -1046,12 +1055,15 @@ const Agency: FC = () => {
                 appearance="primary"
                 onClick={confirmBulkExclude}
               >
-                Exclude
+                {t('global.exclude')}
               </Button>
             </Track>
           }
         >
-          Are you sure you want to exclude {bulkExcludeConfirm.length} selected {bulkExcludeConfirm.length === 1 ? 'source' : 'sources'}?
+          {t('global.confirmBulkExclude', {
+            count: bulkExcludeConfirm.length,
+            unit: bulkExcludeConfirm.length === 1 ? t('global.source') : t('global.sources')
+          })}
         </Dialog>
       )}
     </div>
