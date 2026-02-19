@@ -31,6 +31,8 @@
     "resultCount": "Kuvan korraga",
     "paginationNavigation": "Lehtedel navigeerimine",
     "gotoPage": "Mine lehele",
+    "rowSelected": "rida valitud",
+    "rowsSelected": "rida valitud",
     "name": "Nimi",
     "idCode": "Isikukood",
     "status": "Staatus",

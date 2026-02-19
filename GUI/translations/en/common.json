@@ -31,6 +31,8 @@
     "resultCount": "Result count",
     "paginationNavigation": "Pagination navigation",
     "gotoPage": "Goto page",
+    "rowSelected": "row selected",
+    "rowsSelected": "rows selected",
     "name": "Name",
     "idCode": "ID code",
     "status": "Status",

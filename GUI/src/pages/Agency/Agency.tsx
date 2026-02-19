@@ -1,4 +1,4 @@
-import { FC, useState, useMemo } from 'react';
+import { FC, useState, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
@@ -8,6 +8,8 @@ import {
   MdOutlineEdit,
   MdRefresh,
   MdOutlineStopCircle,
+  MdCheckCircle,
+  MdCancel,
 } from 'react-icons/md';
 import {
   Button,
@@ -19,12 +21,14 @@ import {
   Track,
   FileUploader,
   Tooltip,
+  MultiselectAction,
 } from 'components';
 import {
   ColumnDef,
   PaginationState,
   SortingState,
   ColumnFiltersState,
+  Row,
 } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
 import './Agency.scss';
@@ -71,6 +75,12 @@ const Agency: FC = () => {
   const [addUrlModal, setAddUrlModal] = useState(false);
   const [editModal, setEditModal] = useState<Source | null>(null);
   const [deleteModal, setDeleteModal] = useState<Source | null>(null);
+  
+  // Bulk action confirmation dialogs
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<Row<Source>[] | null>(null);
+  const [bulkRefreshConfirm, setBulkRefreshConfirm] = useState<Row<Source>[] | null>(null);
+  const [bulkIncludeConfirm, setBulkIncludeConfirm] = useState<Row<Source>[] | null>(null);
+  const [bulkExcludeConfirm, setBulkExcludeConfirm] = useState<Row<Source>[] | null>(null);
 
   // Add table state for server-side pagination and sorting
   const [pagination, setPagination] = useState<PaginationState>({
@@ -450,6 +460,55 @@ const Agency: FC = () => {
     refreshMutation.mutate(sourceId);
   };
 
+  // Multiselect action handlers
+  const handleBulkDelete = (selectedRows: Row<Source>[]) => {
+    setBulkDeleteConfirm(selectedRows);
+  };
+
+  const confirmBulkDelete = () => {
+    if (!bulkDeleteConfirm) return;
+    const selectedIds = bulkDeleteConfirm.map(row => row.original.baseId);
+    console.log('Delete selected rows:', selectedIds);
+    // TODO: Implement bulk delete API call
+    setBulkDeleteConfirm(null);
+  };
+
+  const handleBulkRefresh = (selectedRows: Row<Source>[]) => {
+    setBulkRefreshConfirm(selectedRows);
+  };
+
+  const confirmBulkRefresh = () => {
+    if (!bulkRefreshConfirm) return;
+    const selectedIds = bulkRefreshConfirm.map(row => row.original.baseId);
+    console.log('Refresh selected rows:', selectedIds);
+    // TODO: Implement bulk refresh API call
+    setBulkRefreshConfirm(null);
+  };
+
+  const handleBulkInclude = (selectedRows: Row<Source>[]) => {
+    setBulkIncludeConfirm(selectedRows);
+  };
+
+  const confirmBulkInclude = () => {
+    if (!bulkIncludeConfirm) return;
+    const selectedIds = bulkIncludeConfirm.map(row => row.original.baseId);
+    console.log('Include selected rows:', selectedIds);
+    // TODO: Implement bulk include API call
+    setBulkIncludeConfirm(null);
+  };
+
+  const handleBulkExclude = (selectedRows: Row<Source>[]) => {
+    setBulkExcludeConfirm(selectedRows);
+  };
+
+  const confirmBulkExclude = () => {
+    if (!bulkExcludeConfirm) return;
+    const selectedIds = bulkExcludeConfirm.map(row => row.original.baseId);
+    console.log('Exclude selected rows:', selectedIds);
+    // TODO: Implement bulk exclude API call
+    setBulkExcludeConfirm(null);
+  };
+
   // Handle pagination change
   const handlePaginationChange = (newPagination: PaginationState) => {
     setPagination(newPagination);
@@ -461,6 +520,38 @@ const Agency: FC = () => {
   };
 
   const columns: ColumnDef<Source>[] = [
+    {
+      id: 'select',
+      header: ({ table }) => {
+        const checkboxRef = useRef<HTMLInputElement>(null);
+        
+        useEffect(() => {
+          if (checkboxRef.current) {
+            checkboxRef.current.indeterminate = table.getIsSomeRowsSelected() && !table.getIsAllRowsSelected();
+          }
+        }, [table.getIsSomeRowsSelected(), table.getIsAllRowsSelected()]);
+
+        return (
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            checked={table.getIsAllRowsSelected()}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+          />
+        );
+      },
+      cell: ({ row }) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          disabled={!row.getCanSelect()}
+          onChange={row.getToggleSelectedHandler()}
+        />
+      ),
+      meta: {
+        size: 10,
+      },
+    },
     {
       accessorKey: 'url',
       header: t('knowledgeBase.url'),
@@ -598,6 +689,34 @@ const Agency: FC = () => {
     },
   ];
 
+  // Define multiselect actions
+  const multiselectActions: MultiselectAction[] = [
+    {
+      label: 'Include',
+      icon: <MdCheckCircle />,
+      variant: 'secondary',
+      onClick: handleBulkInclude,
+    },
+    {
+      label: 'Exclude',
+      icon: <MdCancel />,
+      variant: 'secondary',
+      onClick: handleBulkExclude,
+    },
+    {
+      label: t('knowledgeBase.refresh'),
+      icon: <MdRefresh />,
+      variant: 'secondary',
+      onClick: handleBulkRefresh,
+    },
+    {
+      label: t('global.delete'),
+      icon: <MdOutlineDeleteOutline />,
+      variant: 'danger',
+      onClick: handleBulkDelete,
+    }
+  ];
+
   // Show loading state
   if (isLoadingAgency || isLoadingSources) {
     return <div>Loading...</div>;
@@ -644,6 +763,8 @@ const Agency: FC = () => {
           filterable
           pagesCount={sourcesData?.totalPages ?? 0}
           isClientSide={false}
+          enableRowSelection={true}
+          multiselectActions={multiselectActions}
         />
 
         <div className="agencies__footer">
@@ -827,6 +948,110 @@ const Agency: FC = () => {
           }
         >
           {t('knowledgeBase.deleteSourceConfirmation')}
+        </Dialog>
+      )}
+
+      {/* Bulk Delete Confirmation Modal */}
+      {bulkDeleteConfirm && (
+        <Dialog
+          title={t('global.delete')}
+          onClose={() => setBulkDeleteConfirm(null)}
+          footer={
+            <Track gap={16} justify="end">
+              <Button
+                appearance="secondary"
+                onClick={() => setBulkDeleteConfirm(null)}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="error"
+                onClick={confirmBulkDelete}
+              >
+                {t('global.delete')}
+              </Button>
+            </Track>
+          }
+        >
+          Are you sure you want to delete {bulkDeleteConfirm.length} selected {bulkDeleteConfirm.length === 1 ? 'source' : 'sources'}?
+        </Dialog>
+      )}
+
+      {/* Bulk Refresh Confirmation Modal */}
+      {bulkRefreshConfirm && (
+        <Dialog
+          title={t('knowledgeBase.refresh')}
+          onClose={() => setBulkRefreshConfirm(null)}
+          footer={
+            <Track gap={16} justify="end">
+              <Button
+                appearance="secondary"
+                onClick={() => setBulkRefreshConfirm(null)}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={confirmBulkRefresh}
+              >
+                {t('knowledgeBase.refresh')}
+              </Button>
+            </Track>
+          }
+        >
+          Are you sure you want to refresh {bulkRefreshConfirm.length} selected {bulkRefreshConfirm.length === 1 ? 'source' : 'sources'}?
+        </Dialog>
+      )}
+
+      {/* Bulk Include Confirmation Modal */}
+      {bulkIncludeConfirm && (
+        <Dialog
+          title="Include Sources"
+          onClose={() => setBulkIncludeConfirm(null)}
+          footer={
+            <Track gap={16} justify="end">
+              <Button
+                appearance="secondary"
+                onClick={() => setBulkIncludeConfirm(null)}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={confirmBulkInclude}
+              >
+                Include
+              </Button>
+            </Track>
+          }
+        >
+          Are you sure you want to include {bulkIncludeConfirm.length} selected {bulkIncludeConfirm.length === 1 ? 'source' : 'sources'}?
+        </Dialog>
+      )}
+
+      {/* Bulk Exclude Confirmation Modal */}
+      {bulkExcludeConfirm && (
+        <Dialog
+          title="Exclude Sources"
+          onClose={() => setBulkExcludeConfirm(null)}
+          footer={
+            <Track gap={16} justify="end">
+              <Button
+                appearance="secondary"
+                onClick={() => setBulkExcludeConfirm(null)}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={confirmBulkExclude}
+              >
+                Exclude
+              </Button>
+            </Track>
+          }
+        >
+          Are you sure you want to exclude {bulkExcludeConfirm.length} selected {bulkExcludeConfirm.length === 1 ? 'source' : 'sources'}?
         </Dialog>
       )}
     </div>
