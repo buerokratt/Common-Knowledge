@@ -1,4 +1,4 @@
-import { FC, useState, useMemo } from 'react';
+import { FC, useState, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
@@ -8,6 +8,8 @@ import {
   MdOutlineTableChart,
   MdGridView,
   MdOutlineDeleteOutline,
+  MdCheckCircle,
+  MdCancel,
 } from 'react-icons/md';
 import {
   Button,
@@ -20,12 +22,16 @@ import {
   SwitchBox,
   Editor,
   Tooltip,
+  MultiselectAction,
 } from 'components';
 import {
   ColumnDef,
   PaginationState,
   SortingState,
   ColumnFiltersState,
+  Row,
+  CellContext,
+  HeaderContext,
 } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
 import 'pages/Agency/AgencyList.scss';
@@ -34,6 +40,7 @@ import {
   updateFileExclusion,
   refreshScrapedFile,
   deleteFile,
+  bulkDeleteFiles,
   downloadFile,
   fetchFileData,
   updateFileEditedContentWithUpload,
@@ -58,6 +65,13 @@ const ScrapedFiles: FC = () => {
   const [formData, setFormData] = useState<FormData>({
     search: '',
   });
+  const [rowSelection, setRowSelection] = useState({});
+  
+  // Bulk action confirmation dialogs
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<Row<ScrapedFile>[] | null>(null);
+  const [bulkRefreshConfirm, setBulkRefreshConfirm] = useState<Row<ScrapedFile>[] | null>(null);
+  const [bulkIncludeConfirm, setBulkIncludeConfirm] = useState<Row<ScrapedFile>[] | null>(null);
+  const [bulkExcludeConfirm, setBulkExcludeConfirm] = useState<Row<ScrapedFile>[] | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Table state for server-side pagination and sorting
@@ -74,7 +88,7 @@ const ScrapedFiles: FC = () => {
   // Handle search button click
   const handleSearchSubmit = () => {
     setSearchQuery(formData.search);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+    setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
   };
 
   // Handle Enter key in search input
@@ -137,6 +151,11 @@ const ScrapedFiles: FC = () => {
     keepPreviousData: true,
   });
 
+  // Clear row selection when data changes
+  useEffect(() => {
+    setRowSelection({});
+  }, [scrapedFilesData?.total]);
+
   // Refresh file mutation
   const refreshMutation = useMutation({
     mutationFn: refreshScrapedFile,
@@ -194,6 +213,52 @@ const ScrapedFiles: FC = () => {
         type: 'error',
         title: t('global.notificationError'),
         message: error.message || t('knowledgeBase.deleteError'),
+      });
+    },
+  });
+
+  // Bulk delete files mutation
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (fileIds: string[]) => bulkDeleteFiles(fileIds),
+    onSuccess: async (_: void, fileIds: string[]) => {
+      // Clear selections immediately
+      setRowSelection({});
+      setBulkDeleteConfirm(null);
+
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('global.bulkDeleteSuccess', {
+          count: fileIds.length,
+        }),
+      });
+
+      // Refetch to get updated data
+      await queryClient.invalidateQueries(['scrapedFiles']);
+
+      // Check if current page is now out of bounds
+      const newTotal = (scrapedFilesData?.total || 0) - fileIds.length;
+      const maxPages = Math.ceil(newTotal / pagination.pageSize);
+
+      // Reset to last valid page if current page is out of bounds
+      if (pagination.pageIndex >= maxPages && maxPages > 0) {
+        setPagination({
+          ...pagination,
+          pageIndex: maxPages - 1,
+        });
+      } else if (maxPages === 0) {
+        // If no data left, reset to page 0
+        setPagination({
+          ...pagination,
+          pageIndex: 0,
+        });
+      }
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('global.bulkDeleteError'),
       });
     },
   });
@@ -385,12 +450,91 @@ const ScrapedFiles: FC = () => {
     setSorting(newSorting);
   };
 
+  // Multiselect action handlers
+  const handleBulkDelete = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkDeleteConfirm(selectedRows);
+  };
+
+  const confirmBulkDelete = () => {
+    if (!bulkDeleteConfirm) return;
+    const selectedIds = bulkDeleteConfirm.map(row => row.original.baseId);
+    bulkDeleteMutation.mutate(selectedIds);
+  };
+
+  const handleBulkRefresh = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkRefreshConfirm(selectedRows);
+  };
+
+  const confirmBulkRefresh = () => {
+    if (!bulkRefreshConfirm) return;
+    const selectedIds = bulkRefreshConfirm.map(row => row.original.baseId);
+    console.log('Refresh selected files:', selectedIds);
+    // TODO: Implement bulk refresh API call
+    setBulkRefreshConfirm(null);
+  };
+
+  const handleBulkInclude = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkIncludeConfirm(selectedRows);
+  };
+
+  const confirmBulkInclude = () => {
+    if (!bulkIncludeConfirm) return;
+    const selectedIds = bulkIncludeConfirm.map(row => row.original.baseId);
+    console.log('Include selected files:', selectedIds);
+    // TODO: Implement bulk include API call (set isExcluded = false)
+    setBulkIncludeConfirm(null);
+  };
+
+  const handleBulkExclude = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkExcludeConfirm(selectedRows);
+  };
+
+  const confirmBulkExclude = () => {
+    if (!bulkExcludeConfirm) return;
+    const selectedIds = bulkExcludeConfirm.map(row => row.original.baseId);
+    console.log('Exclude selected files:', selectedIds);
+    // TODO: Implement bulk exclude API call (set isExcluded = true)
+    setBulkExcludeConfirm(null);
+  };
+
   const columns: ColumnDef<ScrapedFile>[] = [
+    {
+      id: 'select',
+      header: ({ table }: HeaderContext<ScrapedFile, any>) => {
+        const checkboxRef = useRef<HTMLInputElement>(null);
+        
+        useEffect(() => {
+          if (checkboxRef.current) {
+            checkboxRef.current.indeterminate = table.getIsSomeRowsSelected() && !table.getIsAllRowsSelected();
+          }
+        }, [table.getIsSomeRowsSelected(), table.getIsAllRowsSelected()]);
+
+        return (
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            checked={table.getIsAllRowsSelected()}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+          />
+        );
+      },
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          disabled={!row.getCanSelect()}
+          onChange={row.getToggleSelectedHandler()}
+        />
+      ),
+      meta: {
+        size: 10,
+      },
+    },
     {
       accessorKey: 'url',
       header: t('knowledgeBase.url'),
       enableColumnFilter: false,
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <a
           href={row.original.url}
           target="_blank"
@@ -417,7 +561,7 @@ const ScrapedFiles: FC = () => {
       header: t('knowledgeBase.pageTitle'),
       enableColumnFilter: false,
 
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <Tooltip content={row.original.pageTitle}>
           <div
             style={{
@@ -435,10 +579,10 @@ const ScrapedFiles: FC = () => {
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <Track
           justify="end"
-          align="flex-start"
+          align="stretch"
           gap={32}
           style={{ width: 'max-content' }}
         >
@@ -509,7 +653,7 @@ const ScrapedFiles: FC = () => {
       id: 'excluded',
       enableColumnFilter: false,
       header: t('knowledgeBase.excluded'),
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <SwitchBox
           label=""
           checked={row.original.isExcluded}
@@ -526,7 +670,7 @@ const ScrapedFiles: FC = () => {
     {
       accessorKey: 'status',
       header: t('global.status'),
-      cell: ({ row }) => {
+      cell: ({ row }: CellContext<ScrapedFile, any>) => {
         const color =
           row.original.status === 'finished'
             ? '#266B42'
@@ -551,7 +695,7 @@ const ScrapedFiles: FC = () => {
       accessorKey: 'lastScrapedAt',
       header: t('knowledgeBase.scraped'),
       enableColumnFilter: false,
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <span>
           {new Date(row.original.lastScrapedAt).toLocaleString('et-EE', {
             day: '2-digit',
@@ -563,6 +707,34 @@ const ScrapedFiles: FC = () => {
         </span>
       ),
     },
+  ];
+
+  // Define multiselect actions
+  const multiselectActions: MultiselectAction[] = [
+    {
+      label: t('global.include'),
+      icon: <MdCheckCircle />,
+      variant: 'secondary',
+      onClick: handleBulkInclude,
+    },
+    {
+      label: t('global.exclude'),
+      icon: <MdCancel />,
+      variant: 'secondary',
+      onClick: handleBulkExclude,
+    },
+    {
+      label: t('knowledgeBase.refresh'),
+      icon: <MdRefresh />,
+      variant: 'secondary',
+      onClick: handleBulkRefresh,
+    },
+    {
+      label: t('global.delete'),
+      icon: <MdOutlineDeleteOutline />,
+      variant: 'danger',
+      onClick: handleBulkDelete,
+    }
   ];
 
   if (isLoading) {
@@ -607,7 +779,6 @@ const ScrapedFiles: FC = () => {
                 label={t('knowledgeBase.searchWithinListedSources')}
                 name="search"
                 value={formData.search}
-                handleSearchChange
                 onChange={handleSearchChange}
                 onKeyPress={handleSearchKeyPress}
               />
@@ -634,6 +805,10 @@ const ScrapedFiles: FC = () => {
             filterable
             pagesCount={scrapedFilesData?.totalPages ?? 0}
             isClientSide={false}
+            enableRowSelection={true}
+            rowSelection={rowSelection}
+            setRowSelection={setRowSelection}
+            multiselectActions={multiselectActions}
           />
 
           <div className="agencies__footer">
@@ -674,6 +849,126 @@ const ScrapedFiles: FC = () => {
                 url: deleteModal.url,
               })}
             </p>
+          </Dialog>
+        )}
+
+        {/* Bulk Delete Confirmation Modal */}
+        {bulkDeleteConfirm && (
+          <Dialog
+            title={t('global.delete')}
+            onClose={() => setBulkDeleteConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkDeleteConfirm(null)}
+                  disabled={bulkDeleteMutation.isLoading}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="error"
+                  onClick={confirmBulkDelete}
+                  disabled={bulkDeleteMutation.isLoading}
+                >
+                  {bulkDeleteMutation.isLoading
+                    ? t('global.deleting')
+                    : t('global.delete')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkDelete', {
+              count: bulkDeleteConfirm.length,
+              unit: bulkDeleteConfirm.length === 1 ? t('global.file') : t('global.files')
+            })}
+          </Dialog>
+        )}
+
+        {/* Bulk Refresh Confirmation Modal */}
+        {bulkRefreshConfirm && (
+          <Dialog
+            title={t('knowledgeBase.refresh')}
+            onClose={() => setBulkRefreshConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkRefreshConfirm(null)}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={confirmBulkRefresh}
+                >
+                  {t('knowledgeBase.refresh')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkRefresh', {
+              count: bulkRefreshConfirm.length,
+              unit: bulkRefreshConfirm.length === 1 ? t('global.file') : t('global.files')
+            })}
+          </Dialog>
+        )}
+
+        {/* Bulk Include Confirmation Modal */}
+        {bulkIncludeConfirm && (
+          <Dialog
+            title={t('global.includeFiles')}
+            onClose={() => setBulkIncludeConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkIncludeConfirm(null)}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={confirmBulkInclude}
+                >
+                  {t('global.include')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkInclude', {
+              count: bulkIncludeConfirm.length,
+              unit: bulkIncludeConfirm.length === 1 ? t('global.file') : t('global.files')
+            })}
+          </Dialog>
+        )}
+
+        {/* Bulk Exclude Confirmation Modal */}
+        {bulkExcludeConfirm && (
+          <Dialog
+            title={t('global.excludeFiles')}
+            onClose={() => setBulkExcludeConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkExcludeConfirm(null)}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={confirmBulkExclude}
+                >
+                  {t('global.exclude')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkExclude', {
+              count: bulkExcludeConfirm.length,
+              unit: bulkExcludeConfirm.length === 1 ? t('global.file') : t('global.files')
+            })}
           </Dialog>
         )}
       </div>
