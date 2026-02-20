@@ -1,4 +1,4 @@
-import { FC, useState, useMemo, useRef, useEffect } from 'react';
+import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
@@ -8,8 +8,6 @@ import {
   MdOutlineEdit,
   MdRefresh,
   MdOutlineStopCircle,
-  MdCheckCircle,
-  MdCancel,
 } from 'react-icons/md';
 import {
   Button,
@@ -21,14 +19,12 @@ import {
   Track,
   FileUploader,
   Tooltip,
-  MultiselectAction,
 } from 'components';
 import {
   ColumnDef,
   PaginationState,
   SortingState,
   ColumnFiltersState,
-  Row,
 } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
 import './Agency.scss';
@@ -833,7 +829,6 @@ const Agency: FC = () => {
           {t('knowledgeBase.deleteSourceConfirmation')}
         </Dialog>
       )}
-
     </div>
   );
 };
