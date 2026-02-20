@@ -221,8 +221,6 @@ const ScrapedFiles: FC = () => {
   const bulkDeleteMutation = useMutation({
     mutationFn: (fileIds: string[]) => bulkDeleteFiles(fileIds),
     onSuccess: async (_: void, fileIds: string[]) => {
-      // Clear selections immediately
-      setRowSelection({});
       setBulkDeleteConfirm(null);
 
       toast.open({
@@ -233,11 +231,16 @@ const ScrapedFiles: FC = () => {
         }),
       });
 
-      // Refetch to get updated data
-      await queryClient.invalidateQueries(['scrapedFiles']);
+      // Use refetch to force a fresh data fetch
+      const result = await refetch();
+      
+      // Clear selections after refetch completes and new data is available
+      if (result.isSuccess) {
+        setRowSelection({});
+      }
 
       // Check if current page is now out of bounds
-      const newTotal = (scrapedFilesData?.total || 0) - fileIds.length;
+      const newTotal = (result.data?.total || 0);
       const maxPages = Math.ceil(newTotal / pagination.pageSize);
 
       // Reset to last valid page if current page is out of bounds
@@ -880,7 +883,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkDelete', {
               count: bulkDeleteConfirm.length,
-              unit: bulkDeleteConfirm.length === 1 ? t('global.file') : t('global.files')
+              unit: bulkDeleteConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
             })}
           </Dialog>
         )}
