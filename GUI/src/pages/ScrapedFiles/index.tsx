@@ -8,8 +8,8 @@ import {
   MdOutlineTableChart,
   MdGridView,
   MdOutlineDeleteOutline,
-  MdCheckCircle,
-  MdCancel,
+  MdArrowForward,
+  MdPowerSettingsNew,
 } from 'react-icons/md';
 import {
   Button,
@@ -780,21 +780,21 @@ const ScrapedFiles: FC = () => {
   // Define multiselect actions
   const multiselectActions: MultiselectAction[] = [
     {
-      label: t('global.include'),
-      icon: <MdCheckCircle />,
-      variant: 'secondary',
-      onClick: handleBulkInclude,
+      label: t('global.exclude'),
+      icon: <MdPowerSettingsNew />,
+      variant: 'bulk_action',
+      onClick: handleBulkExclude,
     },
     {
-      label: t('global.exclude'),
-      icon: <MdCancel />,
-      variant: 'secondary',
-      onClick: handleBulkExclude,
+      label: t('global.include'),
+      icon: <MdArrowForward />,
+      variant: 'bulk_action',
+      onClick: handleBulkInclude,
     },
     {
       label: t('knowledgeBase.refresh'),
       icon: <MdRefresh />,
-      variant: 'secondary',
+      variant: 'bulk_action',
       onClick: handleBulkRefresh,
     },
     {

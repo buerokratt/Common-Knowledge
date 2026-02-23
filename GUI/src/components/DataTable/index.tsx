@@ -30,7 +30,7 @@ import clsx from 'clsx';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { Icon, Track } from 'components';
+import { Icon, Track, Button } from 'components';
 import Filter from './Filter';
 import './DataTable.scss';
 
@@ -38,7 +38,7 @@ export type MultiselectAction = {
   label: string;
   onClick: (selectedRows: Row<any>[]) => void;
   icon?: ReactNode;
-  variant?: 'primary' | 'secondary' | 'danger';
+  variant?: 'primary' | 'secondary' | 'danger' | 'bulk_action';
 };
 
 type DataTableProps = {
@@ -223,14 +223,14 @@ const DataTable: FC<DataTableProps> = ({
           </div>
           <div className="data-table__selection-actions">
             {multiselectActions.map((action, index) => (
-              <button
+              <Button
                 key={index}
-                className={`data-table__action-button data-table__action-button--${action.variant || 'primary'}`}
+                appearance={action.variant as any || 'primary'}
                 onClick={() => action.onClick(selectedRows)}
               >
                 {action.icon && <span className="data-table__action-icon">{action.icon}</span>}
                 {action.label}
-              </button>
+              </Button>
             ))}
           </div>
         </div>
