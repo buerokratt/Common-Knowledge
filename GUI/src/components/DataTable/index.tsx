@@ -1,4 +1,4 @@
-import React, { CSSProperties, FC, ReactNode, useId } from 'react';
+import React, { CSSProperties, FC, ReactNode, useId, useState } from 'react';
 import {
   ColumnDef,
   useReactTable,
@@ -16,6 +16,7 @@ import {
   RowData,
   ColumnFiltersState,
   ColumnPinningState,
+  RowSelectionState,
 } from '@tanstack/react-table';
 import { RankingInfo, rankItem } from '@tanstack/match-sorter-utils';
 import {
@@ -32,6 +33,13 @@ import { useTranslation } from 'react-i18next';
 import { Icon, Track } from 'components';
 import Filter from './Filter';
 import './DataTable.scss';
+
+export type MultiselectAction = {
+  label: string;
+  onClick: (selectedRows: Row<any>[]) => void;
+  icon?: ReactNode;
+  variant?: 'primary' | 'secondary' | 'danger';
+};
 
 type DataTableProps = {
   data: any;
@@ -55,6 +63,8 @@ type DataTableProps = {
   pagesCount?: number;
   meta?: TableMeta<any>;
   selectedRow?: (row: Row<any>) => boolean;
+  multiselectActions?: MultiselectAction[];
+  enableRowSelection?: boolean;
 };
 
 type ColumnMeta = {
@@ -115,10 +125,14 @@ const DataTable: FC<DataTableProps> = ({
   pagesCount,
   meta,
   selectedRow,
+  multiselectActions,
+  enableRowSelection = false,
 }) => {
   const id = useId();
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  
   const table = useReactTable({
     data,
     columns,
@@ -133,10 +147,13 @@ const DataTable: FC<DataTableProps> = ({
         right: [],
       },
       columnVisibility,
+      rowSelection,
       ...{ pagination },
       ...{ columnFilters },
     },
     enableColumnPinning: columnPinning != undefined ? true : false,
+    enableRowSelection: enableRowSelection,
+    onRowSelectionChange: setRowSelection,
     meta,
     onColumnFiltersChange: (updater) => {
       if (typeof updater !== 'function') return;
@@ -184,8 +201,32 @@ const DataTable: FC<DataTableProps> = ({
   const searchParamsWithoutPage = new URLSearchParams(searchParams);
   searchParamsWithoutPage.delete('page');
 
+  const selectedRows = table.getSelectedRowModel().rows;
+  const selectedCount = selectedRows.length;
+
   return (
     <>
+      {enableRowSelection && selectedCount > 0 && multiselectActions && (
+        <div className="data-table__selection-bar">
+          <div className="data-table__selection-info">
+            <span className="data-table__selection-count">
+              {selectedCount} {selectedCount === 1 ? t('global.rowSelected') || 'row selected' : t('global.rowsSelected') || 'rows selected'}
+            </span>
+          </div>
+          <div className="data-table__selection-actions">
+            {multiselectActions.map((action, index) => (
+              <button
+                key={index}
+                className={`data-table__action-button data-table__action-button--${action.variant || 'primary'}`}
+                onClick={() => action.onClick(selectedRows)}
+              >
+                {action.icon && <span className="data-table__action-icon">{action.icon}</span>}
+                {action.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="data-table__scrollWrapper">
         <table className="data-table">
           {!disableHead && (
