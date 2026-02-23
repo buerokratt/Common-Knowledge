@@ -1,0 +1,10 @@
+{
+  "deletes": [
+    {{#each files}}
+    {
+      "source_id": "{{sourceBaseId}}",
+      "source_file_id": "{{baseId}}"
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+  ]
+}

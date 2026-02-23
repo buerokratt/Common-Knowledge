@@ -181,6 +181,15 @@ export const deleteFile = async (fileId: string): Promise<void> => {
 };
 
 /**
+ * Delete multiple files in bulk
+ */
+export const bulkDeleteFiles = async (fileIds: string[]): Promise<void> => {
+  await apiDev.post('/source-file/bulk-remove', {
+    baseIds: fileIds,
+  });
+};
+
+/**
  * Get download URL for a file
  */
 export const getFileDownloadUrl = async (

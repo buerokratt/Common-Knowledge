@@ -1,0 +1,10 @@
+{
+  "s3_files": [
+    {{#each files}}
+    {
+      "s3_path": "uploads/scrapped-data/{{agencyBaseId}}/{{sourceBaseId}}/{{baseId}}/",
+      "is_folder": true
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+  ]
+}

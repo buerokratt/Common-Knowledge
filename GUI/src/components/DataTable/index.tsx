@@ -65,6 +65,8 @@ type DataTableProps = {
   selectedRow?: (row: Row<any>) => boolean;
   multiselectActions?: MultiselectAction[];
   enableRowSelection?: boolean;
+  rowSelection?: RowSelectionState;
+  setRowSelection?: (state: RowSelectionState) => void;
 };
 
 type ColumnMeta = {
@@ -127,11 +129,17 @@ const DataTable: FC<DataTableProps> = ({
   selectedRow,
   multiselectActions,
   enableRowSelection = false,
+  rowSelection: externalRowSelection,
+  setRowSelection: externalSetRowSelection,
 }) => {
   const id = useId();
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [rowSelection, setRowSelection] = useState<RowSelectionState>({});
+  const [internalRowSelection, setInternalRowSelection] = useState<RowSelectionState>({});
+  
+  // Use external rowSelection if provided, otherwise use internal
+  const rowSelection = externalRowSelection ?? internalRowSelection;
+  const setRowSelection = externalSetRowSelection ?? setInternalRowSelection;
   
   const table = useReactTable({
     data,
