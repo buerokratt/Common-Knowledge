@@ -26,7 +26,7 @@ deleteFile:
     url: "[#CKB_FILE_MANAGER]/delete-files"
     body:
       files:
-        - s3_path: ${sourceFile.response.body[0].original_data_url}
+        - s3_path: ${sourceFile.response.body[0].originalDataUrl}
   result: res
 
 returnResult:
