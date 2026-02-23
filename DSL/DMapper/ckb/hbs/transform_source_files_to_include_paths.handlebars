@@ -1,0 +1,11 @@
+{
+  "files": [
+    {{#each files}}
+    {
+      "s3_from_path": "excluded/uploads/scrapped-data/{{agencyBaseId}}/{{sourceBaseId}}/{{baseId}}/",
+      "s3_to_path": "uploads/scrapped-data/{{agencyBaseId}}/{{sourceBaseId}}/{{baseId}}/",
+      "is_folder": true
+    }{{#unless @last}},{{/unless}}
+    {{/each}}
+  ]
+}

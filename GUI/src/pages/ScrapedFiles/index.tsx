@@ -38,6 +38,7 @@ import 'pages/Agency/AgencyList.scss';
 import {
   getScrapedFiles,
   updateFileExclusion,
+  bulkUpdateFileExclusion,
   refreshScrapedFile,
   deleteFile,
   bulkDeleteFiles,
@@ -266,6 +267,46 @@ const ScrapedFiles: FC = () => {
     },
   });
 
+  // Bulk update exclusion mutation
+  const bulkExclusionMutation = useMutation({
+    mutationFn: ({
+      fileIds,
+      isExcluded,
+    }: {
+      fileIds: string[];
+      isExcluded: boolean;
+    }) => bulkUpdateFileExclusion(fileIds, isExcluded),
+    onSuccess: async (_: void, variables) => {
+      setBulkExcludeConfirm(null);
+      setBulkIncludeConfirm(null);
+      
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: variables.isExcluded 
+          ? t('knowledgeBase.bulkExcludeSuccess', { count: variables.fileIds.length })
+          : t('knowledgeBase.bulkIncludeSuccess', { count: variables.fileIds.length }),
+      });
+
+      // Use refetch to force a fresh data fetch
+      const result = await refetch();
+      
+      // Clear selections after refetch completes
+      if (result.isSuccess) {
+        setRowSelection({});
+      }
+    },
+    onError: (error: any) => {
+      setBulkExcludeConfirm(null);
+      setBulkIncludeConfirm(null);
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.bulkExcludeError'),
+      });
+    },
+  });
+
   // Update exclusion mutation
   const updateExclusionMutation = useMutation({
     mutationFn: ({
@@ -482,10 +523,22 @@ const ScrapedFiles: FC = () => {
 
   const confirmBulkInclude = () => {
     if (!bulkIncludeConfirm) return;
-    const selectedIds = bulkIncludeConfirm.map(row => row.original.baseId);
-    console.log('Include selected files:', selectedIds);
-    // TODO: Implement bulk include API call (set isExcluded = false)
-    setBulkIncludeConfirm(null);
+    // Only include files that are currently excluded
+    const filesToInclude = bulkIncludeConfirm.filter(row => row.original.isExcluded);
+    if (filesToInclude.length === 0) {
+      toast.open({
+        type: 'info',
+        title: t('global.notification'),
+        message: t('knowledgeBase.allFilesAlreadyIncluded'),
+      });
+      setBulkIncludeConfirm(null);
+      return;
+    }
+    const selectedIds = filesToInclude.map(row => row.original.baseId);
+    bulkExclusionMutation.mutate({
+      fileIds: selectedIds,
+      isExcluded: false,
+    });
   };
 
   const handleBulkExclude = (selectedRows: Row<ScrapedFile>[]) => {
@@ -494,10 +547,22 @@ const ScrapedFiles: FC = () => {
 
   const confirmBulkExclude = () => {
     if (!bulkExcludeConfirm) return;
-    const selectedIds = bulkExcludeConfirm.map(row => row.original.baseId);
-    console.log('Exclude selected files:', selectedIds);
-    // TODO: Implement bulk exclude API call (set isExcluded = true)
-    setBulkExcludeConfirm(null);
+    // Only exclude files that are currently included
+    const filesToExclude = bulkExcludeConfirm.filter(row => !row.original.isExcluded);
+    if (filesToExclude.length === 0) {
+      toast.open({
+        type: 'info',
+        title: t('global.notification'),
+        message: t('knowledgeBase.allFilesAlreadyExcluded'),
+      });
+      setBulkExcludeConfirm(null);
+      return;
+    }
+    const selectedIds = filesToExclude.map(row => row.original.baseId);
+    bulkExclusionMutation.mutate({
+      fileIds: selectedIds,
+      isExcluded: true,
+    });
   };
 
   const columns: ColumnDef<ScrapedFile>[] = [
@@ -941,7 +1006,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkInclude', {
               count: bulkIncludeConfirm.length,
-              unit: bulkIncludeConfirm.length === 1 ? t('global.file') : t('global.files')
+              unit: bulkIncludeConfirm.length === 1 ? t('file') : t('files')
             })}
           </Dialog>
         )}
@@ -970,7 +1035,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkExclude', {
               count: bulkExcludeConfirm.length,
-              unit: bulkExcludeConfirm.length === 1 ? t('global.file') : t('global.files')
+              unit: bulkExcludeConfirm.length === 1 ? t('file') : t('files')
             })}
           </Dialog>
         )}
