@@ -74,3 +74,4 @@ export {
 
 // Export types that might be needed
 export type { FileItem } from './FileUploader/FileUploader';
+export type { MultiselectAction } from './DataTable';
