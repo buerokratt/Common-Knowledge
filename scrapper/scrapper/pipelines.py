@@ -101,6 +101,10 @@ class TriggerCleaningPipeline:
         if not isinstance(item, ScrappedItem):
             return item
 
+        # Skip cleaning trigger for initial scrape
+        if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
+            return item
+
         path = get_logs_path_for_cleaning(spider)
 
         requests.post(
@@ -156,6 +160,12 @@ class UpdateSourceFile:
     def process_item(self, item, spider: Spider):
         if not isinstance(item, ScrappedItem):
             return item
+            
+        # Set file status to 'cleaning' for normal flow, 'in_review' for initial scrape
+        file_status = 'cleaning'
+        if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
+            file_status = 'in_review'
+        
 
         requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file', json={
             'base_id': item.source_file_id,
@@ -165,7 +175,8 @@ class UpdateSourceFile:
             'original_metadata_url': item.metadata_path_uploaded,
             'original_data_hash': item.hash,
             'scraped_at': item.metadata.created_at,
-            'external_id': item.metadata.external_id
+            'external_id': item.metadata.external_id,
+            'status': file_status
         })
         return item
 
@@ -179,6 +190,13 @@ class ScrappingFinishedPipeline:
         spider: BaseSpider
         task: BaseObject = spider.task
 
+        # After all files are scraped, update source status to in_review for initial scrape
+        if hasattr(task, 'is_initial_scrape') and task.is_initial_scrape:
+            requests.post(f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status", json={
+                'source_id': task.source_id,
+                'status': 'in_review',
+            })
+            return
         requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
             'sourceId': task.source_id,
             'agencyId': task.agency_id,
@@ -294,6 +312,16 @@ class UploadLogsPipeline:
         scraping_log_url = r.json()['response']
         os.remove(path)
 
+        is_initial_scrape = hasattr(spider, 'task') and hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape
+
+        if is_initial_scrape:
+            # Only send scrapingLogUrl in report update
+            requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update', json={
+                'baseId': spider.report_id,
+                'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
+                'scrapingLogUrl': scraping_log_url,
+            })
+            return
 
         path = get_logs_path_for_cleaning(spider)
         r = requests.post(
