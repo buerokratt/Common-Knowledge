@@ -8,6 +8,7 @@ import {
   MdOutlineTableChart,
   MdGridView,
   MdOutlineDeleteOutline,
+  MdWarning,
   MdArrowForward,
   MdPowerSettingsNew,
 } from 'react-icons/md';
@@ -34,7 +35,9 @@ import {
   HeaderContext,
 } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
+import { START_CLEANING_NOTIFICATION } from 'utils/constants';
 import 'pages/Agency/AgencyList.scss';
+import 'pages/ScrapedFiles/ScrapedFiles.scss';
 import {
   getScrapedFiles,
   updateFileExclusion,
@@ -107,6 +110,11 @@ const ScrapedFiles: FC = () => {
   });
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // TODO: Implement start cleaning API call. Currently just logs a TODO.
+  const handleStartCleaning = () => {
+    console.log('TODO: start cleaning for source', sourceId);
+  };
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
@@ -744,6 +752,8 @@ const ScrapedFiles: FC = () => {
             ? '#266B42'
             : row.original.status === 'cleaning'
             ? '#94690D'
+            : row.original.status === 'in_review'
+            ? '#BA830D'
             : '#AC3232';
         return (
           <span
@@ -859,7 +869,28 @@ const ScrapedFiles: FC = () => {
               </Button>
             </Track>
           }
-        >
+        >          {/* Show inline notification and Start cleaning button when source is in_review */}
+          {sourceData?.status === 'in_review' && (
+            <div className="start-cleaning-notice" style={{ marginBottom: 16 }}>
+              <div className="start-cleaning-notice__inner">
+                <div className="start-cleaning-notice__body">
+                  <div className="start-cleaning-notice__header">
+                    <div className="start-cleaning-notice__icon">
+                      <MdWarning size={24} />
+                    </div>
+                    <div className="start-cleaning-notice__title">Scraping is finished!</div>
+                  </div>
+                  <div className="start-cleaning-notice__text">{START_CLEANING_NOTIFICATION}</div>
+                </div>
+                <div className="start-cleaning-notice__action">
+                  <Button appearance="primary" onClick={() => handleStartCleaning()}>
+                    Start cleaning
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <DataTable
             data={scrapedFilesData?.data ?? []}
             columns={columns}

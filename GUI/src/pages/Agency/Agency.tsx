@@ -512,9 +512,16 @@ const Agency: FC = () => {
         <span
           className={`agencies__status-cell`}
           style={{
-            color: row.original.status === 'running' ? '#005AA3' : '#266B42',
-            borderColor:
-              row.original.status === 'running' ? '#005AA3' : '#266B42',
+            color: row.original.status === 'running'
+              ? '#005AA3'
+              : row.original.status === 'in_review'
+              ? '#BA830D'
+              : '#266B42',
+            borderColor: row.original.status === 'running'
+              ? '#005AA3'
+              : row.original.status === 'in_review'
+              ? '#BA830D'
+              : '#266B42',
           }}
         >
           {t(`knowledgeBase.${row.original.status}`)}

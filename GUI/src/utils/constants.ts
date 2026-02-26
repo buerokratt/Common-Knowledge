@@ -17,3 +17,5 @@ export enum AUTHOR_ROLES {
   END_USER = 'end-user',
   BACKOFFICE_USER = 'backoffice-user',
 }
+
+export const START_CLEANING_NOTIFICATION = 'All pages have been scraped. Before continuing, delete all pages that you do not want to make available to the chatbot, like news and archived pages. Once you have made your selection, continue cleaning the pages by clicking the "Start cleaning" button.';
