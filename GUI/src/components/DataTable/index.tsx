@@ -246,9 +246,8 @@ const DataTable: FC<DataTableProps> = ({
                       key={header.id}
                       style={{
                         width: header.column.columnDef.meta?.size,
-                        position: header.column.columnDef.meta?.sticky
-                          ? 'sticky'
-                          : undefined,
+                        position: 'sticky',
+                        top: 0,
                         left:
                           header.column.columnDef.meta?.sticky === 'left'
                             ? `${header.column.getAfter('left') * 0.675}px`
@@ -258,7 +257,7 @@ const DataTable: FC<DataTableProps> = ({
                             ? `${header.column.getAfter('right') * 0.675}px`
                             : undefined,
                         backgroundColor: 'white',
-                        zIndex: header.column.columnDef.meta?.sticky ? 1 : 0,
+                        zIndex: header.column.columnDef.meta?.sticky ? 3 : 2,
                       }}
                     >
                       {header.isPlaceholder ? null : (
