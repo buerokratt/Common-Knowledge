@@ -320,6 +320,7 @@ class UploadLogsPipeline:
                 'baseId': spider.report_id,
                 'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
                 'scrapingLogUrl': scraping_log_url,
+                'cleaningLogUrl': "",
             })
             return
 
