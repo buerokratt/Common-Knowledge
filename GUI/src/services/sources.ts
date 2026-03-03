@@ -136,6 +136,15 @@ export interface ApiSourceFilesListParams {
   type: 'api_file';
 }
 
+/**
+ * Start cleaning for a source
+ */
+export const startCleaning = async (sourceId: string): Promise<void> => {
+  await apiDev.post('/source/start-cleaning', {
+    source_id: sourceId,
+  });
+};
+
 // Re-export types that might be needed by consumers
 export type { FileProgressCallback } from './s3';
 

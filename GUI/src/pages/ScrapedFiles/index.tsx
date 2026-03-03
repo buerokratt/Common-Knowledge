@@ -52,7 +52,7 @@ import {
   ScrapedFilesListParams,
   EditorState,
 } from 'services/files';
-import { getSource } from 'services/sources';
+import { getSource, startCleaning } from 'services/sources';
 
 interface FormData {
   search: string;
@@ -111,9 +111,26 @@ const ScrapedFiles: FC = () => {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
-  // TODO: Implement start cleaning API call. Currently just logs a TODO.
-  const handleStartCleaning = () => {
-    console.log('TODO: start cleaning for source', sourceId);
+  // Start cleaning API call
+  const handleStartCleaning = async () => {
+    if (!sourceId) return;
+    try {
+      await startCleaning(sourceId);
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.cleaningStarted'),
+      });
+      // Optionally refetch source and files
+      queryClient.invalidateQueries(['scrapedFiles']);
+      queryClient.invalidateQueries(['source', sourceId]);
+    } catch (error: any) {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.cleaningStartError'),
+      });
+    }
   };
 
   // Convert sorting state to API format
