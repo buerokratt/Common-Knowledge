@@ -1,4 +1,87 @@
 services:
+
+  vault:
+    image: hashicorp/vault:1.21.3
+    container_name: vault
+    restart: unless-stopped
+    command: ["vault", "server", "-config=/vault/config/config.hcl"]
+    networks:
+      - bykstack                         
+    environment:
+      VAULT_ADDR: "http://0.0.0.0:8200"
+      VAULT_SKIP_VERIFY_CONFIG_PERMISSIONS: "true"
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault-data:/vault/file
+      - vault-logs:/vault/logs
+      - ./vault/config.hcl:/vault/config/config.hcl:ro
+    expose:
+      - "8200"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q -O- http://127.0.0.1:8200/v1/sys/health || exit 0"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ─────────────────────────────────────────────
+  # VAULT INIT — runs once, then exits
+  # ─────────────────────────────────────────────
+  vault-init:
+    image: hashicorp/vault:1.21.3
+    container_name: vault-init
+    user: "0"                             
+    networks:
+      - bykstack
+    volumes:
+      - vault-data:/vault/data
+      - vault-agent-creds:/agent/credentials
+      - vault-agent-token:/agent/out
+      - ./vault/init.sh:/vault/init.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl jq >/dev/null 2>&1 &&
+        chmod -R 755 /agent/credentials &&
+        chmod -R 770 /agent/out &&
+        chown -R vault:vault /agent/credentials /agent/out &&
+        su vault -s /bin/sh /vault/init.sh
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+
+  # ─────────────────────────────────────────────
+  # VAULT AGENT — proxy for cleaning-server
+  # ─────────────────────────────────────────────
+  vault-agent-cleaner:
+    image: hashicorp/vault:1.21.3
+    container_name: vault-agent-cleaner
+    restart: unless-stopped
+    networks:
+      - bykstack
+    volumes:
+      - vault-agent-creds:/agent/credentials:ro
+      - vault-agent-token:/agent/out
+      - ./vault/agents/cleaner/agent.hcl:/vault/agent-cleaner.hcl:ro
+    command: ["vault", "agent", "-config=/vault/agent-cleaner.hcl", "-log-level=info"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /agent/out/token && test -s /agent/out/token"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
   database:
     container_name: database
     image: postgres:14.1
@@ -333,6 +416,9 @@ services:
     networks:
       - bykstack
 
+  # ─────────────────────────────────────────────
+  # CLEANING SERVER — updated to use Vault agent
+  # ─────────────────────────────────────────────
   cleaning-server:
     container_name: cleaning-server
     build:
@@ -342,10 +428,17 @@ services:
     volumes:
       - ./scrapped-data:/scrapped-data
       - ./cleaning:/app
+      - vault-agent-token:/agent/out:ro   # token file mounted here
     environment:
       - RUUTER_INTERNAL=http://ruuter-internal:8089
+      - VAULT_ADDR=http://vault:8200      # talk to vault directly
+      - VAULT_TOKEN_PATH=/agent/out/token # path to the token file
+      - VAULT_SECRET_PATH=llm/connections/azure_openai/cleaner
     networks:
       - bykstack
+    depends_on:
+      vault-agent-cleaner:
+        condition: service_healthy
 
   rabbit-scrapper:
     image: rabbitmq:4-management
@@ -371,8 +464,15 @@ services:
 
 volumes:
   opensearch-data:
+  vault-data:
+  vault-logs:
+  vault-agent-creds:
+  vault-agent-token:
+  vault-agent-cleaner-token:
 
 networks:
+  vault-network:
+    internal: true
   bykstack:
     name: bykstack
     driver: bridge

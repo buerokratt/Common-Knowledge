@@ -1,166 +1,242 @@
 import json
 import logging
-import re
+import textwrap
 
 import requests
-from langdetect import detect, LangDetectException
-
-from unstructured.partition.auto import partition
-from unstructured.partition.html import partition_html
+import trafilatura
 from bs4 import BeautifulSoup
+from openai import AzureOpenAI
+from unstructured.partition.auto import partition
 
-from api.config import settings
+from api.config import settings, get_vault_secrets, VaultSecrets
 from api.models import EntityToClean
-from worker.utils import catch_error
+from worker.utils import catch_error, cleanup_directory
 
 logger = logging.getLogger(__name__)
 
 
-def normalize_newlines(text: str) -> str:
-    """
-    Normalize excessive newlines to maximum of 2 consecutive newlines.
-    Replace 3 or more consecutive newlines with exactly 2 newlines.
-    """
-    # Replace 3 or more newlines with exactly 2 newlines
-    normalized_text = re.sub(r'\n{3,}', '\n\n', text)
-    return normalized_text
+# ---------------------------------------------------------------------------
+# OpenAI client — created per task using fresh secrets from Vault
+# ---------------------------------------------------------------------------
 
-
-def clean_html(entity: EntityToClean):
-    """Clean HTML files using a multi-step approach for better content extraction."""
-    soup = BeautifulSoup(open(entity.file_path.as_posix(), 'r'), 'lxml')
-
-    # First, remove unwanted elements from the entire document
-    for element in soup(['header', 'footer', 'nav', 'script', 'style', 'aside', 'form']):
-        element.decompose()
-
-    # Step 1: Check if there's a <main> element and use only that
-    main_element = soup.find('main')
-    if main_element:
-        logger.info(f'Found <main> element, trying partition_html on main content for {entity.file_path.as_posix()}')
-
-        # Try partition_html on main element content first
-        main_html = str(main_element)
-        partitioned = partition_html(
-            text=main_html,
-            languages=settings.languages,
-            skip_headers_and_footers=True
-        )
-
-        if len(partitioned) > 0:
-            cleaned_text = '\n\n'.join([str(el) for el in partitioned])
-            logger.info(f'partition_html extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
-            return cleaned_text
-
-        # If partition_html returns empty, fall back to BeautifulSoup on main
-        logger.info(f'partition_html on <main> returned empty, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
-        cleaned_text = main_element.get_text(separator='\n\n', strip=True)
-        logger.info(f'BeautifulSoup extracted {len(cleaned_text)} chars from <main> element for {entity.file_path.as_posix()}')
-        return cleaned_text
-
-    # Step 2: Try partition_html with skip_headers_and_footers flag
-    logger.info(f'No <main> element found, trying partition_html with skip_headers_and_footers for {entity.file_path.as_posix()}')
-    partitioned = partition_html(
-        filename=entity.file_path.as_posix(),
-        languages=settings.languages,
-        skip_headers_and_footers=True
+def _make_openai_client(secrets: VaultSecrets) -> AzureOpenAI:
+    return AzureOpenAI(
+        api_key=secrets.azure_openai_api_key.get_secret_value(),
+        api_version=secrets.azure_openai_api_version,
+        azure_endpoint=secrets.azure_openai_endpoint,
     )
-    cleaned_text = '\n\n'.join([str(el) for el in partitioned])
-
-    # Step 3: If partition_html returns empty, fallback to BeautifulSoup
-    if len(partitioned) == 0:
-        logger.info(f'partition_html returned empty content, using BeautifulSoup fallback for {entity.file_path.as_posix()}')
-        cleaned_text = soup.get_text(separator='\n\n', strip=True)
-        logger.info(f'BeautifulSoup fallback extracted {len(cleaned_text)} chars for {entity.file_path.as_posix()}')
-
-    return cleaned_text
 
 
-def clean_any_file(entity: EntityToClean):
+# ---------------------------------------------------------------------------
+# Extraction helpers
+# ---------------------------------------------------------------------------
+
+def _beautifulsoup_extract(html: str) -> str:
+    return BeautifulSoup(html, "lxml").get_text(separator="\n", strip=True)
+
+
+def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
+    result = trafilatura.extract(
+        html,
+        url=url,
+        output_format="markdown",
+        include_comments=False,
+        include_tables=True,
+        favor_recall=True,
+    )
+    return result or None
+
+
+# ---------------------------------------------------------------------------
+# LLM helpers
+# ---------------------------------------------------------------------------
+
+_EVAL_SYSTEM = textwrap.dedent("""
+    You are a quality-evaluation assistant for web-page text extraction.
+    You will receive a Markdown-formatted extraction of a web page's main body.
+    Evaluate it on the following criteria:
+      1. Readability – is the text coherent and human-readable?
+      2. Completeness – does it appear to contain the full main content
+         without obvious truncation or missing sections?
+      3. Cleanliness – is it free from navigation menus, cookie banners,
+         footer boilerplate, and other noise?
+      4. Structure – are headings, lists, and paragraphs logically preserved?
+
+    Reply with ONLY a JSON object in this exact shape (no markdown fences):
+    {"pass": true, "reason": "<one-sentence explanation>"}
+    or
+    {"pass": false, "reason": "<one-sentence explanation>"}
+""").strip()
+
+_EXTRACT_SYSTEM = textwrap.dedent("""
+    You are an expert web-page content extractor.
+    You will receive raw HTML of a web page.
+    Extract ONLY the main body content (article text, documentation, etc.).
+    Ignore navigation, sidebars, footers, cookie notices, and ads.
+    Return the result formatted as clean Markdown (use headings, lists, bold/italic
+    where appropriate). Do not include any commentary—only the extracted Markdown.
+""").strip()
+
+
+def _llm_evaluate(client: AzureOpenAI, deployment: str, extracted_markdown: str) -> tuple[bool, str]:
+    response = client.chat.completions.create(
+        model=deployment,
+        temperature=0,
+        response_format={"type": "json_object"},
+        messages=[
+            {"role": "system", "content": _EVAL_SYSTEM},
+            {"role": "user", "content": f"# Extraction to evaluate\n\n{extracted_markdown}"},
+        ],
+    )
+    raw = response.choices[0].message.content or "{}"
+    try:
+        result = json.loads(raw)
+        return bool(result.get("pass", False)), result.get("reason", "no reason given")
+    except json.JSONDecodeError:
+        return False, f"LLM returned non-JSON: {raw[:120]}"
+
+
+def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
+    response = client.chat.completions.create(
+        model=deployment,
+        temperature=0,
+        messages=[
+            {"role": "system", "content": _EXTRACT_SYSTEM},
+            {"role": "user", "content": html},
+        ],
+    )
+    return (response.choices[0].message.content or "").strip()
+
+
+# ---------------------------------------------------------------------------
+# HTML cleaning
+# ---------------------------------------------------------------------------
+
+def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> str:
+    with entity.file_path.open("r", encoding="utf-8", errors="replace") as f:
+        html = f.read()
+
+    if not entity.use_llm:
+        extracted = _trafilatura_extract(html, url=entity.url)
+        if extracted:
+            logger.info(f"[html] trafilatura succeeded for {entity.url}")
+            return extracted
+        logger.warning(f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}")
+        return _beautifulsoup_extract(html)
+
+    extracted = _trafilatura_extract(html, url=entity.url)
+    if not extracted:
+        logger.warning(f"[html] trafilatura empty for {entity.url}; using raw text for LLM path")
+        extracted = _beautifulsoup_extract(html)
+
+    logger.info(f"[html] running LLM evaluation for {entity.url}")
+    passed, reason = _llm_evaluate(client, deployment, extracted)
+    logger.info(f"[html] LLM evaluation {'PASSED' if passed else 'FAILED'} for {entity.url}: {reason}")
+
+    if passed:
+        return extracted
+
+    if not entity.use_llm_correction:
+        logger.warning(f"[html] LLM evaluation failed but correction disabled for {entity.url}")
+        return extracted
+
+    logger.info(f"[html] LLM correction: re-extracting from raw HTML for {entity.url}")
+    corrected = _llm_extract(client, deployment, html)
+    if corrected:
+        return corrected
+
+    logger.warning(f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}")
+    return _beautifulsoup_extract(html)
+
+
+# ---------------------------------------------------------------------------
+# Non-HTML cleaning
+# ---------------------------------------------------------------------------
+
+def clean_any_file(entity: EntityToClean) -> str:
     partitioned = partition(filename=entity.file_path.as_posix(), languages=settings.languages)
-    cleaned_text = '\n\n'.join([str(el) for el in partitioned])
-    return cleaned_text
+    return "\n\n".join([str(el) for el in partitioned])
 
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
 
 def set_up_logging(entity: EntityToClean):
-    handler = logging.FileHandler(entity.logs_path.as_posix())
-
-    root = logging.getLogger()
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-
-    formatter = logging.Formatter(
+    fmt = logging.Formatter(
         "[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
     )
-    handler.setFormatter(formatter)
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
 
+    # Add stdout handler once only (root logger persists across background tasks)
+    if not root.handlers:
+        stdout_handler = logging.StreamHandler()
+        stdout_handler.setFormatter(fmt)
+        root.addHandler(stdout_handler)
+
+    # Per-job file handler — always add a fresh one for each task
+    file_handler = logging.FileHandler(entity.logs_path.as_posix())
+    file_handler.setFormatter(fmt)
+    root.addHandler(file_handler)
+
+
+# ---------------------------------------------------------------------------
+# Main task
+# ---------------------------------------------------------------------------
 
 def clean_file_task(entity: EntityToClean):
     with catch_error(entity):
         set_up_logging(entity)
-        logger.info(f'Cleaning file {entity.file_path.as_posix()}')
-        with entity.meta_data_path.open('r') as f:
+        logger.info(f"Cleaning file {entity.file_path.as_posix()}")
+
+        # Fetch fresh secrets on every task — respects Vault Agent token rotation
+        secrets = get_vault_secrets()
+        client = _make_openai_client(secrets)
+
+        with entity.meta_data_path.open("r") as f:
             metadata = json.load(f)
 
-        logger.info(f"loaded metadata for {entity.file_path.as_posix()}")
-
-        if metadata['file_type'] == '.html':
-            cleaned_text = clean_html(entity)
-            logger.info(f'Cleaned as html for {entity.file_path.as_posix()}')
+        if metadata["file_type"] == ".html":
+            cleaned_text = clean_html(entity, client, secrets.azure_openai_deployment)
+            logger.info(f"Cleaned as html for {entity.file_path.as_posix()}")
         else:
             cleaned_text = clean_any_file(entity)
-            logger.info(f'Cleaned as unstructured file for {entity.file_path.as_posix()}')
+            logger.info(f"Cleaned as unstructured file for {entity.file_path.as_posix()}")
 
-        # Normalize excessive newlines (max 2 consecutive newlines)
-        cleaned_text = normalize_newlines(cleaned_text)
-        logger.info(f'Normalized newlines for {entity.file_path.as_posix()}')
-
-        # Detect language from cleaned text
-        detected_language = None
-        if cleaned_text and len(cleaned_text.strip()) > 0:
-            try:
-                detected_language = detect(cleaned_text)
-                logger.info(f'Detected language: {detected_language} for {entity.file_path.as_posix()}')
-            except LangDetectException as e:
-                logger.error(f'Language detection failed for {entity.file_path.as_posix()}: {e}')
-
-        cleaned_text_filename = entity.directory_path / 'cleaned.txt'
-
+        cleaned_text_filename = entity.directory_path / "cleaned.txt"
         with cleaned_text_filename.open("w") as f:
             f.write(cleaned_text)
 
-
         r = requests.post(
             f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
-            json={
-                'source_file_path': cleaned_text_filename.as_posix(),
-            }
+            json={"source_file_path": cleaned_text_filename.as_posix()},
         )
-        uploaded_cleaned_text_url = r.json()['response']
-
-        logger.info(f'Saved cleaned text for {entity.file_path.as_posix()}')
+        r.raise_for_status()
+        uploaded_cleaned_text_url = r.json()["response"]
+        logger.info(f"Saved cleaned text for {entity.file_path.as_posix()}")
 
         cleaned_metadata_filename = entity.directory_path / "cleaned.meta.json"
         with cleaned_metadata_filename.open("w") as f:
-            metadata['metadata']['cleaned'] = True
-            metadata['language'] = detected_language
+            metadata["metadata"]["cleaned"] = True
             json.dump(metadata, f)
 
         r = requests.post(
             f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
-            json={
-                'source_file_path': cleaned_metadata_filename.as_posix(),
-            }
+            json={"source_file_path": cleaned_metadata_filename.as_posix()},
         )
-        uploaded_cleaned_metadata_url = r.json()['response']
-
-        logger.info(f'Saved cleaned metadata for {entity.file_path.as_posix()}')
+        r.raise_for_status()
+        uploaded_cleaned_metadata_url = r.json()["response"]
+        logger.info(f"Saved cleaned metadata for {entity.file_path.as_posix()}")
 
         requests.post(
             f"{settings.ruuter_internal}/ckb/source-file/update-cleaned-file",
             json={
-                'base_id': entity.source_file_id,
-                'cleaned_data_url': uploaded_cleaned_text_url,
-                'cleaned_metadata_url': uploaded_cleaned_metadata_url,
-            }
-        )
+                "base_id": entity.source_file_id,
+                "cleaned_data_url": uploaded_cleaned_text_url,
+                "cleaned_metadata_url": uploaded_cleaned_metadata_url,
+            },
+        ).raise_for_status()
+
+        # All uploads confirmed — safe to remove the working directory
+        cleanup_directory(entity)
