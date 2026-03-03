@@ -670,6 +670,7 @@ const ScrapedFiles: FC = () => {
             className="agencies__action-btn"
             size="s"
             onClick={() => handleRefresh(row.original)}
+            disabled={row.original.status !== 'finished'}
           >
             <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
             {t('knowledgeBase.refresh')}
