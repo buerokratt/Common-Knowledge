@@ -555,7 +555,9 @@ const Agency: FC = () => {
               size="s"
               onClick={() => handleRefreshSource(row.original.baseId)}
               disabled={
-                refreshMutation.isLoading || row.original.type === 'file'
+                refreshMutation.isLoading || 
+                row.original.type === 'file' ||
+                (row.original.status === 'in_review' && !row.original.hasFinishedFiles)
               }
             >
               <Icon icon={<MdRefresh fontSize={20} />} size="medium" />

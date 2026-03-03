@@ -190,6 +190,24 @@ class ScrappingFinishedPipeline:
         spider: BaseSpider
         task: BaseObject = spider.task
 
+        # Check if the source was manually stopped
+        source_resp = requests.get(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
+            params={'baseId': task.source_id}
+        ).json()
+        
+        is_stopping = source_resp['response'][0].get('isStopping', False)
+        spider.logger.info(f'is_stopping: {is_stopping}')
+
+
+        # If stopped manually, force status to 'finished' regardless of initial/refresh state
+        if is_stopping:
+            requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
+                'sourceId': task.source_id,
+                'agencyId': task.agency_id,
+            })
+            return
+
         # After all files are scraped, update source status to in_review for initial scrape
         if hasattr(task, 'is_initial_scrape') and task.is_initial_scrape:
             requests.post(f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status", json={
@@ -197,6 +215,7 @@ class ScrappingFinishedPipeline:
                 'status': 'in_review',
             })
             return
+        
         requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
             'sourceId': task.source_id,
             'agencyId': task.agency_id,
@@ -206,6 +225,7 @@ class ScrappingFinishedPipeline:
 class SetSourceStatusRunningPipeline:
     @catch_error_spider
     def open_spider(self, spider: Spider):
+        
         if not hasattr(spider, 'task'):
             return
 

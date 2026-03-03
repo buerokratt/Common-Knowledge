@@ -20,6 +20,8 @@ export interface Source {
   updatedAt: string;
   cronSchedule?: string;
   updateAutomatically?: boolean;
+  hasFinishedFiles?: boolean;
+  type?: string;
 }
 
 // API Integration interface - extends Source but with specific properties
