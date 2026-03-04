@@ -44,12 +44,12 @@ validateSourceStatus:
   switch:
     - condition: ${source.status == 'in_review'}
       next: getAgency
-    - condition: ${source.status == 'cleaning'}
-      next: cleaningAlreadyRunning
+    - condition: ${source.status == 'running'}
+      next: alreadyRunning
   next: invalidSourceStatus
 
-cleaningAlreadyRunning:
-  return: "Cleaning is already running for this source."
+alreadyRunning:
+  return: "Scrapping or Cleaning is already in progress for this source."
   next: end
 
 invalidSourceStatus:
@@ -103,14 +103,14 @@ assignExistingRunData:
     logs_path: "/scrapped-data/logs/cleaning/${existingReportResult.response.body[0].baseId}.log"
   next: getInReviewFiles
 
-setSourceCleaning:
+setSourceRunning:
   call: http.post
   args:
     url: "[#CKB_RESQL]/source/update_source_status"
     body:
       base_id: ${incoming.body.source_id}
-      status: cleaning
-  result: setSourceCleaningResult
+      status: running
+  result: setSourceRunningResult
   next: triggerAsyncSourceCleaning
 
 
@@ -127,7 +127,7 @@ getInReviewFiles:
 checkFilesExist:
   switch:
     - condition: ${filesResult.response.body.length > 0}
-      next: setSourceCleaning
+      next: setSourceRunning
   next: noFilesToClean
 
 noFilesToClean:

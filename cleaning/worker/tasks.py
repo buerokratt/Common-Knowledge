@@ -180,6 +180,14 @@ def clean_source_task(task: SourceCleaningTask):
 
     for file in task.files:
         try:
+            requests.post(
+                f"{settings.ruuter_internal}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                json={
+                    'base_id': file.baseId,
+                    'status': 'cleaning',
+                }
+            )
+            
             fallback_directory = Path('/scrapped-data') / task.agency_base_id / file.sourceBaseId / file.baseId
             file_path = _to_local_path(file.originalDataUrl) or fallback_directory / 'source.html'
             meta_data_path = _to_local_path(file.originalMetadataUrl) or fallback_directory / 'source.meta.json'
