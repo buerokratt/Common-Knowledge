@@ -596,7 +596,8 @@
     "centopsLoadError": "Failed to load Centops options",
     "loadingCentopsOptions": "Loading Centops options...",
     "failed": "Failed",
-    "in_review": "In Review"
+    "in_review": "In Review",
+    "startCleaningNotification":"All pages have been scraped. Before continuing, delete all pages that you do not want to make available to the chatbot, like news and archived pages. Once you have made your selection, continue cleaning the pages by clicking the 'Start cleaning' button."
   },
  "fileUpload": {
     "title": "Upload file",

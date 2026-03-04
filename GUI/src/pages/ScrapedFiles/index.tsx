@@ -898,7 +898,7 @@ const ScrapedFiles: FC = () => {
                     </div>
                     <div className="start-cleaning-notice__title">Scraping is finished!</div>
                   </div>
-                  <div className="start-cleaning-notice__text">{START_CLEANING_NOTIFICATION}</div>
+                  <div className="start-cleaning-notice__text">{t('knowledgeBase.startCleaningNotification')}</div>
                 </div>
                 <div className="start-cleaning-notice__action">
                   <Button appearance="primary" onClick={() => handleStartCleaning()}>
