@@ -5,8 +5,10 @@ import textwrap
 import requests
 import trafilatura
 from bs4 import BeautifulSoup
+from markdownify import markdownify
 from openai import AzureOpenAI
 from unstructured.partition.auto import partition
+from unstructured.staging.base import elements_to_markdown
 
 from api.config import settings, get_vault_secrets, VaultSecrets
 from api.models import EntityToClean
@@ -32,7 +34,8 @@ def _make_openai_client(secrets: VaultSecrets) -> AzureOpenAI:
 # ---------------------------------------------------------------------------
 
 def _beautifulsoup_extract(html: str) -> str:
-    return BeautifulSoup(html, "lxml").get_text(separator="\n", strip=True)
+    # markdownify converts HTML to Markdown directly, avoiding plain-text output
+    return markdownify(html, heading_style="ATX", strip=["script", "style", "nav", "footer"])
 
 
 def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
@@ -121,7 +124,7 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> s
         if extracted:
             logger.info(f"[html] trafilatura succeeded for {entity.url}")
             return extracted
-        logger.warning(f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}")
+        logger.warning(f"[html] trafilatura empty, falling back to markdownify for {entity.url}")
         return _beautifulsoup_extract(html)
 
     extracted = _trafilatura_extract(html, url=entity.url)
@@ -145,7 +148,7 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> s
     if corrected:
         return corrected
 
-    logger.warning(f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}")
+    logger.warning(f"[html] LLM re-extraction empty; falling back to markdownify for {entity.url}")
     return _beautifulsoup_extract(html)
 
 
@@ -154,8 +157,10 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> s
 # ---------------------------------------------------------------------------
 
 def clean_any_file(entity: EntityToClean) -> str:
+    # elements_to_markdown renders Unstructured elements with proper MD formatting:
+    # headings, lists, tables, bold/italic, code blocks, etc.
     partitioned = partition(filename=entity.file_path.as_posix(), languages=settings.languages)
-    return "\n\n".join([str(el) for el in partitioned])
+    return elements_to_markdown(partitioned)
 
 
 # ---------------------------------------------------------------------------
