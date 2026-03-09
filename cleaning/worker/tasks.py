@@ -34,8 +34,14 @@ def _make_openai_client(secrets: VaultSecrets) -> AzureOpenAI:
 # ---------------------------------------------------------------------------
 
 def _beautifulsoup_extract(html: str) -> str:
-    # markdownify converts HTML to Markdown directly, avoiding plain-text output
-    return markdownify(html, heading_style="ATX", strip=["script", "style", "nav", "footer"])
+    # markdownify converts HTML to Markdown directly, avoiding plain-text output.
+    # autolinks=True renders bare URLs as <url> links; convert_links keeps <a href> as [text](url).
+    return markdownify(
+        html,
+        heading_style="ATX",
+        autolinks=True,
+        strip=["script", "style", "nav", "footer"],
+    )
 
 
 def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
@@ -45,6 +51,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
         output_format="markdown",
         include_comments=False,
         include_tables=True,
+        include_links=True,
         favor_recall=True,
     )
     return result or None
@@ -76,8 +83,13 @@ _EXTRACT_SYSTEM = textwrap.dedent("""
     You will receive raw HTML of a web page.
     Extract ONLY the main body content (article text, documentation, etc.).
     Ignore navigation, sidebars, footers, cookie notices, and ads.
-    Return the result formatted as clean Markdown (use headings, lists, bold/italic
-    where appropriate). Do not include any commentary—only the extracted Markdown.
+    Return the result formatted as clean, extended Markdown:
+    - Headings with # / ## / ###
+    - Hyperlinks as [anchor text](url) — never drop URLs
+    - Lists with - or 1.
+    - Bold/italic where appropriate
+    - Tables as pipe tables
+    Do not include any commentary—only the extracted Markdown.
 """).strip()
 
 
@@ -156,11 +168,50 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> s
 # Non-HTML cleaning
 # ---------------------------------------------------------------------------
 
+def _elements_to_extended_markdown(elements) -> str:
+    """
+    Convert Unstructured elements to extended Markdown, preserving hyperlinks
+    stored in element metadata (lost by the stock elements_to_markdown utility).
+    """
+    from unstructured.documents.elements import (
+        Title, ListItem, Table, Header, Footer, NarrativeText, Text
+    )
+
+    lines = []
+    for el in elements:
+        text = str(el).strip()
+        if not text:
+            continue
+
+        # Reconstruct inline links from metadata if present
+        link_texts = getattr(el.metadata, "link_texts", None) or []
+        link_urls  = getattr(el.metadata, "link_urls",  None) or []
+        for anchor, href in zip(link_texts, link_urls):
+            if anchor and href and anchor in text:
+                text = text.replace(anchor, f"[{anchor}]({href})", 1)
+
+        if isinstance(el, Title):
+            lines.append(f"## {text}")
+        elif isinstance(el, Header):
+            lines.append(f"# {text}")
+        elif isinstance(el, Footer):
+            continue          # skip footers
+        elif isinstance(el, ListItem):
+            lines.append(f"- {text}")
+        elif isinstance(el, Table):
+            # Tables are already rendered as Markdown pipe tables by Unstructured
+            lines.append(text)
+        else:
+            lines.append(text)
+
+        lines.append("")  # blank line between blocks
+
+    return "\n".join(lines)
+
+
 def clean_any_file(entity: EntityToClean) -> str:
-    # elements_to_markdown renders Unstructured elements with proper MD formatting:
-    # headings, lists, tables, bold/italic, code blocks, etc.
     partitioned = partition(filename=entity.file_path.as_posix(), languages=settings.languages)
-    return elements_to_markdown(partitioned)
+    return _elements_to_extended_markdown(partitioned)
 
 
 # ---------------------------------------------------------------------------
