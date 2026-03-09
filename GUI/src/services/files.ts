@@ -171,6 +171,12 @@ export const refreshScrapedFile = async (fileId: string): Promise<void> => {
   });
 };
 
+export const bulkRefreshFiles = async (fileIds: string[]): Promise<void> => {
+  await apiDev.post('/source-file/refresh-multiple', {
+    baseIds: fileIds,
+  });
+};
+
 /**
  * Delete a file
  */

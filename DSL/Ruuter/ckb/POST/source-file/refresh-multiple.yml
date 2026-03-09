@@ -1,0 +1,68 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "refresh multiple source files by base IDs"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: baseIds
+        type: array
+        items:
+          type: string
+        description: "Array of Base IDs of the source-files"
+
+extractRequestData:
+  assign:
+    base_ids: "${incoming.body.baseIds}"
+
+getSourceFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_files_to_scraping_by_base_ids"
+    contentType: json
+    body:
+      base_ids: ${base_ids}
+  result: sourceFilesToRun
+
+checkIfSourceFilesFound:
+  switch:
+    - condition: ${sourceFilesToRun.response.body.length == 0}
+      next: returnNoFilesFound
+  next: checkFirstFileType
+
+checkFirstFileType:
+  switch:
+    - condition: ${sourceFilesToRun.response.body[0].type == "api_file"}
+      next: triggerApiPipeline
+  next: triggerScrapedPipeline
+
+triggerApiPipeline:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-eesti-api-specified-files"
+  requestType: templates
+  body:
+    source_id: ${sourceFilesToRun.response.body[0].sourceBaseId}
+    agency_id: ${sourceFilesToRun.response.body[0].agencyBaseId}
+    source_files: ${sourceFilesToRun.response.body}
+  result: pipelineResult
+  next: returnSuccess
+
+triggerScrapedPipeline:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-specified-pages"
+  requestType: templates
+  body:
+    source_id: ${sourceFilesToRun.response.body[0].sourceBaseId}
+    agency_id: ${sourceFilesToRun.response.body[0].agencyBaseId}
+    source_files: ${sourceFilesToRun.response.body}
+  result: pipelineResult
+  next: returnSuccess
+
+returnSuccess:
+  return: "OK"
+  next: end
+
+returnNoFilesFound:
+  return: "No valid source files found to refresh"
+  next: end
