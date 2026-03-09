@@ -4,7 +4,7 @@ import clsx from 'clsx';
 import './Button.scss';
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
-  appearance?: 'primary' | 'secondary' | 'text' | 'icon' | 'error' | 'success';
+  appearance?: 'primary' | 'secondary' | 'text' | 'icon' | 'error' | 'success' | 'bulk_action' | 'danger';
   size?: 'm' | 's';
   disabledWithoutStyle?: boolean;
 };
