@@ -43,6 +43,7 @@ import {
   updateFileExclusion,
   bulkUpdateFileExclusion,
   refreshScrapedFile,
+  bulkRefreshFiles,
   deleteFile,
   bulkDeleteFiles,
   downloadFile,
@@ -198,6 +199,43 @@ const ScrapedFiles: FC = () => {
         type: 'error',
         title: t('global.notificationError'),
         message: error.message || t('knowledgeBase.refreshError'),
+      });
+    },
+  });
+
+  // Bulk refresh files mutation
+  const bulkRefreshMutation = useMutation({
+    mutationFn: (fileIds: string[]) => bulkRefreshFiles(fileIds),
+    onSuccess: async (_: void, fileIds: string[]) => {
+      const count = fileIds.length;
+      setBulkRefreshConfirm(null);
+
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('global.bulkRefreshSuccess', {
+          count: count,
+          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+        }),
+      });
+
+      // Use refetch to force a fresh data fetch
+      const result = await refetch();
+      
+      // Clear selections after refetch completes and new data is available
+      if (result.isSuccess) {
+        setRowSelection({});
+      }
+    },
+    onError: (error: any, fileIds: string[]) => {
+      const count = fileIds.length;
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('global.bulkRefreshError', {
+          count: count,
+          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+        }),
       });
     },
   });
@@ -537,9 +575,7 @@ const ScrapedFiles: FC = () => {
   const confirmBulkRefresh = () => {
     if (!bulkRefreshConfirm) return;
     const selectedIds = bulkRefreshConfirm.map(row => row.original.baseId);
-    console.log('Refresh selected files:', selectedIds);
-    // TODO: Implement bulk refresh API call
-    setBulkRefreshConfirm(null);
+    bulkRefreshMutation.mutate(selectedIds);
   };
 
   const handleBulkInclude = (selectedRows: Row<ScrapedFile>[]) => {
@@ -1012,21 +1048,25 @@ const ScrapedFiles: FC = () => {
                 <Button
                   appearance="secondary"
                   onClick={() => setBulkRefreshConfirm(null)}
+                  disabled={bulkRefreshMutation.isLoading}
                 >
                   {t('global.cancel')}
                 </Button>
                 <Button
                   appearance="primary"
                   onClick={confirmBulkRefresh}
+                  disabled={bulkRefreshMutation.isLoading}
                 >
-                  {t('knowledgeBase.refresh')}
+                  {bulkRefreshMutation.isLoading
+                    ? t('global.refreshing')
+                    : t('global.refresh')}
                 </Button>
               </Track>
             )}
           >
             {t('global.confirmBulkRefresh', {
               count: bulkRefreshConfirm.length,
-              unit: bulkRefreshConfirm.length === 1 ? t('global.file') : t('global.files')
+              unit: bulkRefreshConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
             })}
           </Dialog>
         )}
