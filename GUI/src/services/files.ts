@@ -187,6 +187,19 @@ export const deleteFile = async (fileId: string): Promise<void> => {
 };
 
 /**
+ * Update exclusion status of multiple files in bulk
+ */
+export const bulkUpdateFileExclusion = async (
+  fileIds: string[],
+  isExcluded: boolean
+): Promise<void> => {
+  await apiDev.post('/source-file/bulk-exclude', {
+    baseIds: fileIds,
+    excluded: isExcluded,
+  });
+};
+
+/**
  * Delete multiple files in bulk
  */
 export const bulkDeleteFiles = async (fileIds: string[]): Promise<void> => {
