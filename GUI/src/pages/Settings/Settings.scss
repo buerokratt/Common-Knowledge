@@ -7,9 +7,7 @@
   display: flex;
   flex-direction: column;
   padding: get-spacing(haapsalu);
-  .card {
-    min-width: 1168px;
-  }
+  
   &__path {
     display: flex;
     align-items: center;
@@ -40,7 +38,6 @@
     display: flex;
     flex-direction: column;
     gap: get-spacing(haapsalu);
-    max-width: 800px;
   }
 
   &__section {
@@ -98,10 +95,10 @@
   }
 
   &__url-list {
-    list-style: circle ;
+    list-style: circle;
     padding: 0;
     margin: 0;
-    margin-left:22px;
+    margin-left: 22px;
     color: get-color(sapphire-blue-10);
     li {
       // display: flex;
@@ -119,10 +116,17 @@
     }
   }
 
-  &__footer {
-    margin-top: auto;
-    padding-top: get-spacing(haapsalu);
+  &__divider {
+    width: 100%;
     border-top: 1px solid get-color(black-coral-2);
+    margin: 8px 0;
+  }
+
+  &__footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding-top: 8px;
   }
 
   // Form field styling adjustments
@@ -195,5 +199,50 @@
       flex-wrap: wrap;
       gap: get-spacing(paldiski);
     }
+  }
+}
+
+.quality-control-standalone {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+
+  &__title {
+    font-weight: 500;
+    color: #005AA3;
+    font-size: 14px;
+  }
+
+  &__options {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  &__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+
+    input[type='checkbox'] {
+      width: 16px;
+      height: 16px;
+      accent-color: #005AA3;
+      cursor: pointer;
+    }
+
+    span {
+      font-size: 14px;
+    }
+  }
+
+  &__info-btn {
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
   }
 }
