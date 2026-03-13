@@ -8,7 +8,9 @@
   text-align: left;
   margin-bottom: 0; 
   display: table;
-
+  border-collapse: separate;
+  border-spacing: 0;
+  
   &__scrollWrapper {
     height: 100%;
     white-space: nowrap;
