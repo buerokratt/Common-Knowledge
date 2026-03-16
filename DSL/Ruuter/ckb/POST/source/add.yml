@@ -31,7 +31,7 @@ extractRequestData:
     url: "${incoming.body.url}"
     subsector: "${incoming.body.subsector}"
     type: "${incoming.body.type}"
-    quality_control: "${incoming.body.qualityControl}"
+    quality_control: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
 
 createSource:
   call: http.post
