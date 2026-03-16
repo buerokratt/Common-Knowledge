@@ -105,6 +105,16 @@ class TriggerCleaningPipeline:
         if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
             return item
 
+        # Get quality_control from task (passed through pipeline)
+        quality_control = getattr(spider.task, 'quality_control', None)
+        
+        # Compute quality control flags
+        use_llm = quality_control in ('basic', 'comprehensive')
+        use_llm_correction = quality_control == 'comprehensive'
+        
+        # DEBUG: Log computed values
+        spider.logger.info(f'[DEBUG] TriggerCleaningPipeline - quality_control={quality_control}, use_llm={use_llm}, use_llm_correction={use_llm_correction}')
+
         path = get_logs_path_for_cleaning(spider)
 
         requests.post(
@@ -119,6 +129,8 @@ class TriggerCleaningPipeline:
                 'source_base_id': spider.task.source_id,
                 'agency_base_id': spider.task.agency_id,
                 'source_run_report_base_id': spider.report_id,
+                'use_llm': use_llm,
+                'use_llm_correction': use_llm_correction,
             }
         )
 
@@ -256,10 +268,16 @@ class CreateSourceRunReportPipeline:
             params={'baseId': task.agency_id}
         ).json()['response'][0]['name']
         spider.logger.info(f'agency_name: {agency_name}')
-        url = requests.get(
+        
+        source_data = requests.get(
             f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get',
             params={'baseId': task.source_id}
-        ).json()['response'][0]['url']
+        ).json()['response'][0]
+        url = source_data['url']
+        
+        # Set quality_control on task for use in TriggerCleaningPipeline
+        spider.task.quality_control = source_data.get('qualityControl')
+        spider.logger.info(f'[DEBUG] CreateSourceRunReportPipeline - Set quality_control={spider.task.quality_control} on task')
 
 
         report_id = requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/add', json={
