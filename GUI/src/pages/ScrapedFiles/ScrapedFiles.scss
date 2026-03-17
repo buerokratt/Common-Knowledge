@@ -1,0 +1,136 @@
+@import 'src/styles/tools/_spacing';
+
+/* Start cleaning notice styles (scoped to ScrapedFiles page) */
+.start-cleaning-notice {
+  box-sizing: border-box;
+
+  /* make background span full card width (including card padding) */
+  width: calc(100% + 2 * get-spacing(haapsalu));
+  margin-left: calc(-1 * get-spacing(haapsalu));
+  /* pull up to remove gap created by .card__body top padding */
+  margin-top: calc(-1 * get-spacing(haapsalu));
+  background: #FFF8E7;
+  border-bottom: 1px solid #BA830D;
+  padding: 0; /* inner padding handled by inner container */
+  box-shadow: none;
+  border-radius: 0;
+
+  &__inner {
+    /* fill the Card content width (match other components) */
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    width: 100%;
+    height: auto;
+    /* match the Card body padding so inner content lines up */
+    padding-top: get-spacing(haapsalu);
+    padding-left: get-spacing(haapsalu);
+    padding-right: get-spacing(haapsalu);
+    margin: 0;
+    position: relative; /* allow absolute positioning for the action button */
+    /* room for bottom-left action and gap to avoid overlap with content */
+    padding-bottom: calc(get-spacing(haapsalu) + 56px);
+  }
+
+  /* Header inside notice */
+  &__header {
+    /* Auto layout */
+    display: flex;
+    flex-direction: row;
+    align-items: flex-start;
+    padding: 0px;
+    gap: 8px;
+
+    width: 232px;
+    height: 24px;
+    margin-bottom: 8px; /* gap between header and message */
+  }
+
+  &__icon {
+    width: 24px;
+    height: 24px;
+    flex: none;
+    color: #94690D;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+  }
+
+
+  &__left {
+    color: #BA830D; /* use the darker amber */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    flex: none;
+  }
+
+  &__body {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  &__title {
+    width: 200px;
+    height: 24px;
+    font-family: 'Roboto';
+    font-style: normal;
+    font-weight: 400; /* normal weight, not bold */
+    font-size: 18px;
+    line-height: 133%;
+    leading-trim: none;
+    letter-spacing: 0px;
+    vertical-align: middle;
+    display: flex;
+    align-items: center;
+    color: #94690D !important;
+    flex: 1 1 auto;
+    margin-bottom: 6px;
+  }
+
+  &__text {
+    font-family: 'Roboto';
+    font-style: normal;
+    font-weight: 400;
+    font-size: 14px;
+    leading-trim: none;
+    line-height: 171%;
+    letter-spacing: 0px;
+    color: #94690D; /* same amber color as header */
+  }
+
+  &__action {
+    display: flex;
+    align-items: center;
+    flex: none;
+    position: absolute;
+    left: get-spacing(haapsalu);
+    bottom: get-spacing(haapsalu);
+    margin-left: 0;
+  }
+
+  /* Style the button to match alert's amber color */
+  &__action button,
+  &__action .button {
+    /* use the alert section background and amber text; button border uses theme variable */
+    background-color: #FFF8E7;
+    border: 2px solid var(--buttons-theme-secondary-border-default, #005AA3);
+    color:#005AA3;
+    box-shadow: none;
+    font-family: 'Roboto';
+    font-weight: 700;
+    font-size: 14px;
+    leading-trim: none;
+    line-height: 171%;
+    letter-spacing: 0px;
+    text-align: center;
+    vertical-align: middle;
+  }
+
+  &__action button:hover,
+  &__action .button:hover {
+    background-color: #FFF2D9; /* subtle hover darker/lighter as needed */
+  }
+}

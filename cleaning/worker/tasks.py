@@ -1,17 +1,20 @@
 import json
 import logging
 import re
+import datetime
+from pathlib import Path
 
 import requests
 from langdetect import detect, LangDetectException
+from pydantic import ValidationError
 
 from unstructured.partition.auto import partition
 from unstructured.partition.html import partition_html
 from bs4 import BeautifulSoup
 
 from api.config import settings
-from api.models import EntityToClean
-from worker.utils import catch_error
+from api.models import EntityToClean, SourceCleaningTask
+from worker.utils import catch_error, send_error
 
 logger = logging.getLogger(__name__)
 
@@ -164,3 +167,94 @@ def clean_file_task(entity: EntityToClean):
                 'cleaned_metadata_url': uploaded_cleaned_metadata_url,
             }
         )
+def _to_local_path(path_or_url: str | None) -> Path | None:
+    if not path_or_url:
+        return None
+    return Path('/' + path_or_url.replace('uploads/', '').lstrip('/'))
+
+
+def clean_source_task(task: SourceCleaningTask):
+    logs_path = Path(task.logs_path)
+    logs_path.parent.mkdir(parents=True, exist_ok=True)
+    logs_path.touch(exist_ok=True)
+
+    for file in task.files:
+        try:
+            requests.post(
+                f"{settings.ruuter_internal}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                json={
+                    'base_id': file.baseId,
+                    'status': 'cleaning',
+                }
+            )
+            
+            fallback_directory = Path('/scrapped-data') / task.agency_base_id / file.sourceBaseId / file.baseId
+            file_path = _to_local_path(file.originalDataUrl) or fallback_directory / 'source.html'
+            meta_data_path = _to_local_path(file.originalMetadataUrl) or fallback_directory / 'source.meta.json'
+
+            entity = EntityToClean(
+                file_path=file_path,
+                meta_data_path=meta_data_path,
+                directory_path=fallback_directory,
+                source_file_id=file.baseId,
+                url=file.url,
+                logs_path=logs_path,
+                source_base_id=file.sourceBaseId,
+                agency_base_id=task.agency_base_id,
+                source_run_report_base_id=task.source_run_report_base_id,
+                use_llm=task.use_llm,
+                use_llm_correction=task.use_llm_correction,
+            )
+            clean_file_task(entity)
+        except ValidationError as e:
+            send_error(
+                file.url,
+                'cleaning',
+                str(e),
+                file.sourceBaseId,
+                task.agency_base_id,
+                task.source_run_report_base_id,
+            )
+        except Exception as e:
+            send_error(
+                file.url,
+                'cleaning',
+                str(e),
+                file.sourceBaseId,
+                task.agency_base_id,
+                task.source_run_report_base_id,
+            )
+
+    cleaning_log_url = ""
+    if logs_path.exists():
+        upload_result = requests.post(
+            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+            json={'source_file_path': logs_path.as_posix()},
+        ).json()
+        cleaning_log_url = upload_result.get('response', '')
+
+    requests.post(
+        f"{settings.ruuter_internal}/ckb/reports/update",
+        json={
+            'baseId': task.source_run_report_base_id,
+            'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
+            'scrapingLogUrl': task.scraping_log_url,
+            'cleaningLogUrl': cleaning_log_url,
+        }
+    )
+
+    requests.post(
+        f"{settings.ruuter_internal}/ckb/source/update-status",
+        json={
+            'source_id': task.source_base_id,
+            'status': 'finished',
+        }
+    )
+
+    requests.post(
+        f"{settings.ruuter_internal}/ckb/agency/update-zip-dirty",
+        json={
+            'sourceId': task.source_base_id,
+            'agencyId': task.agency_base_id,
+        }
+    )
