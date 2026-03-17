@@ -32,6 +32,9 @@ declaration:
       - field: external_id
         type: string
         description: "External identifier"
+      - field: status
+        type: string
+        description: "Processing status (e.g. in_review, scraping, cleaning, finished)"
   response:
     fields:
       - field: id
@@ -48,7 +51,7 @@ SELECT copy_row_with_modifications(
         'original_metadata_url', '::TEXT', :original_metadata_url,
         'original_data_hash', '::TEXT', :original_data_hash,
         'last_scraped_at', '::TIMESTAMP WITH TIME ZONE', :scraped_at::TEXT,
-        'status', '::SOURCE_FILE_STATUS_TYPE', 'cleaning',
+        'status', '::SOURCE_FILE_STATUS_TYPE', :status,
         'external_id', '::TEXT', :external_id,
         'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR
     ]::VARCHAR[]

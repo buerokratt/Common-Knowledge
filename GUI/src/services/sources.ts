@@ -20,6 +20,8 @@ export interface Source {
   updatedAt: string;
   cronSchedule?: string;
   updateAutomatically?: boolean;
+  hasFinishedFiles?: boolean;
+  type?: string;
 }
 
 // API Integration interface - extends Source but with specific properties
@@ -133,6 +135,15 @@ export interface ApiSourceFilesListParams {
   search?: string;
   type: 'api_file';
 }
+
+/**
+ * Start cleaning for a source
+ */
+export const startCleaning = async (sourceId: string): Promise<void> => {
+  await apiDev.post('/source/start-cleaning', {
+    source_id: sourceId,
+  });
+};
 
 // Re-export types that might be needed by consumers
 export type { FileProgressCallback } from './s3';

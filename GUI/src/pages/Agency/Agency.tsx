@@ -512,9 +512,16 @@ const Agency: FC = () => {
         <span
           className={`agencies__status-cell`}
           style={{
-            color: row.original.status === 'running' ? '#005AA3' : '#266B42',
-            borderColor:
-              row.original.status === 'running' ? '#005AA3' : '#266B42',
+            color: row.original.status === 'running'
+              ? '#005AA3'
+              : row.original.status === 'in_review'
+              ? '#BA830D'
+              : '#266B42',
+            borderColor: row.original.status === 'running'
+              ? '#005AA3'
+              : row.original.status === 'in_review'
+              ? '#BA830D'
+              : '#266B42',
           }}
         >
           {t(`knowledgeBase.${row.original.status}`)}
@@ -548,7 +555,9 @@ const Agency: FC = () => {
               size="s"
               onClick={() => handleRefreshSource(row.original.baseId)}
               disabled={
-                refreshMutation.isLoading || row.original.type === 'file'
+                refreshMutation.isLoading || 
+                row.original.type === 'file' ||
+                (row.original.status === 'in_review' && !row.original.hasFinishedFiles)
               }
             >
               <Icon icon={<MdRefresh fontSize={20} />} size="medium" />

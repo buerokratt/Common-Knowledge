@@ -49,6 +49,7 @@ triggerPipeline:
     agency_id: ${agency_base_id}
     source_id: ${res.response.body[0].baseId}
     url: ${url}
+    is_initial_scrape: true
   result: triggerResult
 
 

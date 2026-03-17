@@ -5,6 +5,7 @@ class BaseObject(BaseModel):
     agency_id: str
     source_id: str
     ignore_stopping: bool = False
+    is_initial_scrape: bool = False
 
 
 class LinkToScrape(BaseModel):
