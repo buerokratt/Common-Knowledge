@@ -34,7 +34,7 @@ WHERE (base_id, updated_at) IN (
         status = 'new'
         OR (
             update_automatically = TRUE
-            AND status NOT IN ('running', 'failed', 'in_review')
+            AND status NOT IN ('running', 'failed')
             AND next_scrapping_at <= NOW()
         )
     )

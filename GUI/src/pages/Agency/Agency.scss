@@ -6,41 +6,6 @@
   display: unset;
 }
 
-.quality-control-options {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  width: 100%;
-  align-self: flex-start;
-  text-align: left;
-
-  &__title {
-    font-weight: 500;
-    color: #005AA3;
-  }
-
-  &__item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    width: auto;
-    cursor: pointer;
-
-    input[type='radio'] {
-      accent-color: #005AA3;
-    }
-  }
-
-  &__row {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-    gap: 8px;
-    width: 100%;
-  }
-
-}
-
 .agency-container {
   height: 100%;
   display: flex;

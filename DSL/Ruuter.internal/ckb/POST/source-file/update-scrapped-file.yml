@@ -32,9 +32,6 @@ declaration:
       - field: external_id
         type: string
         description: "Optional external id"
-      - field: status
-        type: string
-        description: "Processing status (e.g. in_review, scraping, cleaning, finished)"
 
 updateScrappedFile:
   call: http.post
@@ -49,7 +46,6 @@ updateScrappedFile:
       original_data_hash: ${incoming.body.original_data_hash}
       scraped_at: ${incoming.body.scraped_at}
       external_id: ${incoming.body.external_id}
-      status: ${incoming.body.status}
   result: res
 
 returnResult:

@@ -14,7 +14,7 @@ declaration:
       - field: status
         type: string
         description: "status to set"
-        enum: ['running', 'finished', 'failed', 'in_review']
+        enum: ['running', 'finished', 'failed']
 
 
 extractRequestData:

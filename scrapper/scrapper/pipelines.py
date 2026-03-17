@@ -101,20 +101,6 @@ class TriggerCleaningPipeline:
         if not isinstance(item, ScrappedItem):
             return item
 
-        # Skip cleaning trigger for initial scrape
-        if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
-            return item
-
-        # Get quality_control from task (passed through pipeline)
-        quality_control = getattr(spider.task, 'quality_control', None)
-        
-        # Compute quality control flags
-        use_llm = quality_control in ('basic', 'comprehensive')
-        use_llm_correction = quality_control == 'comprehensive'
-        
-        # DEBUG: Log computed values
-        spider.logger.info(f'[DEBUG] TriggerCleaningPipeline - quality_control={quality_control}, use_llm={use_llm}, use_llm_correction={use_llm_correction}')
-
         path = get_logs_path_for_cleaning(spider)
 
         requests.post(
@@ -129,8 +115,6 @@ class TriggerCleaningPipeline:
                 'source_base_id': spider.task.source_id,
                 'agency_base_id': spider.task.agency_id,
                 'source_run_report_base_id': spider.report_id,
-                'use_llm': use_llm,
-                'use_llm_correction': use_llm_correction,
             }
         )
 
@@ -172,12 +156,6 @@ class UpdateSourceFile:
     def process_item(self, item, spider: Spider):
         if not isinstance(item, ScrappedItem):
             return item
-            
-        # Set file status to 'cleaning' for normal flow, 'in_review' for initial scrape
-        file_status = 'cleaning'
-        if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
-            file_status = 'in_review'
-        
 
         requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file', json={
             'base_id': item.source_file_id,
@@ -187,8 +165,7 @@ class UpdateSourceFile:
             'original_metadata_url': item.metadata_path_uploaded,
             'original_data_hash': item.hash,
             'scraped_at': item.metadata.created_at,
-            'external_id': item.metadata.external_id,
-            'status': file_status
+            'external_id': item.metadata.external_id
         })
         return item
 
@@ -202,32 +179,6 @@ class ScrappingFinishedPipeline:
         spider: BaseSpider
         task: BaseObject = spider.task
 
-        # Check if the source was manually stopped
-        source_resp = requests.get(
-            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
-            params={'baseId': task.source_id}
-        ).json()
-        
-        is_stopping = source_resp['response'][0].get('isStopping', False)
-        spider.logger.info(f'is_stopping: {is_stopping}')
-
-
-        # If stopped manually, force status to 'finished' regardless of initial/refresh state
-        if is_stopping:
-            requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
-                'sourceId': task.source_id,
-                'agencyId': task.agency_id,
-            })
-            return
-
-        # After all files are scraped, update source status to in_review for initial scrape
-        if hasattr(task, 'is_initial_scrape') and task.is_initial_scrape:
-            requests.post(f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status", json={
-                'source_id': task.source_id,
-                'status': 'in_review',
-            })
-            return
-        
         requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
             'sourceId': task.source_id,
             'agencyId': task.agency_id,
@@ -237,7 +188,6 @@ class ScrappingFinishedPipeline:
 class SetSourceStatusRunningPipeline:
     @catch_error_spider
     def open_spider(self, spider: Spider):
-        
         if not hasattr(spider, 'task'):
             return
 
@@ -268,16 +218,10 @@ class CreateSourceRunReportPipeline:
             params={'baseId': task.agency_id}
         ).json()['response'][0]['name']
         spider.logger.info(f'agency_name: {agency_name}')
-        
-        source_data = requests.get(
+        url = requests.get(
             f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get',
             params={'baseId': task.source_id}
-        ).json()['response'][0]
-        url = source_data['url']
-        
-        # Set quality_control on task for use in TriggerCleaningPipeline
-        spider.task.quality_control = source_data.get('qualityControl')
-        spider.logger.info(f'[DEBUG] CreateSourceRunReportPipeline - Set quality_control={spider.task.quality_control} on task')
+        ).json()['response'][0]['url']
 
 
         report_id = requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/add', json={
@@ -350,17 +294,6 @@ class UploadLogsPipeline:
         scraping_log_url = r.json()['response']
         os.remove(path)
 
-        is_initial_scrape = hasattr(spider, 'task') and hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape
-
-        if is_initial_scrape:
-            # Only send scrapingLogUrl in report update
-            requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update', json={
-                'baseId': spider.report_id,
-                'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
-                'scrapingLogUrl': scraping_log_url,
-                'cleaningLogUrl': "",
-            })
-            return
 
         path = get_logs_path_for_cleaning(spider)
         r = requests.post(
