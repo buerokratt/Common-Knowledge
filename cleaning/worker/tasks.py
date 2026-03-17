@@ -225,11 +225,16 @@ def clean_source_task(task: SourceCleaningTask):
 
     cleaning_log_url = ""
     if logs_path.exists():
-        upload_result = requests.post(
-            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
-            json={'source_file_path': logs_path.as_posix()},
-        ).json()
-        cleaning_log_url = upload_result.get('response', '')
+        try:
+            upload_result = requests.post(
+                f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                json={'source_file_path': logs_path.as_posix()},
+            )
+            upload_result.raise_for_status()
+            cleaning_log_url = upload_result.json().get('response', '')
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Failed to upload cleaning log file: {e}')
+            cleaning_log_url = ""
 
     requests.post(
         f"{settings.ruuter_internal}/ckb/reports/update",
