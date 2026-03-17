@@ -2,7 +2,7 @@ import { FC, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { MdOutlineSchedule,MdInfoOutline } from 'react-icons/md';
+import { MdOutlineSchedule } from 'react-icons/md';
 import {
   Button,
   FormInput,
@@ -11,12 +11,12 @@ import {
   Icon,
   Track,
   Card,
-  Tooltip,
 } from 'components';
 import { useToast } from 'hooks/useToast';
 import {
   updateSourceScrapeInterval,
   getSource,
+  Source,
 } from 'services/sources';
 import { apiDev } from 'services/api';
 import './Settings.scss';
@@ -34,7 +34,6 @@ interface UpdateSettings {
   monthlyType?: 'dayOfMonth' | 'weekPosition';
   yearlyType?: 'dayOfMonth' | 'weekPosition';
   timeOfUpdate: string;
-  qualityControlLevel?: '' | 'basic' | 'comprehensive';
 }
 
 const SourceSettings: FC = () => {
@@ -55,7 +54,6 @@ const SourceSettings: FC = () => {
     dayOfWeek: 'wednesday',
     monthOfYear: 'December',
     daysOfWeek: ['Mon'],
-    qualityControlLevel: '',
   });
 
   const [isInitialized, setIsInitialized] = useState(false);
@@ -240,7 +238,6 @@ const SourceSettings: FC = () => {
         ...prev,
         url: sourceData.url,
         updateAutomatically: sourceData.updateAutomatically || false,
-        qualityControlLevel: sourceData.qualityControl || '',
         ...parsedSettings,
       }));
 
@@ -254,13 +251,11 @@ const SourceSettings: FC = () => {
       baseId,
       cronSchedule,
       updateAutomatically,
-      qualityControl,
     }: {
       baseId: string;
       cronSchedule: string;
       updateAutomatically: boolean;
-      qualityControl?: 'basic' | 'comprehensive' | null;
-    }) => updateSourceScrapeInterval(baseId, cronSchedule, updateAutomatically, qualityControl),
+    }) => updateSourceScrapeInterval(baseId, cronSchedule, updateAutomatically),
     onSuccess: () => {
       toast.open({
         type: 'success',
@@ -419,7 +414,6 @@ const SourceSettings: FC = () => {
       baseId: sourceId,
       cronSchedule: cronExpression,
       updateAutomatically: settings.updateAutomatically,
-      qualityControl: settings.qualityControlLevel || null,
     });
   };
 
@@ -815,8 +809,35 @@ const SourceSettings: FC = () => {
       <h1 style={{ marginBottom: 16 }} className="h1">
         {t('knowledgeBase.scrapeSettings')}
       </h1>
-      
-      <Card>
+      <Card
+        footer={
+          <div>
+            <Track gap={16} justify="between">
+              <Button
+                appearance="secondary"
+                style={{
+                  color: '#005AA3',
+                  borderColor: '#005AA3 !important',
+                  boxShadow: 'inset 0 0 0 2px #005AA3',
+                }}
+                onClick={handleCancel}
+                disabled={updateMutation.isLoading}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={handleSave}
+                disabled={updateMutation.isLoading}
+              >
+                {updateMutation.isLoading
+                  ? t('global.saving')
+                  : t('global.save')}
+              </Button>
+            </Track>
+          </div>
+        }
+      >
         <div className="knowledge-base-settings__content">
           <div className="knowledge-base-settings__section">
             <label className="knowledge-base-settings__label">
@@ -859,7 +880,7 @@ const SourceSettings: FC = () => {
                       name="repeatUnit"
                       hideLabel
                       options={repeatOptions}
-                      style={{ minWidth: 160 }}
+                      style={{ minWidth: 260 }}
                       defaultValue={settings.repeatUnit}
                       onSelectionChange={(option) =>
                         setSettings((prev) => ({
@@ -958,92 +979,6 @@ const SourceSettings: FC = () => {
             </label>
             <Button appearance="primary" onClick={handleUpdateManually}>
               {t('knowledgeBase.updateData')}
-            </Button>
-          </div>
-
-          <div className="knowledge-base-settings__divider" />
-
-          <div className="quality-control-standalone">
-            <span className="quality-control-standalone__title">
-              Content extraction quality control options:
-            </span>
-            <div className="quality-control-standalone__options">
-              <label className="quality-control-standalone__item">
-                <input
-                  type="radio"
-                  name="qualityControl"
-                  checked={settings.qualityControlLevel === 'basic'}
-                  onClick={() =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      qualityControlLevel:
-                        prev.qualityControlLevel === 'basic' ? '' : 'basic',
-                    }))
-                  }
-                  onChange={() => {}}
-                />
-                <span>Basic quality control</span>
-                <Tooltip content="Tooltip to be implemented">
-                  <button
-                    type="button"
-                    className="quality-control-standalone__info-btn"
-                    aria-label="Basic quality control info"
-                  >
-                    <Icon icon={<MdInfoOutline fontSize={18} color="#005AA3" />} size="medium" />
-                  </button>
-                </Tooltip>
-              </label>
-              <label className="quality-control-standalone__item">
-                <input
-                  type="radio"
-                  name="qualityControl"
-                  checked={settings.qualityControlLevel === 'comprehensive'}
-                  onClick={() =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      qualityControlLevel:
-                        prev.qualityControlLevel === 'comprehensive'
-                          ? ''
-                          : 'comprehensive',
-                    }))
-                  }
-                  onChange={() => {}}
-                />
-                <span>Comprehensive quality control</span>
-                <Tooltip content="Tooltip to be implemented">
-                  <button
-                    type="button"
-                    className="quality-control-standalone__info-btn"
-                    aria-label="Comprehensive quality control info"
-                  >
-                    <Icon icon={<MdInfoOutline fontSize={18} color="#005AA3" />} size="medium" />
-                  </button>
-                </Tooltip>
-              </label>
-            </div>
-          </div>
-
-          <div className="knowledge-base-settings__divider" />
-
-          <div className="knowledge-base-settings__footer">
-            <Button
-              appearance="secondary"
-              style={{
-                color: '#005AA3',
-                borderColor: '#005AA3 !important',
-                boxShadow: 'inset 0 0 0 2px #005AA3',
-              }}
-              onClick={handleCancel}
-              disabled={updateMutation.isLoading}
-            >
-              {t('global.cancel')}
-            </Button>
-            <Button
-              appearance="primary"
-              onClick={handleSave}
-              disabled={updateMutation.isLoading}
-            >
-              {updateMutation.isLoading ? t('global.saving') : t('global.save')}
             </Button>
           </div>
         </div>

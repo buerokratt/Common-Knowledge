@@ -20,9 +20,6 @@ export interface Source {
   updatedAt: string;
   cronSchedule?: string;
   updateAutomatically?: boolean;
-  hasFinishedFiles?: boolean;
-  type?: string;
-  qualityControl?: 'basic' | 'comprehensive' | null;
 }
 
 // API Integration interface - extends Source but with specific properties
@@ -96,7 +93,6 @@ export interface CreateSourceRequest {
   type: 'file' | 'url' | 'api';
   files?: File[];
   apiUrl?: string;
-  qualityControlLevel?: '' | 'basic' | 'comprehensive';
 }
 
 export interface UpdateSourceSubsectorRequest {
@@ -137,15 +133,6 @@ export interface ApiSourceFilesListParams {
   search?: string;
   type: 'api_file';
 }
-
-/**
- * Start cleaning for a source
- */
-export const startCleaning = async (sourceId: string): Promise<void> => {
-  await apiDev.post('/source/start-cleaning', {
-    source_id: sourceId,
-  });
-};
 
 // Re-export types that might be needed by consumers
 export type { FileProgressCallback } from './s3';
@@ -353,7 +340,6 @@ export const createSourceUrl = async (
     url: data.url,
     subsector: data.subsector,
     type: 'url_to_scrape',
-    qualityControl: data.qualityControlLevel || null,
   });
 
   const apiResponse: ApiResponse = response.data;
@@ -474,14 +460,12 @@ export const getApiSourceFiles = async (
 export const updateSourceScrapeInterval = async (
   sourceId: string,
   cronSchedule: string,
-  updateAutomatically: boolean,
-  qualityControl?: 'basic' | 'comprehensive' | null
+  updateAutomatically: boolean
 ): Promise<Source> => {
   const response = await apiDev.post('/source/edit-scrape-interval', {
     baseId: sourceId,
     cronSchedule: cronSchedule,
     updateAutomatically: updateAutomatically,
-    qualityControl: qualityControl,
   });
 
   const apiResponse: ApiResponse = response.data;

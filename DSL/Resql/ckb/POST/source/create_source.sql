@@ -20,10 +20,6 @@ declaration:
       - field: type
         type: string
         description: "Source type"
-      - field: quality_control
-        type: string
-        description: "Quality control method (basic, comprehensive, or null)"
-        required: false
   response:
     fields:
       - field: id
@@ -48,21 +44,15 @@ declaration:
         type: string
         enum: ['new', 'running', 'finished', 'failed']
         description: "Source status"
-      - field: quality_control
-        type: string
-        enum: ['basic', 'comprehensive']
-        description: "Quality control method"
-        required: false
 */
 INSERT INTO data_collection.source (
-    agency_base_id, url, subsector, type, status, quality_control
+    agency_base_id, url, subsector, type, status
 )
 VALUES (
     :agency_base_id::UUID, 
     :url,
     :subsector,
     :type::source_type,
-    'running'::source_status_type,
-  NULLIF(:quality_control, '')::quality_control_type
+    'running'::source_status_type
 )
-RETURNING id, base_id, agency_base_id, url, subsector, type, status, quality_control;
+RETURNING id, base_id, agency_base_id, url, subsector, type, status;

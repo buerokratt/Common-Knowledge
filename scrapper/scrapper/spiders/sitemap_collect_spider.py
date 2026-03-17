@@ -95,50 +95,11 @@ class SitemapCollectSpider(BaseSpider):
 
         return '.'.join(netloc.split('.')[-2:])
 
-    @staticmethod
-    def _normalize_host(url: str) -> str:
-        host = (urlparse(url).hostname or '').lower()
-        if host.startswith('www.'):
-            return host[4:]
-        return host
-
-    @staticmethod
-    def _normalize_path(url: str) -> str:
-        path = urlparse(url).path or '/'
-        if path != '/':
-            path = path.rstrip('/')
-        return path or '/'
-
-    @staticmethod
-    def _is_path_in_scope(candidate_path: str, scope_path: str) -> bool:
-        if scope_path == '/':
-            return True
-        return candidate_path == scope_path or candidate_path.startswith(f'{scope_path}/')
-
     @property
     @cache
     def pure_allowed_domains(self):
         pure_domains = [self.get_pure_domain(url) for url in self.start_urls]
         return pure_domains
-
-    @property
-    @cache
-    def scope_roots(self) -> list[tuple[str, str]]:
-        return [
-            (self._normalize_host(url), self._normalize_path(url))
-            for url in self.start_urls
-        ]
-
-    def is_in_scope(self, url: str) -> bool:
-        candidate_host = self._normalize_host(url)
-        candidate_path = self._normalize_path(url)
-
-        for scope_host, scope_path in self.scope_roots:
-            if candidate_host != scope_host:
-                continue
-            if self._is_path_in_scope(candidate_path, scope_path):
-                return True
-        return False
 
     async def parse(self, response: Response, **kwargs):
         async for scrapped_item in super().parse(response, **kwargs):
@@ -154,7 +115,7 @@ class SitemapCollectSpider(BaseSpider):
             self.scraped_urls.add(response.request.url)
             self.scraped_urls.add(response.url)
 
-            if not self.is_in_scope(response.url):
+            if self.get_pure_domain(response.url) not in self.pure_allowed_domains:
                 continue
 
             if scrapped_item.metadata.file_type not in self.settings.get('ALLOWED_FILETYPES'):
@@ -188,8 +149,8 @@ class SitemapCollectSpider(BaseSpider):
                 next_url = urljoin(response.url, href)
                 next_url = next_url.split('#')[0]
 
-                # Only follow links within the crawl scope defined by is_in_scope (rooted at start_urls host/path)
-                if not self.is_in_scope(next_url):
+                # Only follow links within allowed_domains
+                if self.get_pure_domain(next_url) not in self.pure_allowed_domains:
                     continue
 
                 # Skip archive URLs

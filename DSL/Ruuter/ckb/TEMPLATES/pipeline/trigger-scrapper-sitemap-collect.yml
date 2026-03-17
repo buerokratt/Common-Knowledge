@@ -3,7 +3,6 @@ extractRequestData:
     agency_id: ${incoming.body.agency_id}
     source_id: ${incoming.body.source_id}
     url: ${incoming.body.url}
-    is_initial_scrape: ${incoming.body.is_initial_scrape}
 
 
 triggerScrapper:
@@ -15,7 +14,6 @@ triggerScrapper:
       agency_id: ${agency_id}
       source_id: ${source_id}
       url: ${url}
-      is_initial_scrape: ${is_initial_scrape}
   result: triggerScrapperResult
 
 returnResult:

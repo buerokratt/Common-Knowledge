@@ -8,7 +8,6 @@ import {
   MdOutlineEdit,
   MdRefresh,
   MdOutlineStopCircle,
-  MdInfoOutline,
 } from 'react-icons/md';
 import {
   Button,
@@ -54,16 +53,7 @@ interface KnowledgeBaseFormData {
   files: FileItem[];
   apiUrl?: string;
   websiteUrl?: string;
-  qualityControlLevel: '' | 'basic' | 'comprehensive';
 }
-
-const getInitialFormData = (): KnowledgeBaseFormData => ({
-  subsector: '',
-  files: [],
-  apiUrl: '',
-  websiteUrl: '',
-  qualityControlLevel: '',
-});
 
 const Agency: FC = () => {
   const { t } = useTranslation();
@@ -90,9 +80,10 @@ const Agency: FC = () => {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
-   const [formData, setFormData] = useState<KnowledgeBaseFormData>(
-    getInitialFormData()
-  );
+  const [formData, setFormData] = useState<KnowledgeBaseFormData>({
+    subsector: '',
+    files: [],
+  });
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
@@ -218,7 +209,7 @@ const Agency: FC = () => {
       }));
 
       setUploadModal(false);
-      setFormData(getInitialFormData());
+      setFormData({ subsector: '', files: [] });
 
       toast.open({
         type: 'success',
@@ -266,7 +257,7 @@ const Agency: FC = () => {
         message: t('knowledgeBase.urlSuccess'),
       });
       setAddUrlModal(false);
-      setFormData(getInitialFormData);
+      setFormData({ subsector: '', files: [] });
       queryClient.invalidateQueries(['sources']);
     },
     onError: (error: any) => {
@@ -289,7 +280,7 @@ const Agency: FC = () => {
         message: t('knowledgeBase.updateSuccess'),
       });
       setEditModal(null);
-      setFormData(getInitialFormData);
+      setFormData({ subsector: '', files: [] });
       queryClient.invalidateQueries(['sources']);
     },
     onError: (error: any) => {
@@ -410,7 +401,6 @@ const Agency: FC = () => {
       url: formData.websiteUrl,
       subsector: formData.subsector,
       type: 'url',
-      qualityControlLevel: formData.qualityControlLevel,
     });
   };
 
@@ -431,7 +421,8 @@ const Agency: FC = () => {
   const handleEdit = (item: Source) => {
     setEditModal(item);
     setFormData({
-      ...getInitialFormData(),
+      subsector: item.subsector,
+      files: [],
     });
   };
 
@@ -521,16 +512,9 @@ const Agency: FC = () => {
         <span
           className={`agencies__status-cell`}
           style={{
-            color: row.original.status === 'running'
-              ? '#005AA3'
-              : row.original.status === 'in_review'
-              ? '#BA830D'
-              : '#266B42',
-            borderColor: row.original.status === 'running'
-              ? '#005AA3'
-              : row.original.status === 'in_review'
-              ? '#BA830D'
-              : '#266B42',
+            color: row.original.status === 'running' ? '#005AA3' : '#266B42',
+            borderColor:
+              row.original.status === 'running' ? '#005AA3' : '#266B42',
           }}
         >
           {t(`knowledgeBase.${row.original.status}`)}
@@ -564,9 +548,7 @@ const Agency: FC = () => {
               size="s"
               onClick={() => handleRefreshSource(row.original.baseId)}
               disabled={
-                refreshMutation.isLoading || 
-                row.original.type === 'file' ||
-                (row.original.status === 'in_review' && !row.original.hasFinishedFiles)
+                refreshMutation.isLoading || row.original.type === 'file'
               }
             >
               <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
@@ -777,75 +759,6 @@ const Agency: FC = () => {
               }
               required
             />
-            <div className="quality-control-options">
-              <span className="quality-control-options__title">
-                Content extraction quality control options:
-              </span>
-              <div className="quality-control-options__row">
-                <label className="quality-control-options__item">
-                  <input
-                    type="radio"
-                    name="qualityControlLevel"
-                    checked={formData.qualityControlLevel === 'basic'}
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        qualityControlLevel:
-                          prev.qualityControlLevel === 'basic' ? '' : 'basic',
-                      }))
-                    }
-                    onChange={() => {}}
-                  />
-                  <span>Basic quality control</span>
-                </label>
-                <Tooltip content="Tooltip to be implemented">
-                  <button
-                    type="button"
-                    className="quality-control-options__info-btn"
-                    aria-label="Basic quality control info"
-                  >
-                    <Icon
-                      className="quality-control-options__info"
-                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
-                      size="medium"
-                    />
-                  </button>
-                </Tooltip>
-              </div>
-              <div className="quality-control-options__row">
-                <label className="quality-control-options__item">
-                  <input
-                    type="radio"
-                    name="qualityControlLevel"
-                    checked={formData.qualityControlLevel === 'comprehensive'}
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        qualityControlLevel:
-                          prev.qualityControlLevel === 'comprehensive'
-                            ? ''
-                            : 'comprehensive',
-                      }))
-                    }
-                    onChange={() => {}}
-                  />
-                  <span>Comprehensive quality control</span>
-                </label>
-                <Tooltip content="Tooltip to be implemented">
-                  <button
-                    type="button"
-                    className="quality-control-options__info-btn"
-                    aria-label="Comprehensive quality control info"
-                  >
-                    <Icon
-                      className="quality-control-options__info"
-                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
-                      size="medium"
-                    />
-                  </button>
-                </Tooltip>
-              </div>
-            </div>
           </Track>
         </Dialog>
       )}
