@@ -236,15 +236,19 @@ def clean_source_task(task: SourceCleaningTask):
             logger.error(f'Failed to upload cleaning log file: {e}')
             cleaning_log_url = ""
 
-    requests.post(
-        f"{settings.ruuter_internal}/ckb/reports/update",
-        json={
-            'baseId': task.source_run_report_base_id,
-            'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
-            'scrapingLogUrl': task.scraping_log_url,
-            'cleaningLogUrl': cleaning_log_url,
-        }
-    )
+    try:
+        response = requests.post(
+            f"{settings.ruuter_internal}/ckb/reports/update",
+            json={
+                'baseId': task.source_run_report_base_id,
+                'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
+                'scrapingLogUrl': task.scraping_log_url,
+                'cleaningLogUrl': cleaning_log_url,
+            }
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f'Failed to update report with cleaning log URL: {e}')
 
     requests.post(
         f"{settings.ruuter_internal}/ckb/source/update-status",
