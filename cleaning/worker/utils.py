@@ -38,6 +38,7 @@ def catch_error(entity: EntityToClean):
             entity.url, 'cleaning', str(e),
             entity.source_base_id, entity.agency_base_id, entity.source_run_report_base_id
         )
+        raise
     finally:
         # Always clean up the directory, whether success or failure
         try:

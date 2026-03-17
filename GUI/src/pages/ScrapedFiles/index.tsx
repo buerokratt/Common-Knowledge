@@ -8,6 +8,7 @@ import {
   MdOutlineTableChart,
   MdGridView,
   MdOutlineDeleteOutline,
+  MdWarning,
   MdArrowForward,
   MdPowerSettingsNew,
 } from 'react-icons/md';
@@ -34,7 +35,9 @@ import {
   HeaderContext,
 } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
+import { START_CLEANING_NOTIFICATION } from 'utils/constants';
 import 'pages/Agency/AgencyList.scss';
+import 'pages/ScrapedFiles/ScrapedFiles.scss';
 import {
   getScrapedFiles,
   updateFileExclusion,
@@ -50,7 +53,7 @@ import {
   ScrapedFilesListParams,
   EditorState,
 } from 'services/files';
-import { getSource } from 'services/sources';
+import { getSource, startCleaning } from 'services/sources';
 
 interface FormData {
   search: string;
@@ -108,6 +111,28 @@ const ScrapedFiles: FC = () => {
   });
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // Start cleaning API call
+  const handleStartCleaning = async () => {
+    if (!sourceId) return;
+    try {
+      await startCleaning(sourceId);
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.cleaningStarted'),
+      });
+      // Optionally refetch source and files
+      queryClient.invalidateQueries(['scrapedFiles']);
+      queryClient.invalidateQueries(['source', sourceId]);
+    } catch (error: any) {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.cleaningStartError'),
+      });
+    }
+  };
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
@@ -698,6 +723,7 @@ const ScrapedFiles: FC = () => {
             className="agencies__action-btn"
             size="s"
             onClick={() => handleRefresh(row.original)}
+            disabled={row.original.status !== 'finished'}
           >
             <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
             {t('knowledgeBase.refresh')}
@@ -780,6 +806,8 @@ const ScrapedFiles: FC = () => {
             ? '#266B42'
             : row.original.status === 'cleaning'
             ? '#94690D'
+            : row.original.status === 'in_review'
+            ? '#BA830D'
             : '#AC3232';
         return (
           <span
@@ -895,7 +923,28 @@ const ScrapedFiles: FC = () => {
               </Button>
             </Track>
           }
-        >
+        >          {/* Show inline notification and Start cleaning button when source is in_review */}
+          {sourceData?.status === 'in_review' && (
+            <div className="start-cleaning-notice" style={{ marginBottom: 16 }}>
+              <div className="start-cleaning-notice__inner">
+                <div className="start-cleaning-notice__body">
+                  <div className="start-cleaning-notice__header">
+                    <div className="start-cleaning-notice__icon">
+                      <MdWarning size={24} />
+                    </div>
+                    <div className="start-cleaning-notice__title">Scraping is finished!</div>
+                  </div>
+                  <div className="start-cleaning-notice__text">{t('knowledgeBase.startCleaningNotification')}</div>
+                </div>
+                <div className="start-cleaning-notice__action">
+                  <Button appearance="primary" onClick={() => handleStartCleaning()}>
+                    Start cleaning
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <DataTable
             data={scrapedFilesData?.data ?? []}
             columns={columns}
