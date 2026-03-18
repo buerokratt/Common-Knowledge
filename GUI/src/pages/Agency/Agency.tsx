@@ -773,7 +773,7 @@ const Agency: FC = () => {
                 }}
                 onClick={() => setAddUrlListModal(true)}
               >
-                Add URL List
+                {t('knowledgeBase.addUrlList')}
               </Button>
             </Track>
           </Track>
@@ -909,7 +909,7 @@ const Agency: FC = () => {
             />
             <div className="quality-control-options">
               <span className="quality-control-options__title">
-                Content extraction quality control options:
+                {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
               <div className="quality-control-options__row">
                 <label className="quality-control-options__item">
@@ -926,13 +926,13 @@ const Agency: FC = () => {
                     }
                     onChange={() => {}}
                   />
-                  <span>Basic quality control</span>
+                  <span>{t('knowledgeBase.basicQualityControl')}</span>
                 </label>
                 <Tooltip content="Tooltip to be implemented">
                   <button
                     type="button"
                     className="quality-control-options__info-btn"
-                    aria-label="Basic quality control info"
+                    aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
                   >
                     <Icon
                       className="quality-control-options__info"
@@ -959,13 +959,13 @@ const Agency: FC = () => {
                     }
                     onChange={() => {}}
                   />
-                  <span>Comprehensive quality control</span>
+                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
                 </label>
                 <Tooltip content="Tooltip to be implemented">
                   <button
                     type="button"
                     className="quality-control-options__info-btn"
-                    aria-label="Comprehensive quality control info"
+                    aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
                   >
                     <Icon
                       className="quality-control-options__info"
@@ -983,7 +983,7 @@ const Agency: FC = () => {
       {/* Add URL List Modal */}
       {addUrlListModal && (
         <Dialog
-          title="Add URL List"
+          title={t('knowledgeBase.addUrlList')}
           onClose={() => setAddUrlListModal(false)}
           footer={
             <Track gap={16} justify="end">
@@ -1024,19 +1024,18 @@ const Agency: FC = () => {
             />
             <FormInput
               className="url-input"
-              label="Main Source URL"
+              label={t('knowledgeBase.mainSourceUrl')}
               name="websiteUrl"
               value={formData.websiteUrl || ''}
               onChange={(e) =>
                 setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
               }
               required
-              placeholder="https://ministry.gov.ee"
             />
             
-            <div style={{ marginTop: '16px' }}>
+            <div style={{ marginTop: '16px', width: '100%', textAlign: 'left', alignSelf: 'flex-start' }}>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>
-                Upload CSV File with URLs
+                {t('knowledgeBase.uploadCsvWithUrls')}
               </label>
               <input
                 type="file"
@@ -1050,14 +1049,17 @@ const Agency: FC = () => {
                   borderRadius: '4px',
                 }}
               />
-              <small style={{ display: 'block', marginTop: '4px', color: '#666' }}>
-                CSV should contain a column named 'url' or one URL per line
+              <small style={{ display: 'block', marginTop: '4px', color: '#666', fontSize: '12px', lineHeight: 1.3 }}>
+                {t('knowledgeBase.csvUrlHelp')}
               </small>
             </div>
 
             {formData.urlList && formData.urlList.length > 0 && (
               <div style={{ 
                 marginTop: '16px', 
+                width: '100%',
+                textAlign: 'left',
+                alignSelf: 'flex-start',
                 padding: '12px', 
                 backgroundColor: '#f5f5f5', 
                 borderRadius: '4px',
@@ -1087,9 +1089,12 @@ const Agency: FC = () => {
 
             <div className="quality-control-options">
               <span className="quality-control-options__title">
-                Content extraction quality control options:
+                {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
-              <div className="quality-control-options__row">
+              <div
+                className="quality-control-options__row"
+                style={{ flexDirection: 'column', alignItems: 'flex-start' }}
+              >
                 <label className="quality-control-options__item">
                   <input
                     type="radio"
@@ -1104,7 +1109,7 @@ const Agency: FC = () => {
                     }
                     onChange={() => {}}
                   />
-                  <span>Basic quality control</span>
+                  <span>{t('knowledgeBase.basicQualityControl')}</span>
                 </label>
                 <label className="quality-control-options__item">
                   <input
@@ -1122,7 +1127,7 @@ const Agency: FC = () => {
                     }
                     onChange={() => {}}
                   />
-                  <span>Comprehensive quality control</span>
+                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
                 </label>
               </div>
             </div>
