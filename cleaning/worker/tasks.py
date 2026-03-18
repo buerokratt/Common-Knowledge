@@ -227,21 +227,30 @@ def clean_source_task(task: SourceCleaningTask):
 
     cleaning_log_url = ""
     if logs_path.exists():
-        upload_result = requests.post(
-            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
-            json={'source_file_path': logs_path.as_posix()},
-        ).json()
-        cleaning_log_url = upload_result.get('response', '')
+        try:
+            upload_result = requests.post(
+                f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                json={'source_file_path': logs_path.as_posix()},
+            )
+            upload_result.raise_for_status()
+            cleaning_log_url = upload_result.json().get('response', '')
+        except requests.exceptions.RequestException as e:
+            logger.error(f'Failed to upload cleaning log file: {e}')
+            cleaning_log_url = ""
 
-    requests.post(
-        f"{settings.ruuter_internal}/ckb/reports/update",
-        json={
-            'baseId': task.source_run_report_base_id,
-            'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
-            'scrapingLogUrl': task.scraping_log_url,
-            'cleaningLogUrl': cleaning_log_url,
-        }
-    )
+    try:
+        response = requests.post(
+            f"{settings.ruuter_internal}/ckb/reports/update",
+            json={
+                'baseId': task.source_run_report_base_id,
+                'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
+                'scrapingLogUrl': task.scraping_log_url,
+                'cleaningLogUrl': cleaning_log_url,
+            }
+        )
+        response.raise_for_status()
+    except requests.exceptions.RequestException as e:
+        logger.error(f'Failed to update report with cleaning log URL: {e}')
 
     requests.post(
         f"{settings.ruuter_internal}/ckb/source/update-status",
