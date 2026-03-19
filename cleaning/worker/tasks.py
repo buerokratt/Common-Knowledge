@@ -180,10 +180,16 @@ def set_up_logging(entity: EntityToClean):
         stdout_handler.setFormatter(fmt)
         root.addHandler(stdout_handler)
 
-    # Per-job file handler — always add a fresh one for each task
-    file_handler = logging.FileHandler(entity.logs_path.as_posix())
-    file_handler.setFormatter(fmt)
-    root.addHandler(file_handler)
+    # Attach a per-job file handler to this module's logger, avoiding duplicates
+    job_logger = logging.getLogger(__name__)
+    log_path = entity.logs_path.as_posix()
+    for handler in job_logger.handlers:
+        if isinstance(handler, logging.FileHandler) and getattr(handler, "baseFilename", None) == log_path:
+            break
+    else:
+        file_handler = logging.FileHandler(log_path)
+        file_handler.setFormatter(fmt)
+        job_logger.addHandler(file_handler)
 
 
 # ---------------------------------------------------------------------------
@@ -195,15 +201,22 @@ def clean_file_task(entity: EntityToClean):
         set_up_logging(entity)
         logger.info(f"Cleaning file {entity.file_path.as_posix()}")
 
-        # Fetch fresh secrets on every task — respects Vault Agent token rotation
-        secrets = get_vault_secrets()
-        client = _make_openai_client(secrets)
+        # Explicit timeout for Ruuter requests to avoid hanging worker threads
+        ruuter_timeout = 30  # seconds
 
         with entity.meta_data_path.open("r") as f:
             metadata = json.load(f)
 
         if metadata["file_type"] == ".html":
-            cleaned_text = clean_html(entity, client, secrets.azure_openai_deployment)
+            # Only fetch Vault secrets / create Azure client when needed
+            client = None
+            deployment_name = None
+            if entity.use_llm:
+                # Fetch fresh secrets on every task — respects Vault Agent token rotation
+                secrets = get_vault_secrets()
+                client = _make_openai_client(secrets)
+                deployment_name = secrets.azure_openai_deployment
+            cleaned_text = clean_html(entity, client, deployment_name)
             logger.info(f"Cleaned as html for {entity.file_path.as_posix()}")
         else:
             cleaned_text = clean_any_file(entity)
@@ -216,9 +229,18 @@ def clean_file_task(entity: EntityToClean):
         r = requests.post(
             f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
             json={"source_file_path": cleaned_text_filename.as_posix()},
+            timeout=ruuter_timeout,
         )
         r.raise_for_status()
-        uploaded_cleaned_text_url = r.json()["response"]
+        try:
+            response_json = r.json()
+        except ValueError as exc:
+            logger.error("Non-JSON response from Ruuter upload-file-sync for cleaned text")
+            raise RuntimeError("Invalid JSON response from Ruuter for cleaned text upload") from exc
+        if not isinstance(response_json, dict) or "response" not in response_json:
+            logger.error("Missing 'response' key in Ruuter response for cleaned text upload: %r", response_json)
+            raise RuntimeError("Missing 'response' key in Ruuter response for cleaned text upload")
+        uploaded_cleaned_text_url = response_json["response"]
         logger.info(f"Saved cleaned text for {entity.file_path.as_posix()}")
 
         cleaned_metadata_filename = entity.directory_path / "cleaned.meta.json"
@@ -229,19 +251,33 @@ def clean_file_task(entity: EntityToClean):
         r = requests.post(
             f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
             json={"source_file_path": cleaned_metadata_filename.as_posix()},
+            timeout=ruuter_timeout,
         )
         r.raise_for_status()
-        uploaded_cleaned_metadata_url = r.json()["response"]
+        try:
+            response_json = r.json()
+        except ValueError as exc:
+            logger.error("Non-JSON response from Ruuter upload-file-sync for cleaned metadata")
+            raise RuntimeError("Invalid JSON response from Ruuter for cleaned metadata upload") from exc
+        if not isinstance(response_json, dict) or "response" not in response_json:
+            logger.error(
+                "Missing 'response' key in Ruuter response for cleaned metadata upload: %r",
+                response_json,
+            )
+            raise RuntimeError("Missing 'response' key in Ruuter response for cleaned metadata upload")
+        uploaded_cleaned_metadata_url = response_json["response"]
         logger.info(f"Saved cleaned metadata for {entity.file_path.as_posix()}")
 
-        requests.post(
+        r = requests.post(
             f"{settings.ruuter_internal}/ckb/source-file/update-cleaned-file",
             json={
                 "base_id": entity.source_file_id,
                 "cleaned_data_url": uploaded_cleaned_text_url,
                 "cleaned_metadata_url": uploaded_cleaned_metadata_url,
             },
-        ).raise_for_status()
+            timeout=ruuter_timeout,
+        )
+        r.raise_for_status()
 
         # All uploads confirmed — safe to remove the working directory
         cleanup_directory(entity)

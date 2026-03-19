@@ -1,3 +1,4 @@
+
 # Vault Setup — Cleaning Service
 
 This document describes the Vault integration for the cleaning service, including architecture, file structure, startup flow, and how to manage secrets.
@@ -25,11 +26,12 @@ The Vault Agent authenticates with Vault using AppRole credentials and writes a 
 
 ```
 vault/
-├── config.hcl                  # Vault server configuration (storage, listener, TTLs)
-├── init.sh                     # One-shot init script (runs in vault-init container)
+├── config/
+│   └── config.hcl                  # Vault server configuration (storage, listener, TTLs)
+├── init.sh                         # One-shot init script (runs in vault-init container)
 └── agents/
     └── cleaner/
-        └── agent.hcl           # Vault Agent configuration for the cleaning service
+        └── agent.hcl               # Vault Agent configuration for the cleaning service
 ```
 
 All credentials and tokens are written to Docker volumes at runtime — nothing sensitive is stored on disk.
@@ -130,13 +132,14 @@ docker exec vault vault status
 
 ## How the Cleaning Service Uses Vault
 
-On every cleaning task, `config.py` calls `get_vault_secrets()` which:
+On every cleaning task that requires LLM calls, `config.py` calls `get_vault_secrets()` which:
 
 1. Reads the current token from `/agent/out/token` (written by Vault Agent)
 2. Makes a GET request to `http://vault:8200/v1/secret/data/llm/connections/azure_openai/cleaner` with the token as the `X-Vault-Token` header
 3. Returns the secrets as a `VaultSecrets` object with `api_key` stored as a `SecretStr` (never logged)
+4. Raises a `RuntimeError` if any secret is missing, empty, or still contains the placeholder value `REPLACE_ME`
 
-Fetching fresh on every task means token rotation by the agent is always respected — the cleaning server never caches stale credentials.
+Vault secrets are only fetched when an HTML file is being cleaned **and** `use_llm: true` is set. Non-HTML files and HTML files processed without LLM calls do not touch Vault at all.
 
 ## Troubleshooting
 

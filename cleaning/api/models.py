@@ -18,6 +18,7 @@ class EntityToClean(BaseModel):
     meta_data_path: FilePath
     directory_path: DirectoryPath
     source_file_id: str
+    source_base_id: str | None = None
     source_run_report_base_id: str
     agency_base_id: str
     url: str

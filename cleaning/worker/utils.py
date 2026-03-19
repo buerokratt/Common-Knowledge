@@ -45,7 +45,7 @@ def catch_error(entity: EntityToClean):
             entity.url,
             "cleaning",
             str(e),
-            entity.source_file_id,
+            entity.source_base_id,
             entity.agency_base_id,
             entity.source_run_report_base_id,
         )

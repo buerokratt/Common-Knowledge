@@ -1,3 +1,4 @@
+
 # Cleaning Service
 
 The cleaning service extracts and normalises the main body content from scraped files before they are indexed. It supports HTML files and a wide range of other document formats (PDF, DOCX, XLSX, etc.).
@@ -23,10 +24,10 @@ Non-HTML files (PDF, DOCX, etc.) are unchanged — they continue to use `unstruc
 
 ## Output Format Change
 
-|                       | Before     | After                                                              |
-| --------------------- | ---------- | ------------------------------------------------------------------ |
-| **HTML files**  | Plain text | **Markdown**(headings, lists, bold/italic, tables preserved) |
-| **Other files** | Plain text | Markdown                                                          |
+|                       | Before     | After                                                               |
+| --------------------- | ---------- | ------------------------------------------------------------------- |
+| **HTML files**  | Plain text | **Markdown** (headings, lists, bold/italic, tables preserved) |
+| **Other files** | Plain text | Markdown                                                            |
 
 The output is still written to `cleaned.txt` in the job directory and uploaded via the same ruuter endpoint — the file name and upload flow did not change.
 
@@ -63,7 +64,7 @@ The output is still written to `cleaned.txt` in the job directory and uploaded v
 | `use_llm`            | `bool` | `false` | Enables LLM evaluation of the trafilatura extraction                       |
 | `use_llm_correction` | `bool` | `false` | If evaluation fails, re-extracts using the LLM. Requires `use_llm: true` |
 
-Passing `use_llm_correction: true` without `use_llm: true` is rejected with `422 Unprocessable Entity`.
+Note: passing `use_llm_correction: true` without `use_llm: true` has no effect — correction is silently skipped because the evaluation step that triggers it is disabled.
 
 ---
 
@@ -121,7 +122,9 @@ The model returns `{"pass": true/false, "reason": "..."}`. The reason is always 
 
 ## Secrets and Configuration
 
-The LLM calls use Azure OpenAI. Credentials are **not** passed via environment variables — they are fetched from HashiCorp Vault at service startup via the `vault-agent-cleaner` proxy.
+The LLM calls use Azure OpenAI. Credentials are **not** passed via environment variables — they are fetched from HashiCorp Vault at task time via the `vault-agent-cleaner` proxy.
+
+Vault secrets are only fetched when processing an HTML file **with** `use_llm: true`. Non-HTML files and HTML files processed without LLM calls do not require Vault access at all.
 
 The secret is stored in Vault at:
 
@@ -140,7 +143,7 @@ With these fields:
 }
 ```
 
-The service will fail to start if Vault is unreachable or the secret contains the placeholder value `REPLACE_ME`. Update it with:
+The service will raise an error on the affected task if Vault is unreachable, the secret is missing/empty, or any field still contains the placeholder value `REPLACE_ME`. Update it with:
 
 ```bash
 # Get root token
@@ -191,14 +194,4 @@ curl -X POST http://localhost:8123/clean_file \
     "use_llm": true,
     "use_llm_correction": true
   }'
-```
-
-**Invalid — rejected with 422:**
-
-```bash
-# use_llm_correction requires use_llm to be true
-{
-  "use_llm": false,
-  "use_llm_correction": true
-}
 ```

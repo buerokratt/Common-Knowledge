@@ -66,9 +66,25 @@ def get_vault_secrets() -> VaultSecrets:
     except (KeyError, ValueError) as e:
         raise RuntimeError(f"Unexpected Vault response structure: {e}") from e
 
+    # Basic validation to fail fast on misconfiguration or placeholder values
+    api_key_raw = data.get("api_key")
+    endpoint_raw = data.get("endpoint")
+
+    if not isinstance(api_key_raw, str) or not api_key_raw.strip():
+        raise RuntimeError("Vault secret 'api_key' is missing or empty")
+    if not isinstance(endpoint_raw, str) or not endpoint_raw.strip():
+        raise RuntimeError("Vault secret 'endpoint' is missing or empty")
+
+    placeholder_marker = "REPLACE_ME"
+    if placeholder_marker in api_key_raw or placeholder_marker in endpoint_raw:
+        raise RuntimeError(
+            "Vault secrets contain placeholder values (e.g. 'REPLACE_ME'); "
+            "ensure real credentials are stored in Vault."
+        )
+
     return VaultSecrets(
-        api_key=SecretStr(data["api_key"]),
-        endpoint=data["endpoint"],
+        api_key=SecretStr(api_key_raw),
+        endpoint=endpoint_raw,
         api_version=data.get("api_version", settings.azure_openai_api_version),
         deployment=data.get("deployment", settings.azure_openai_deployment),
     )
