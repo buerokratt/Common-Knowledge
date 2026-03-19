@@ -8,6 +8,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify
 from openai import AzureOpenAI
 from unstructured.partition.auto import partition
+from unstructured.partition.html import partition_html
 from unstructured.staging.base import elements_to_markdown
 
 from api.config import settings, get_vault_secrets, VaultSecrets
@@ -34,8 +35,45 @@ def _make_openai_client(secrets: VaultSecrets) -> AzureOpenAI:
 # ---------------------------------------------------------------------------
 
 def _beautifulsoup_extract(html: str) -> str:
-    # markdownify converts HTML to Markdown directly, avoiding plain-text output
-    return markdownify(html, heading_style="ATX", strip=["script", "style", "nav", "footer"])
+    """
+    Multi-step fallback extractor that mirrors the old BeautifulSoup pipeline
+    but produces Markdown output instead of plain text.
+
+    Steps:
+      1. Strip noisy elements (header, footer, nav, script, style, aside, form).
+      2. If a <main> element exists, try partition_html on it; fall back to
+         markdownify on that element if partition returns nothing.
+      3. Otherwise try partition_html with skip_headers_and_footers on the full
+         document; fall back to markdownify on the cleaned soup if that returns
+         nothing.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    for tag in soup(["header", "footer", "nav", "script", "style", "aside", "form"]):
+        tag.decompose()
+
+    main_element = soup.find("main")
+    if main_element:
+        partitioned = partition_html(
+            text=str(main_element),
+            languages=settings.languages,
+            skip_headers_and_footers=True,
+        )
+        if partitioned:
+            return elements_to_markdown(partitioned)
+        # partition returned nothing — markdownify the main element directly
+        return markdownify(str(main_element), heading_style="ATX")
+
+    # No <main> — try partition_html on the full (already-cleaned) document
+    partitioned = partition_html(
+        text=str(soup),
+        languages=settings.languages,
+        skip_headers_and_footers=True,
+    )
+    if partitioned:
+        return elements_to_markdown(partitioned)
+
+    # Last resort — markdownify the cleaned soup
+    return markdownify(str(soup), heading_style="ATX")
 
 
 def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
@@ -124,7 +162,7 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> s
         if extracted:
             logger.info(f"[html] trafilatura succeeded for {entity.url}")
             return extracted
-        logger.warning(f"[html] trafilatura empty, falling back to markdownify for {entity.url}")
+        logger.warning(f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}")
         return _beautifulsoup_extract(html)
 
     extracted = _trafilatura_extract(html, url=entity.url)
@@ -140,8 +178,8 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI, deployment: str) -> s
         return extracted
 
     if not entity.use_llm_correction:
-        logger.warning(f"[html] LLM evaluation failed but correction disabled for {entity.url}")
-        return extracted
+        logger.warning(f"[html] LLM evaluation failed, falling back to BeautifulSoup for {entity.url}")
+        return _beautifulsoup_extract(html)
 
     logger.info(f"[html] LLM correction: re-extracting from raw HTML for {entity.url}")
     corrected = _llm_extract(client, deployment, html)
