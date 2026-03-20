@@ -27,3 +27,5 @@ class SourceCleaningTask(BaseModel):
     scraping_log_url: str = ""
     logs_path: FilePath
     files: list[SourceCleaningFile]
+    use_llm: bool = False
+    use_llm_correction: bool = False

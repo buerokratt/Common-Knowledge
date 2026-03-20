@@ -202,6 +202,8 @@ def clean_source_task(task: SourceCleaningTask):
                 source_base_id=file.sourceBaseId,
                 agency_base_id=task.agency_base_id,
                 source_run_report_base_id=task.source_run_report_base_id,
+                use_llm=task.use_llm,
+                use_llm_correction=task.use_llm_correction,
             )
             clean_file_task(entity)
         except ValidationError as e:

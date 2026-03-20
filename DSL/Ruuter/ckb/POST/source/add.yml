@@ -20,6 +20,10 @@ declaration:
       - field: type
         type: string
         description: "Type of the source"
+      - field: qualityControl
+        type: string
+        description: "Quality control method (basic, comprehensive, or null)"
+        required: false
 
 extractRequestData:
   assign:
@@ -27,6 +31,7 @@ extractRequestData:
     url: "${incoming.body.url}"
     subsector: "${incoming.body.subsector}"
     type: "${incoming.body.type}"
+    quality_control: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
 
 createSource:
   call: http.post
@@ -39,6 +44,7 @@ createSource:
       url: ${url}
       subsector: ${subsector}
       type: ${type}
+      quality_control: ${quality_control}
   result: res
 
 

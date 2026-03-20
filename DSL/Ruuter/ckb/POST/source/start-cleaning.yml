@@ -38,6 +38,13 @@ assignSourceData:
     source_base_id: ${sourceResult.response.body.response[0].baseId}
     agency_base_id: ${sourceResult.response.body.response[0].agencyBaseId}
     source_url: ${sourceResult.response.body.response[0].url}
+    quality_control: ${sourceResult.response.body.response[0].qualityControl}
+  next: computeQualityControlFlags
+
+computeQualityControlFlags:
+  assign:
+    use_llm: "${quality_control == 'basic' || quality_control == 'comprehensive'}"
+    use_llm_correction: "${quality_control == 'comprehensive'}"
   next: validateSourceStatus
 
 validateSourceStatus:
@@ -145,6 +152,8 @@ triggerAsyncSourceCleaning:
       scraping_log_url: ${scraping_log_url}
       logs_path: ${logs_path}
       files: ${filesResult.response.body}
+      use_llm: ${use_llm}
+      use_llm_correction: ${use_llm_correction}
   result: asyncCleaningResult
   next: returnSuccess
 
