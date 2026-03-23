@@ -17,6 +17,9 @@ declaration:
       - field: updateAutomatically
         type: boolean
         description: "Flag to update automatically"
+      - field: qualityControl
+        type: string
+        description: "Quality control method (basic, comprehensive, or null)"
   response:
     fields:
       - field: id
@@ -31,7 +34,8 @@ SELECT copy_row_with_modifications(
             THEN
                 ARRAY[
                     'cron_schedule', '::TEXT', :cron_schedule,
-                    'update_automatically', '::BOOLEAN', :updateAutomatically,
+                    'update_automatically', '::BOOLEAN', :updateAutomatically, 
+                    'quality_control', '::quality_control_type', NULLIF(LOWER(TRIM(:qualityControl)), ''),
                     'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR,
                     'next_scrapping_at', '', NULL
                 ]::VARCHAR[]
@@ -39,6 +43,7 @@ SELECT copy_row_with_modifications(
             ARRAY[
                 'cron_schedule', '::TEXT', :cron_schedule,
                 'update_automatically', '::BOOLEAN', :updateAutomatically,
+                'quality_control', '::quality_control_type', NULLIF(LOWER(TRIM(:qualityControl)), ''),
                 'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR
             ]::VARCHAR[]
         END
