@@ -40,6 +40,7 @@ import {
   getSources,
   createSourceFile,
   createSourceUrl,
+  createSourceWithUrlList,
   updateSourceSubsector,
   deleteSource,
   stopSourceScraping,
@@ -47,6 +48,7 @@ import {
   Source,
   SourcesListParams,
   CreateSourceFileRequest,
+  CreateSourceWithUrlListRequest,
 } from 'services/sources';
 
 interface KnowledgeBaseFormData {
@@ -55,6 +57,8 @@ interface KnowledgeBaseFormData {
   apiUrl?: string;
   websiteUrl?: string;
   qualityControlLevel: '' | 'basic' | 'comprehensive';
+  csvFile?: File | null;
+  urlList?: { url: string }[];
 }
 
 const getInitialFormData = (): KnowledgeBaseFormData => ({
@@ -63,6 +67,8 @@ const getInitialFormData = (): KnowledgeBaseFormData => ({
   apiUrl: '',
   websiteUrl: '',
   qualityControlLevel: '',
+  csvFile: null,
+  urlList: [],
 });
 
 const Agency: FC = () => {
@@ -79,6 +85,7 @@ const Agency: FC = () => {
 
   const [uploadModal, setUploadModal] = useState(false);
   const [addUrlModal, setAddUrlModal] = useState(false);
+  const [addUrlListModal, setAddUrlListModal] = useState(false);
   const [editModal, setEditModal] = useState<Source | null>(null);
   const [deleteModal, setDeleteModal] = useState<Source | null>(null);
 
@@ -278,6 +285,28 @@ const Agency: FC = () => {
     },
   });
 
+  // URL list addition mutation
+  const addUrlListMutation = useMutation({
+    mutationFn: createSourceWithUrlList,
+    onSuccess: (data: any) => {
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: `Successfully created source with ${data.urls_count || formData.urlList?.length || 0} URLs`,
+      });
+      setAddUrlListModal(false);
+      setFormData(getInitialFormData);
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || 'Failed to create source with URL list',
+      });
+    },
+  });
+
   // Update source mutation
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) =>
@@ -410,6 +439,98 @@ const Agency: FC = () => {
       url: formData.websiteUrl,
       subsector: formData.subsector,
       type: 'url',
+      qualityControlLevel: formData.qualityControlLevel,
+    });
+  };
+
+  const handleCsvFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const urls = await parseCSVFile(file);
+      setFormData((prev) => ({
+        ...prev,
+        csvFile: file,
+        urlList: urls,
+      }));
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: `Parsed ${urls.length} URLs from CSV`,
+      });
+    } catch (error: any) {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || 'Failed to parse CSV file',
+      });
+      event.target.value = '';
+    }
+  };
+
+  const parseCSVFile = (file: File): Promise<{ url: string }[]> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+          
+          if (lines.length === 0) {
+            reject(new Error('CSV file is empty'));
+            return;
+          }
+          
+          // Check if first line is a header (contains 'url')
+          const hasHeader = lines[0].toLowerCase().includes('url');
+          const dataLines = hasHeader ? lines.slice(1) : lines;
+          
+          if (dataLines.length === 0) {
+            reject(new Error('No URLs found in CSV'));
+            return;
+          }
+          
+          const urls = dataLines.map(line => {
+            // Handle CSV with commas - take first column
+            const url = line.split(',')[0].trim();
+            return { url };
+          }).filter(item => {
+            // Validate URL format
+            return item.url && (item.url.startsWith('http://') || item.url.startsWith('https://'));
+          });
+          
+          if (urls.length === 0) {
+            reject(new Error('No valid URLs found in CSV. URLs must start with http:// or https://'));
+            return;
+          }
+          
+          resolve(urls);
+        } catch (error) {
+          reject(new Error('Failed to parse CSV file'));
+        }
+      };
+      
+      reader.onerror = () => {
+        reject(new Error('Failed to read CSV file'));
+      };
+      
+      reader.readAsText(file);
+    });
+  };
+
+  const handleAddUrlList = () => {
+    if (!agencyBaseId || !formData.websiteUrl || !formData.subsector || !formData.urlList || formData.urlList.length === 0) {
+      return;
+    }
+
+    addUrlListMutation.mutate({
+      agencyBaseId,
+      url: formData.websiteUrl,
+      subsector: formData.subsector,
+      type: 'specified',
+      urls: formData.urlList,
       qualityControlLevel: formData.qualityControlLevel,
     });
   };
@@ -645,6 +766,15 @@ const Agency: FC = () => {
               <Button appearance="primary" onClick={() => setAddUrlModal(true)}>
                 {t('knowledgeBase.addUrl')}
               </Button>
+              <Button 
+                appearance="primary"
+                style={{
+                  backgroundColor: '#005AA3',
+                }}
+                onClick={() => setAddUrlListModal(true)}
+              >
+                {t('knowledgeBase.addUrlList')}
+              </Button>
             </Track>
           </Track>
         }
@@ -779,7 +909,7 @@ const Agency: FC = () => {
             />
             <div className="quality-control-options">
               <span className="quality-control-options__title">
-                Content extraction quality control options:
+                {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
               <div className="quality-control-options__row">
                 <label className="quality-control-options__item">
@@ -796,13 +926,13 @@ const Agency: FC = () => {
                     }
                     onChange={() => {}}
                   />
-                  <span>Basic quality control</span>
+                  <span>{t('knowledgeBase.basicQualityControl')}</span>
                 </label>
                 <Tooltip content="Tooltip to be implemented">
                   <button
                     type="button"
                     className="quality-control-options__info-btn"
-                    aria-label="Basic quality control info"
+                    aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
                   >
                     <Icon
                       className="quality-control-options__info"
@@ -829,13 +959,13 @@ const Agency: FC = () => {
                     }
                     onChange={() => {}}
                   />
-                  <span>Comprehensive quality control</span>
+                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
                 </label>
                 <Tooltip content="Tooltip to be implemented">
                   <button
                     type="button"
                     className="quality-control-options__info-btn"
-                    aria-label="Comprehensive quality control info"
+                    aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
                   >
                     <Icon
                       className="quality-control-options__info"
@@ -844,6 +974,161 @@ const Agency: FC = () => {
                     />
                   </button>
                 </Tooltip>
+              </div>
+            </div>
+          </Track>
+        </Dialog>
+      )}
+
+      {/* Add URL List Modal */}
+      {addUrlListModal && (
+        <Dialog
+          title={t('knowledgeBase.addUrlList')}
+          onClose={() => setAddUrlListModal(false)}
+          footer={
+            <Track gap={16} justify="end">
+              <Button
+                appearance="secondary"
+                onClick={() => setAddUrlListModal(false)}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={handleAddUrlList}
+                disabled={
+                  addUrlListMutation.isLoading ||
+                  !formData.subsector ||
+                  !formData.websiteUrl ||
+                  !formData.urlList ||
+                  formData.urlList.length === 0
+                }
+              >
+                {addUrlListMutation.isLoading
+                  ? t('global.adding')
+                  : t('global.add')}
+              </Button>
+            </Track>
+          }
+        >
+          <Track direction="vertical" gap={16}>
+            <FormInput
+              className="url-input"
+              label={t('knowledgeBase.subsector')}
+              name="subsector"
+              value={formData.subsector}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, subsector: e.target.value }))
+              }
+              required
+            />
+            <FormInput
+              className="url-input"
+              label={t('knowledgeBase.mainSourceUrl')}
+              name="websiteUrl"
+              value={formData.websiteUrl || ''}
+              onChange={(e) =>
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
+              }
+              required
+            />
+            
+            <div style={{ marginTop: '16px', width: '100%', textAlign: 'left', alignSelf: 'flex-start' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>
+                {t('knowledgeBase.uploadCsvWithUrls')}
+              </label>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleCsvFileChange}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px',
+                  border: '1px solid #ccc',
+                  borderRadius: '4px',
+                }}
+              />
+              <small style={{ display: 'block', marginTop: '4px', color: '#666', fontSize: '12px', lineHeight: 1.3 }}>
+                {t('knowledgeBase.csvUrlHelp')}
+              </small>
+            </div>
+
+            {formData.urlList && formData.urlList.length > 0 && (
+              <div style={{ 
+                marginTop: '16px', 
+                width: '100%',
+                textAlign: 'left',
+                alignSelf: 'flex-start',
+                padding: '12px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '4px',
+                maxHeight: '200px',
+                overflowY: 'auto'
+              }}>
+                <strong>{formData.urlList.length} URLs loaded:</strong>
+                <ul style={{ 
+                  marginTop: '8px', 
+                  paddingLeft: '20px',
+                  fontSize: '14px',
+                  listStyle: 'disc'
+                }}>
+                  {formData.urlList.slice(0, 10).map((item, index) => (
+                    <li key={index} style={{ marginBottom: '4px' }}>
+                      {item.url}
+                    </li>
+                  ))}
+                  {formData.urlList.length > 10 && (
+                    <li style={{ fontStyle: 'italic', color: '#666' }}>
+                      ... and {formData.urlList.length - 10} more
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
+                {t('knowledgeBase.contentExtractionQualityControlOptions')}
+              </span>
+              <div
+                className="quality-control-options__row"
+                style={{ flexDirection: 'column', alignItems: 'flex-start' }}
+              >
+                <label className="quality-control-options__item">
+                  <input
+                    type="radio"
+                    name="qualityControlLevelUrlList"
+                    checked={formData.qualityControlLevel === 'basic'}
+                    onClick={() =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        qualityControlLevel:
+                          prev.qualityControlLevel === 'basic' ? '' : 'basic',
+                      }))
+                    }
+                    onChange={() => {}}
+                  />
+                  <span>{t('knowledgeBase.basicQualityControl')}</span>
+                </label>
+                <label className="quality-control-options__item">
+                  <input
+                    type="radio"
+                    name="qualityControlLevelUrlList"
+                    checked={formData.qualityControlLevel === 'comprehensive'}
+                    onClick={() =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        qualityControlLevel:
+                          prev.qualityControlLevel === 'comprehensive'
+                            ? ''
+                            : 'comprehensive',
+                      }))
+                    }
+                    onChange={() => {}}
+                  />
+                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
+                </label>
               </div>
             </div>
           </Track>
