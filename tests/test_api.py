@@ -17,7 +17,13 @@ from pathlib import Path
 import pytest
 import requests
 
-from conftest import write_test_file
+from conftest import TEST_SCRAPPED_DIR
+
+
+def _to_container(host_path: Path) -> str:
+    """Translate a host-side path under TEST_SCRAPPED_DIR to the container-side /scrapped-data/... path."""
+    rel = host_path.relative_to(TEST_SCRAPPED_DIR)
+    return f"/scrapped-data/{rel}"
 
 
 # ---------------------------------------------------------------------------
@@ -116,14 +122,14 @@ class TestCleanSourceAsync:
         (well under 2 seconds) because processing is asynchronous.
         """
         log_path = scrapped_dir / "clean.log"
-        # logs_path for SourceCleaningTask is a plain Path (not FilePath),
-        # so the file does not need to pre-exist.
+        # logs_path for SourceCleaningTask must be within /scrapped-data (path-traversal guard).
+        # Convert from the host-side path to the container-side path via the bind-mount mapping.
 
         payload = {
             "source_base_id": "src-001",
             "agency_base_id": "agency-001",
             "source_run_report_base_id": "report-001",
-            "logs_path": str(log_path),
+            "logs_path": _to_container(log_path),
             "files": [],
             "use_llm": False,
             "use_llm_correction": False,
@@ -146,7 +152,7 @@ class TestCleanSourceAsync:
             "source_base_id": "src-xyz",
             "agency_base_id": "agency-xyz",
             "source_run_report_base_id": "my-report-id",
-            "logs_path": str(scrapped_dir / "x.log"),
+            "logs_path": _to_container(scrapped_dir / "x.log"),
             "files": [],
         }
         r = requests.post(f"{cleaning_url}/clean_source_async", json=payload, timeout=10)

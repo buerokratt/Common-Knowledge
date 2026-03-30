@@ -39,6 +39,23 @@ import pytest
 import requests
 from loguru import logger
 
+
+
+# ---------------------------------------------------------------------------
+# Early environment setup — runs before any module is imported/collected
+# ---------------------------------------------------------------------------
+
+def pytest_configure(config):
+    """
+    Set required env vars before pytest collects any modules.
+    'api/config.py' instantiates Settings() at module level, which requires
+    RUUTER_INTERNAL.  Without this hook every test_tasks.py import fails with
+    a ValidationError before any fixture has a chance to run.
+    The value is a placeholder — unit tests mock all outbound HTTP calls, and
+    integration tests override it via the real docker-compose env vars.
+    """
+    os.environ.setdefault("RUUTER_INTERNAL", "http://localhost:8089")
+
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
@@ -194,7 +211,20 @@ class CleaningTestStack:
     ) -> None:
         logger.info("Starting cleaning test stack...")
 
-        # Ensure clean state from any previous aborted run
+        # Tear down any containers that may be running from a previous session or
+        # a manual `docker compose up`.  This MUST happen before we delete and
+        # recreate the bind-mount directories below: Docker captures the host
+        # directory inode at container-start time, so deleting a directory while
+        # a container is still running leaves the container pointing at a stale
+        # inode.  Files written to the newly-created host directory are then
+        # invisible inside the container, causing FilePath validation to fail (422).
+        logger.info("Tearing down any pre-existing containers...")
+        _run(
+            ["docker", "compose", "-f", str(COMPOSE_FILE), "down", "--remove-orphans"],
+            check=False,
+        )
+
+        # Now safe to delete/recreate bind-mount directories (all containers stopped)
         for d in (TEST_VAULT_TOKEN_DIR, TEST_SCRAPPED_DIR):
             if d.exists():
                 shutil.rmtree(d)

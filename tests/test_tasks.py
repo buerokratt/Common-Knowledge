@@ -351,7 +351,6 @@ class TestSetUpLogging:
         job_logger = _logging.getLogger("worker.tasks")
         file_handlers = [h for h in job_logger.handlers if isinstance(h, _logging.FileHandler)]
         paths = [Path(h.baseFilename).resolve() for h in file_handlers]
-        unique_paths = set(paths)
         # All file handlers for this path should be deduplicated
         assert paths.count(log_file.resolve()) <= 1
 
@@ -363,13 +362,18 @@ class TestSetUpLogging:
 class TestMetadataMutation:
     def test_language_written_inside_metadata_key(self, tmp_path: Path):
         """
-        After clean_file_task runs, metadata["metadata"]["language"] must be set,
-        not metadata["language"] (the old inconsistent placement).
+        After clean_file_task runs, metadata["metadata"]["language"] must be set
+        and any stale top-level "language" key (as written by the scrapper) must
+        have been removed.
         """
         from worker.tasks import clean_file_task
 
         html = "<html><body><main><p>Test content for language detection.</p></main></body></html>"
         entity = _make_entity(tmp_path, ".html", html, use_llm=False)
+
+        original_meta = json.loads(entity.meta_data_path.read_text())
+        original_meta["language"] = "et"
+        entity.meta_data_path.write_text(json.dumps(original_meta))
 
         with patch("worker.tasks.requests.post") as mock_post, \
              patch("worker.tasks.cleanup_directory"):
@@ -386,9 +390,8 @@ class TestMetadataMutation:
         assert "cleaned" in metadata["metadata"]
         assert metadata["metadata"]["cleaned"] is True
         assert "language" in metadata["metadata"]
-        # Top-level "language" key should NOT be used (old inconsistent placement)
-        assert "language" not in metadata or metadata.get("language") is None or True
-        # The important thing: it IS inside metadata["metadata"]
+        assert metadata["metadata"]["language"] is not None
+        assert "language" not in metadata
 
     def test_cleaned_txt_written(self, tmp_path: Path):
         from worker.tasks import clean_file_task

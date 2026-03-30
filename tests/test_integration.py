@@ -175,12 +175,19 @@ class TestMetadata:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
+
+        original_meta = json.loads(meta_path.read_text())
+        original_meta["language"] = "et"
+        meta_path.write_text(json.dumps(original_meta))
+
         r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
         assert r.status_code == 200
 
         meta = json.loads((scrapped_dir / "cleaned.meta.json").read_text())
         assert "language" in meta["metadata"]
         assert meta["metadata"]["language"] is not None
+        # The stale top-level key must have been stripped
+        assert "language" not in meta
         # Must not be at the top level (old bug)
         assert "language" not in meta
 
