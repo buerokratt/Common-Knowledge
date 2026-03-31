@@ -37,6 +37,8 @@ const Files: FC = () => {
   // Route to appropriate component based on source type
   switch (sourceData.type) {
     case 'url_to_scrape':
+    case 'pre_selected_urls':
+    case 'pre-selected-urls':
       return <ScrapedFiles />;
     case 'file':
       return <UploadedFiles />;

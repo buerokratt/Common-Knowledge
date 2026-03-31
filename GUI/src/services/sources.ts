@@ -99,6 +99,15 @@ export interface CreateSourceRequest {
   qualityControlLevel?: '' | 'basic' | 'comprehensive';
 }
 
+export interface CreateSourceWithUrlListRequest {
+  agencyBaseId: string;
+  url: string;
+  subsector: string;
+  type: 'specified';
+  urls: { url: string }[];
+  qualityControlLevel?: '' | 'basic' | 'comprehensive';
+}
+
 export interface UpdateSourceSubsectorRequest {
   subsector: string;
 }
@@ -358,6 +367,25 @@ export const createSourceUrl = async (
 
   const apiResponse: ApiResponse = response.data;
   return apiResponse.response?.[0] || apiResponse.response;
+};
+
+/**
+ * Create a new source with pre-selected URL list
+ */
+export const createSourceWithUrlList = async (
+  data: CreateSourceWithUrlListRequest
+): Promise<Source> => {
+  const response = await apiDev.post('/source/add-with-url-list', {
+    agencyBaseId: data.agencyBaseId,
+    url: data.url,
+    subsector: data.subsector,
+    type: 'specified',
+    qualityControl: data.qualityControlLevel || null,
+    urls: data.urls,
+  });
+
+  const apiResponse: ApiResponse = response.data;
+  return apiResponse.response?.source || apiResponse.response;
 };
 
 /**
