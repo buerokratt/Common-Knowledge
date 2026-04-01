@@ -425,6 +425,9 @@ def clean_file_task(entity: EntityToClean):
 
         # Write and upload cleaned metadata.
         # Both mutations happen before the write so the file is always consistent.
+        # Remove any stale top-level "language" key the scrapper may have placed there;
+        # the canonical location is metadata["metadata"]["language"].
+        metadata.pop("language", None)
         metadata["metadata"]["cleaned"] = True
         metadata["metadata"]["language"] = detected_language
         cleaned_metadata_filename = entity.directory_path / "cleaned.meta.json"
