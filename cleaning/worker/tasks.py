@@ -644,11 +644,11 @@ def clean_file_task(entity: EntityToClean):
         uploaded_cleaned_metadata_url = response_json["response"]
         logger.info(f"Saved cleaned metadata for {entity.file_path.as_posix()}")
 
-        # Extract and upload images
+        # Extract and upload images (only when explicitly requested)
         # Failures on individual images are logged but never raise — a missing
         # image must not abort an otherwise-successful cleaning job.
         uploaded_image_urls: list[str] = []
-        extracted_images = extract_images(entity, file_type)
+        extracted_images = extract_images(entity, file_type) if entity.extract_images else []
         for img_path in extracted_images:
             try:
                 r = requests.post(
@@ -734,6 +734,7 @@ def clean_source_task(task: SourceCleaningTask):
                 source_run_report_base_id=task.source_run_report_base_id,
                 use_llm=task.use_llm,
                 use_llm_correction=task.use_llm_correction,
+                extract_images=task.extract_images,
             )
             clean_file_task(entity)
         except Exception as e:
