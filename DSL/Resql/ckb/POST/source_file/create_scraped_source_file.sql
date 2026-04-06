@@ -45,6 +45,6 @@ INSERT INTO data_collection.source_file (
 VALUES (
     :source_base_id::UUID, :agency_base_id::UUID, :url, :page_title,
     :scraped_at::TIMESTAMP WITH TIME ZONE, :scraped_at::TIMESTAMP WITH TIME ZONE,
-    :original_data_hash, :type::source_file_type, 'cleaning'::source_file_status_type, :external_id
+    :original_data_hash, :type::source_file_type, 'scraping'::source_file_status_type, :external_id
 )
 RETURNING base_id
