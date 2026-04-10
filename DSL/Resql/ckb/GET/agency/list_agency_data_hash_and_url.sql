@@ -5,34 +5,23 @@ declaration:
   method: get
   namespace: agency
   returns: json
-  allowlist:
-    query:
-      - field: agencyIds
-        type: string
-        description: "agency base ids, comma separated"
   response:
     fields:
-      - field: data_hash
-        type: integer
-        description: "data hash"
-      - field: client_id
+      - field: agency_data_hash
         type: string
-        description: "base id of agency"
+        description: "data hash of the agency"
       - field: path
         type: string
         description: "storage path for zipped data"
 
 */
 SELECT
-    external_id AS client_id,
-    data_hash AS client_data_hash,
+    data_hash AS agency_data_hash,
     zipped_data_url AS path
-FROM agency_management.agency a1
-WHERE external_id = ANY(STRING_TO_ARRAY(:agencyIds, ','))
+FROM agency_management.agency
+WHERE is_deleted = FALSE
   AND updated_at = (
-      SELECT MAX(updated_at) 
-      FROM agency_management.agency a2
-      WHERE a2.base_id = a1.base_id
-        AND a2.is_deleted = FALSE
-  )
-  AND is_deleted = FALSE;
+      SELECT MAX(updated_at)
+      FROM agency_management.agency
+      WHERE is_deleted = FALSE
+  );
