@@ -74,6 +74,7 @@ createSource:
       url: ${url}
       subsector: ${subsector}
       type: ${type}
+      quality_control: ''
   result: sourceResponse
 
 extractSourceId:

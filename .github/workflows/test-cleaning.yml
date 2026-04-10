@@ -1,0 +1,115 @@
+name: Cleaning Service Tests
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - "cleaning/**"
+      - "tests/**"
+      - "docker-compose-test.yml"
+      - "test-vault/**"
+      - ".github/workflows/test-cleaning.yml"
+
+jobs:
+  unit-tests:
+    name: Unit Tests (no containers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cleaning service dependencies
+        working-directory: cleaning
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov hvac loguru requests
+
+      - name: Run unit tests
+        env:
+          RUUTER_INTERNAL: "http://localhost:8089"
+          PYTHONPATH: "cleaning"
+        run: |
+          pytest tests/test_tasks.py \
+            -v \
+            --tb=short \
+            --cov=cleaning \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+
+      - name: Upload coverage
+        uses: codecov/codecov-action@v4
+        if: always()
+        with:
+          files: coverage.xml
+          flags: unit
+
+  integration-tests:
+    name: Integration Tests (containers)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: unit-tests
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install cleaning service dependencies
+        working-directory: cleaning
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-timeout hvac loguru requests
+
+      - name: Prepare test directories
+        run: |
+          mkdir -p test-vault/agent-out
+          mkdir -p test-scrapped-data
+
+      - name: Build cleaning service image
+        run: |
+          docker compose -f docker-compose-test.yml build cleaning-server-test
+
+      - name: Run API and integration tests
+        env:
+          AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
+          AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini' }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION || '2024-02-01' }}
+          PYTHONPATH: "cleaning"
+        run: |
+          pytest tests/test_api.py tests/test_integration.py \
+            -v \
+            --tb=short \
+            -x \
+            --timeout=300
+
+      - name: Capture container logs on failure
+        if: failure()
+        run: |
+          echo "=== cleaning-server-test ==="
+          docker compose -f docker-compose-test.yml logs --tail 200 cleaning-server-test || true
+          echo "=== vault-test ==="
+          docker compose -f docker-compose-test.yml logs --tail 100 vault-test || true
+          echo "=== mock-ruuter ==="
+          docker compose -f docker-compose-test.yml logs --tail 100 mock-ruuter || true
+
+      - name: Tear down containers
+        if: always()
+        run: |
+          docker compose -f docker-compose-test.yml down --remove-orphans || true
+          rm -rf test-scrapped-data test-vault/agent-out
