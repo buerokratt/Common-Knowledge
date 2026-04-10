@@ -54,3 +54,8 @@ class SourceCleaningTask(BaseModel):
     files: list[SourceCleaningFile]
     use_llm: bool = False
     use_llm_correction: bool = False
+
+    @field_validator("logs_path", mode="before")
+    @classmethod
+    def validate_logs_path_within_root(cls, v):
+        return _assert_within_root(Path(v))

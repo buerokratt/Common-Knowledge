@@ -8,8 +8,9 @@ class Settings(BaseSettings):
     Non-sensitive bootstrapping values only.
     Secrets are fetched fresh from Vault on every call to get_vault_secrets()
     so that token rotation by Vault Agent is always respected.
+
     """
-    ruuter_internal: str
+    ruuter_internal: str = ""
     languages: list[str] = ['est', 'rus', 'eng']
 
     # Vault settings — optional so the service starts fine without them
