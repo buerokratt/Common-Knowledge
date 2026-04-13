@@ -1,12 +1,14 @@
 import base64
 import datetime
+import ipaddress
 import json
 import logging
 import mimetypes
 import re
+import socket
 import textwrap
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import pymupdf4llm
 import requests
@@ -327,6 +329,36 @@ def clean_any_file(entity: EntityToClean) -> str:
 # Image extraction
 # ---------------------------------------------------------------------------
 
+# Shared HTTP session for HTML image downloads.
+# A persistent session reuses the underlying TCP connection pool and ensures
+# a consistent User-Agent header without repeating it on every call.
+_HTML_IMAGE_SESSION = requests.Session()
+_HTML_IMAGE_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (compatible; CKB-Cleaner/1.0)",
+})
+
+
+def _is_private_url(url: str) -> bool:
+    """
+    Return True if *url* resolves to a non-globally-routable address.
+
+    This is a basic SSRF guard: it prevents the worker from fetching resources
+    on the internal network (loopback, RFC-1918 private ranges, link-local,
+    etc.) when processing untrusted HTML <img src> attributes.
+
+    Returns True (i.e. "block it") on any resolution failure so the default
+    is to skip rather than to fetch when the host is ambiguous.
+    """
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        ip = ipaddress.ip_address(socket.gethostbyname(host))
+        return not ip.is_global
+    except Exception:
+        return True
+
+
 def _images_dir(entity: EntityToClean) -> Path:
     """Return (and create) the per-job images subdirectory."""
     d = entity.directory_path / "images"
@@ -379,8 +411,12 @@ def extract_images_from_html(entity: EntityToClean) -> list[Path]:
         if not full_url.startswith("http"):
             continue
 
+        if _is_private_url(full_url):
+            logger.warning(f"[images/html] skipping non-public URL (SSRF guard): {full_url}")
+            continue
+
         try:
-            r = requests.get(full_url, timeout=15)
+            r = _HTML_IMAGE_SESSION.get(full_url, timeout=15)
             r.raise_for_status()
             content_type = r.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
             ext = mimetypes.guess_extension(content_type) or ".jpg"
@@ -499,9 +535,7 @@ def extract_images(entity: EntityToClean, file_type: str) -> list[Path]:
         ".html": extract_images_from_html,
         ".pdf":  extract_images_from_pdf,
         ".docx": extract_images_from_docx,
-        ".doc":  extract_images_from_docx,
         ".pptx": extract_images_from_pptx,
-        ".ppt":  extract_images_from_pptx,
     }
     extractor = extractors.get(file_type)
     if extractor is None:

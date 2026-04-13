@@ -43,12 +43,10 @@ Synchronous. Cleans a single file and blocks until complete (timeout: 10 minutes
   "directory_path": "/scrapped-data/.../",
   "source_file_id": "uuid",
   "url": "https://source-url.com",
-  "base_url": "https://source-url.com",
   "logs_path": "/scrapped-data/.../logfile.log",
   "use_llm": false,
   "use_llm_correction": false,
-  "extract_images": false,
-  "images_path": "/scrapped-data/.../images/"
+  "extract_images": false
 }
 ```
 
@@ -186,7 +184,7 @@ docker run -p 8123:8123 \
 
 ## Ruuter API Calls
 
-All calls use `POST`, a 30-second timeout, and raise on non-2xx responses. The base URL comes from the `RUUTER_INTERNAL` environment variable.
+Ruuter integration calls use `POST`, and most use a 30-second timeout. Core pipeline calls (file upload, cleaned-file record update) raise on non-2xx responses so failures surface immediately. Status-update and cleanup calls (`update-scrapped-file-stop-scrapping`, `update-status`, `update-zip-dirty`) are handled on a best-effort basis and log failures instead of raising exceptions. The base URL comes from the `RUUTER_INTERNAL` environment variable.
 
 ### Upload file
 
