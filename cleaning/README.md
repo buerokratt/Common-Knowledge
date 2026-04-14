@@ -135,7 +135,8 @@ All paths are validated to stay within `/scrapped-data` to prevent directory tra
 | `RUUTER_INTERNAL`   | yes            | URL of the internal Ruuter API                                                          |
 | `VAULT_ADDR`        | when using LLM | HashiCorp Vault address                                                                 |
 | `VAULT_SECRET_PATH` | when using LLM | Vault path for Azure OpenAI credentials                                                 |
-| `LANGUAGES`         | no             | Comma-separated language codes (default:`est,rus,eng`)                                |
+| `VAULT_TOKEN_PATH`  | no             | Path to the Vault Agent token file (default: `/agent/out/token`)                      |
+| `LANGUAGES`         | no             | JSON array of language codes (default: `["est","rus","eng"]`)                         |
 | `SKIP_CLEANUP`      | no             | Set to `true` to preserve working directories after processing (useful for debugging) |
 
 Azure OpenAI credentials (`azure_openai_api_key`, `azure_openai_endpoint`, `azure_openai_deployment`) are fetched from Vault per task to support token rotation.
@@ -162,7 +163,7 @@ Azure OpenAI credentials (`azure_openai_api_key`, `azure_openai_endpoint`, `azur
 
 ```bash
 pip install -r requirements.txt
-uvicorn api.app:app --host 0.0.0.0 --port 8001 --reload
+uvicorn api.app:app --host 0.0.0.0 --port 8123 --reload
 ```
 
 ### Docker
@@ -171,10 +172,60 @@ uvicorn api.app:app --host 0.0.0.0 --port 8001 --reload
 docker build -t cleaning .
 
 docker run -p 8123:8123 \
-  -e RUUTER_INTERNAL="http://ruuter-internal:8080" \
+  -e RUUTER_INTERNAL="http://ruuter-internal:8089" \
   -v /scrapped-data:/scrapped-data \
   cleaning
 ```
+
+## Testing
+
+Tests live in `tests/` at the repo root and are split into three files:
+
+| File | Type | Docker required |
+|------|------|-----------------|
+| `test_tasks.py` | Unit — extraction logic, routing, metadata mutation | No |
+| `test_api.py` | API contract — request validation, HTTP semantics | Yes |
+| `test_integration.py` | End-to-end — full pipeline against real containers | Yes |
+
+All commands are run from the **repo root**. `PYTHONPATH=cleaning` is required so the test imports resolve correctly.
+
+### Unit tests (no Docker)
+
+```bash
+pip install -r cleaning/requirements.txt
+pip install pytest pytest-cov hvac loguru requests
+
+PYTHONPATH=cleaning pytest tests/test_tasks.py -v
+```
+
+### Integration tests (requires Docker)
+
+The test stack (`docker-compose-test.yml`) spins up a Vault dev instance, a mock Ruuter stub, and the cleaning service itself. `conftest.py` manages the full lifecycle automatically.
+
+```bash
+pip install -r cleaning/requirements.txt
+pip install pytest pytest-timeout hvac loguru requests
+
+mkdir -p test-vault/agent-out test-scrapped-data
+docker compose -f docker-compose-test.yml build cleaning-server-test
+
+PYTHONPATH=cleaning pytest tests/test_api.py tests/test_integration.py -v --timeout=300
+```
+
+### LLM tests
+
+Tests that exercise the `use_llm` and `use_llm_correction` paths are automatically **skipped** when Azure credentials are absent, so the suite always passes without them. To run the full suite including LLM tests, set the following before running integration tests:
+
+```bash
+export AZURE_OPENAI_API_KEY=...
+export AZURE_OPENAI_ENDPOINT=...
+export AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini   # optional, this is the default
+export AZURE_OPENAI_API_VERSION=2024-02-01   # optional, this is the default
+```
+
+### GitHub Actions
+
+The workflow at [`.github/workflows/test-cleaning.yml`](../.github/workflows/test-cleaning.yml) runs automatically on every pull request that touches `cleaning/`, `tests/`, `docker-compose-test.yml`, or `test-vault/`. It runs unit tests first, then integration tests only if unit tests pass. Azure credentials are stored as repository secrets (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION`) — if they are not configured the LLM tests are skipped but everything else runs normally.
 
 ## Integration
 
@@ -279,6 +330,6 @@ POST /ckb/reports/logs/add
 
 For each cleaned file:
 
-- `cleaned.txt`: plain text content
-- `cleaned.meta.json`: updated metadata with cleaning status, language, and timestamps
-- Extracted images (if requested): written to `images_path`
+- `cleaned.txt`: Markdown-formatted text
+- `cleaned.meta.json`: updated metadata with cleaning status and detected language
+- Extracted images (if requested): written to `<directory_path>/images/` and uploaded to blob storage

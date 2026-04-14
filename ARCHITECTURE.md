@@ -98,8 +98,8 @@ graph TB
 ### 6. Cleaning Service
 - **Purpose**: Content cleaning and text extraction
 - **Location**: `/cleaning/`
-- **Technology**: Python, FastAPI, Unstructured, BeautifulSoup
-- **Features**: HTML cleaning, document processing, LLM-ready text generation
+- **Technology**: Python, FastAPI, trafilatura, pymupdf4llm, Unstructured, BeautifulSoup
+- **Features**: HTML cleaning, document processing, optional LLM-assisted extraction, image extraction, LLM-ready text generation
 
 ### 7. File Processing Service
 - **Purpose**: File upload, storage, and download management
@@ -118,6 +118,15 @@ graph TB
 - **Location**: `/data-export/`
 - **Technology**: Python, FastAPI, PostgreSQL
 - **Features**: CSV export, data compression, automated cleanup
+
+### 10. Vault (Secrets Management)
+- **Purpose**: Secure storage and dynamic delivery of service credentials
+- **Technology**: HashiCorp Vault, Vault Agent
+- **Components**:
+  - `vault`: Core Vault server (KV secrets engine, port 8200)
+  - `vault-init`: One-shot init container — initialises and unseals Vault on first startup, writes Vault Agent credentials to a shared volume, then exits
+  - `vault-agent-cleaner`: Vault Agent sidecar for the cleaning service — authenticates with Vault and continuously refreshes a token file at `/agent/out/token`
+- **Usage**: Currently used by the Cleaning Service to fetch Azure OpenAI credentials (`api_key`, `endpoint`, `deployment`) per task, enabling credential rotation without service restarts. The cleaning service is a hard dependency on `vault-agent-cleaner` reaching a healthy state before it starts.
 
 ## Data Flow Architecture
 
@@ -227,6 +236,12 @@ sequenceDiagram
 - **JWT Tokens**: Secure user authentication
 - **Role-based Access**: Granular permission controls
 - **API Security**: Request validation and rate limiting
+
+### Secrets Management
+- **HashiCorp Vault**: Central secrets store for service credentials
+- **Vault Agent**: Sidecar process that handles Vault authentication and token renewal transparently, writing a continuously-refreshed token to a shared volume
+- **Per-task secret fetch**: Services read credentials from Vault on each task (not at startup) so token rotation takes effect immediately without restarts
+- **No secrets in environment**: Sensitive credentials (e.g. Azure OpenAI API keys) are never baked into container images or compose files
 
 ### Data Security
 - **Encrypted Storage**: S3 encryption at rest
