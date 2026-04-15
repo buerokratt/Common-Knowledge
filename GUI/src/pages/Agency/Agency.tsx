@@ -849,7 +849,7 @@ const Agency: FC = () => {
               onFilesChange={handleFilesChange}
               onFileDelete={handleFileDelete}
               maxFileSize={30 * 1024 * 1024} // 30MB
-              acceptedTypes=".pdf,.doc,.docx,.html,.htm"
+              acceptedTypes=".pdf,.doc,.docx,.html,.htm,.md,.txt,.pptx"
               multiple={true}
               uploadProgress={uploadProgress} // Pass upload progress to FileUploader
             />
