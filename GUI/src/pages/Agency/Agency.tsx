@@ -269,6 +269,11 @@ const Agency: FC = () => {
     mutationFn: createSourceUrl,
     onSuccess: (data: any) => {
       const sourceId = data?.baseId;
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.urlSuccess'),
+      });
       setAddUrlModal(false);
       setFormData(getInitialFormData);
       queryClient.invalidateQueries(['sources']);
