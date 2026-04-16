@@ -122,12 +122,14 @@ sequenceDiagram
     Scrapper->>Storage: Store raw content
     Scrapper->>DB: Store file metadata
     Scrapper->>Cleaning: Request cleaning
-    Cleaning->>Storage: Download raw content
     Cleaning->>Cleaning: Process content
     alt HTML Content
-        Cleaning->>Cleaning: Remove HTML tags
-        Cleaning->>Cleaning: Extract text with BeautifulSoup
-    else Document Content
+        Cleaning->>Cleaning: Extract text with trafilatura (primary)
+        Cleaning->>Cleaning: Optional LLM evaluation/re-extraction
+        Cleaning->>Cleaning: BeautifulSoup fallback if needed
+    else PDF Content
+        Cleaning->>Cleaning: Convert to Markdown with pymupdf4llm
+    else Document Content (DOCX/DOC/PPTX)
         Cleaning->>Cleaning: Parse with Unstructured
         Cleaning->>Cleaning: Extract structured text
     end
