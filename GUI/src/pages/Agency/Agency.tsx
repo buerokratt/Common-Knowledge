@@ -1,7 +1,7 @@
 import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   MdOutlineDeleteOutline,
   MdAccessTime,
@@ -76,6 +76,7 @@ const Agency: FC = () => {
   const toast = useToast();
   const queryClient = useQueryClient();
   const { id: agencyBaseId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [uploadProgress, setUploadProgress] = useState<UploadProgress>({
     isUploading: false,
     currentFile: 0,
@@ -266,7 +267,8 @@ const Agency: FC = () => {
   // URL addition mutation
   const addUrlMutation = useMutation({
     mutationFn: createSourceUrl,
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      const sourceId = data?.baseId;
       toast.open({
         type: 'success',
         title: t('global.notification'),
@@ -275,6 +277,9 @@ const Agency: FC = () => {
       setAddUrlModal(false);
       setFormData(getInitialFormData);
       queryClient.invalidateQueries(['sources']);
+      if (sourceId) {
+        navigate(`/source/${sourceId}/files`);
+      }
     },
     onError: (error: any) => {
       toast.open({
@@ -849,7 +854,7 @@ const Agency: FC = () => {
               onFilesChange={handleFilesChange}
               onFileDelete={handleFileDelete}
               maxFileSize={30 * 1024 * 1024} // 30MB
-              acceptedTypes=".pdf,.doc,.docx,.html,.htm"
+              acceptedTypes=".pdf,.doc,.docx,.html,.htm,.md,.txt,.pptx"
               multiple={true}
               uploadProgress={uploadProgress} // Pass upload progress to FileUploader
             />
