@@ -610,7 +610,8 @@
     "loadingCentopsOptions": "Centopsi valikute laadimine...",
     "failed": "Ebaõnnestunud",
     "in_review": "Ülevaatamisel",
-    "startCleaningNotification": "Kõik leheküljed on kraabitud. Enne jätkamist kustutage kõik leheküljed, mida te ei soovi vestlusrobotile kättesaadavaks teha, näiteks uudised ja arhiveeritud leheküljed. Kui olete oma valiku teinud, jätkake lehekülgede puhastamist, klõpsates nuppu \"Alusta puhastamist\"."
+    "startCleaningNotification": "Kõik leheküljed on kraabitud. Enne jätkamist kustutage kõik leheküljed, mida te ei soovi vestlusrobotile kättesaadavaks teha, näiteks uudised ja arhiveeritud leheküljed. Kui olete oma valiku teinud, jätkake lehekülgede puhastamist, klõpsates nuppu \"Alusta puhastamist\".",
+    "cleaningStarted": "Puhastamine algas"
 
   },
   "fileUpload": {
