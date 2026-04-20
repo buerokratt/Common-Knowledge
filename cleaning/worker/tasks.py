@@ -1,9 +1,14 @@
+import base64
 import datetime
+import ipaddress
 import json
 import logging
+import mimetypes
 import re
+import socket
 import textwrap
 from pathlib import Path
+from urllib.parse import urljoin, urlparse
 
 import pymupdf4llm
 import requests
@@ -135,7 +140,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
         output_format="markdown",
         include_comments=False,
         include_tables=True,
-        favor_recall=True,
+        favor_precision=True,
     )
     return result or None
 
@@ -301,13 +306,12 @@ def clean_pdf(entity: EntityToClean) -> str:
     """
     Use pymupdf4llm for PDF-to-Markdown conversion.
     Handles multi-column layouts, tables, headings, and hyperlinks automatically.
-    Images are skipped -- we only want the text content.
-    Note: pymupdf4llm.to_markdown does not accept a use_ocr parameter.
+    Images are intentionally skipped here — they are extracted separately by
+    extract_images_from_pdf() and uploaded as individual files.
     """
     return pymupdf4llm.to_markdown(
         entity.file_path.as_posix(),
-        show_progress=False,
-        ignore_images=True,
+        show_progress=False
     )
 
 
@@ -319,6 +323,228 @@ def clean_any_file(entity: EntityToClean) -> str:
     """
     partitioned = partition(filename=entity.file_path.as_posix(), languages=settings.languages)
     return _elements_to_markdown(partitioned)
+
+
+# ---------------------------------------------------------------------------
+# Image extraction
+# ---------------------------------------------------------------------------
+
+# Shared HTTP session for HTML image downloads.
+# A persistent session reuses the underlying TCP connection pool and ensures
+# a consistent User-Agent header without repeating it on every call.
+_HTML_IMAGE_SESSION = requests.Session()
+_HTML_IMAGE_SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0 (compatible; CKB-Cleaner/1.0)",
+})
+
+
+def _is_private_url(url: str) -> bool:
+    """
+    Return True if *url* resolves to a non-globally-routable address.
+
+    This is a basic SSRF guard: it prevents the worker from fetching resources
+    on the internal network (loopback, RFC-1918 private ranges, link-local,
+    etc.) when processing untrusted HTML <img src> attributes.
+
+    Returns True (i.e. "block it") on any resolution failure so the default
+    is to skip rather than to fetch when the host is ambiguous.
+    """
+    try:
+        host = urlparse(url).hostname
+        if not host:
+            return True
+        ip = ipaddress.ip_address(socket.gethostbyname(host))
+        return not ip.is_global
+    except Exception:
+        return True
+
+
+def _images_dir(entity: EntityToClean) -> Path:
+    """Return (and create) the per-job images subdirectory."""
+    d = entity.directory_path / "images"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+def extract_images_from_html(entity: EntityToClean) -> list[Path]:
+    """
+    Extract images referenced by <img src="..."> in the HTML file.
+
+    - data-URI images are decoded and saved immediately.
+    - http/https URLs are downloaded; relative URLs are resolved against
+      entity.url before downloading.
+    - Any individual download failure is logged and skipped so one bad
+      image does not abort the whole job.
+    """
+    with entity.file_path.open("r", encoding="utf-8", errors="replace") as f:
+        html = f.read()
+
+    soup = BeautifulSoup(html, "lxml")
+    images_dir = _images_dir(entity)
+    saved: list[Path] = []
+
+    for idx, img_tag in enumerate(soup.find_all("img", src=True)):
+        src = img_tag["src"].strip()
+        if not src:
+            continue
+
+        # --- data URI ---------------------------------------------------------
+        data_match = re.match(r"data:(image/[\w+.-]+);base64,(.+)", src, re.DOTALL)
+        if data_match:
+            mime = data_match.group(1)
+            ext = mimetypes.guess_extension(mime) or ".bin"
+            ext = ".jpg" if ext == ".jpe" else ext
+            try:
+                image_bytes = base64.b64decode(data_match.group(2))
+                out_path = images_dir / f"image_{idx:03d}{ext}"
+                out_path.write_bytes(image_bytes)
+                saved.append(out_path)
+            except Exception as e:
+                logger.warning(f"[images/html] data-URI decode failed (idx {idx}): {e}")
+            continue
+
+        # --- remote URL -------------------------------------------------------
+        try:
+            full_url = urljoin(entity.url, src) if not src.startswith("http") else src
+        except Exception:
+            continue
+        if not full_url.startswith("http"):
+            continue
+
+        if _is_private_url(full_url):
+            logger.warning(f"[images/html] skipping non-public URL (SSRF guard): {full_url}")
+            continue
+
+        try:
+            r = _HTML_IMAGE_SESSION.get(full_url, timeout=15)
+            r.raise_for_status()
+            content_type = r.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            ext = mimetypes.guess_extension(content_type) or ".jpg"
+            ext = ".jpg" if ext == ".jpe" else ext
+            out_path = images_dir / f"image_{idx:03d}{ext}"
+            out_path.write_bytes(r.content)
+            saved.append(out_path)
+        except Exception as e:
+            logger.warning(f"[images/html] download failed for {full_url}: {e}")
+
+    logger.info(f"[images/html] extracted {len(saved)} image(s) from {entity.file_path}")
+    return saved
+
+
+def extract_images_from_pdf(entity: EntityToClean) -> list[Path]:
+    """
+    Extract embedded images from a PDF using PyMuPDF (fitz).
+    Each unique xref is saved once; duplicates (same image referenced on
+    multiple pages) are skipped to avoid inflating the image set.
+    """
+    import fitz  # PyMuPDF — already a transitive dep via pymupdf4llm
+
+    images_dir = _images_dir(entity)
+    saved: list[Path] = []
+    seen_xrefs: set[int] = set()
+
+    doc = fitz.open(entity.file_path.as_posix())
+    try:
+        for page_num in range(len(doc)):
+            for img_info in doc.get_page_images(page_num, full=True):
+                xref = img_info[0]
+                if xref in seen_xrefs:
+                    continue
+                seen_xrefs.add(xref)
+                try:
+                    img_data = doc.extract_image(xref)
+                    ext = f".{img_data['ext']}"
+                    out_path = images_dir / f"image_{len(saved):03d}{ext}"
+                    out_path.write_bytes(img_data["image"])
+                    saved.append(out_path)
+                except Exception as e:
+                    logger.warning(f"[images/pdf] xref {xref} extraction failed: {e}")
+    finally:
+        doc.close()
+
+    logger.info(f"[images/pdf] extracted {len(saved)} image(s) from {entity.file_path}")
+    return saved
+
+
+def extract_images_from_docx(entity: EntityToClean) -> list[Path]:
+    """
+    Extract embedded images from a DOCX file via python-docx relationship
+    parts.  Only image relationships are processed; other media (audio, video)
+    are skipped.
+    """
+    from docx import Document  # python-docx
+
+    images_dir = _images_dir(entity)
+    saved: list[Path] = []
+
+    doc = Document(entity.file_path.as_posix())
+    for idx, rel in enumerate(doc.part.rels.values()):
+        if "image" not in rel.reltype:
+            continue
+        try:
+            image_part = rel.target_part
+            ext = Path(image_part.partname).suffix or ".png"
+            out_path = images_dir / f"image_{idx:03d}{ext}"
+            out_path.write_bytes(image_part.blob)
+            saved.append(out_path)
+        except Exception as e:
+            logger.warning(f"[images/docx] rel {idx} extraction failed: {e}")
+
+    logger.info(f"[images/docx] extracted {len(saved)} image(s) from {entity.file_path}")
+    return saved
+
+
+def extract_images_from_pptx(entity: EntityToClean) -> list[Path]:
+    """
+    Extract embedded images from a PPTX file via python-pptx.
+    Iterates every slide and picks out picture shapes (shape_type == 13,
+    i.e. MSO_SHAPE_TYPE.PICTURE).
+    """
+    from pptx import Presentation  # python-pptx
+    from pptx.enum.shapes import MSO_SHAPE_TYPE
+
+    images_dir = _images_dir(entity)
+    saved: list[Path] = []
+
+    prs = Presentation(entity.file_path.as_posix())
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                continue
+            try:
+                image = shape.image
+                ext = f".{image.ext}"
+                out_path = images_dir / f"image_{len(saved):03d}{ext}"
+                out_path.write_bytes(image.blob)
+                saved.append(out_path)
+            except Exception as e:
+                logger.warning(f"[images/pptx] shape extraction failed: {e}")
+
+    logger.info(f"[images/pptx] extracted {len(saved)} image(s) from {entity.file_path}")
+    return saved
+
+
+def extract_images(entity: EntityToClean, file_type: str) -> list[Path]:
+    """
+    Dispatcher: call the right extractor for the given file type.
+    Returns an empty list for formats with no image content (e.g. .txt).
+    Any unexpected top-level failure is caught, logged, and treated as
+    zero images so the rest of the pipeline is never blocked.
+    """
+    extractors = {
+        ".html": extract_images_from_html,
+        ".pdf":  extract_images_from_pdf,
+        ".docx": extract_images_from_docx,
+        ".pptx": extract_images_from_pptx,
+    }
+    extractor = extractors.get(file_type)
+    if extractor is None:
+        return []
+    try:
+        return extractor(entity)
+    except Exception as e:
+        logger.error(f"[images] top-level extraction error for {entity.file_path} ({file_type}): {e}")
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -387,6 +613,9 @@ def clean_file_task(entity: EntityToClean):
         elif file_type == ".pdf":
             cleaned_text = clean_pdf(entity)
             logger.info(f"Cleaned as PDF (pymupdf4llm) for {entity.file_path.as_posix()}")
+        elif file_type in (".pptx", ".ppt"):
+            cleaned_text = clean_any_file(entity)
+            logger.info(f"Cleaned as PPTX (unstructured) for {entity.file_path.as_posix()}")
         else:
             cleaned_text = clean_any_file(entity)
             logger.info(f"Cleaned as unstructured file for {entity.file_path.as_posix()}")
@@ -449,13 +678,44 @@ def clean_file_task(entity: EntityToClean):
         uploaded_cleaned_metadata_url = response_json["response"]
         logger.info(f"Saved cleaned metadata for {entity.file_path.as_posix()}")
 
+        # Extract and upload images (only when explicitly requested)
+        # Failures on individual images are logged but never raise — a missing
+        # image must not abort an otherwise-successful cleaning job.
+        uploaded_image_urls: list[str] = []
+        extracted_images = extract_images(entity, file_type) if entity.extract_images else []
+        for img_path in extracted_images:
+            try:
+                r = requests.post(
+                    f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                    json={"source_file_path": img_path.as_posix()},
+                    timeout=ruuter_timeout,
+                )
+                r.raise_for_status()
+                img_url = r.json().get("response", "")
+                if img_url:
+                    uploaded_image_urls.append(img_url)
+                    logger.info(f"Uploaded image {img_path.name} -> {img_url}")
+                else:
+                    logger.warning(f"[images] Ruuter returned empty URL for {img_path.name}")
+            except Exception as e:
+                logger.warning(f"[images] failed to upload {img_path.name}: {e}")
+
+        if uploaded_image_urls:
+            logger.info(
+                f"Uploaded {len(uploaded_image_urls)}/{len(extracted_images)} image(s) "
+                f"for {entity.file_path.as_posix()}"
+            )
+
         # Update the database record
+        # NOTE: Ruuter's update-cleaned-file endpoint must be extended to
+        # accept the image_urls field so images are persisted in the DB.
         r = requests.post(
             f"{settings.ruuter_internal}/ckb/source-file/update-cleaned-file",
             json={
                 "base_id": entity.source_file_id,
                 "cleaned_data_url": uploaded_cleaned_text_url,
                 "cleaned_metadata_url": uploaded_cleaned_metadata_url,
+                "image_urls": uploaded_image_urls,
             },
             timeout=ruuter_timeout,
         )
@@ -508,6 +768,7 @@ def clean_source_task(task: SourceCleaningTask):
                 source_run_report_base_id=task.source_run_report_base_id,
                 use_llm=task.use_llm,
                 use_llm_correction=task.use_llm_correction,
+                extract_images=task.extract_images,
             )
             clean_file_task(entity)
         except Exception as e:

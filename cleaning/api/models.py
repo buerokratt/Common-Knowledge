@@ -25,6 +25,7 @@ class EntityToClean(BaseModel):
     logs_path: FilePath
     use_llm: bool = False
     use_llm_correction: bool = False
+    extract_images: bool = False
 
     @field_validator("file_path", "meta_data_path", "logs_path", mode="before")
     @classmethod
@@ -54,6 +55,7 @@ class SourceCleaningTask(BaseModel):
     files: list[SourceCleaningFile]
     use_llm: bool = False
     use_llm_correction: bool = False
+    extract_images: bool = False
 
     @field_validator("logs_path", mode="before")
     @classmethod

@@ -226,8 +226,13 @@ export AZURE_OPENAI_API_VERSION=2024-02-01   # optional, this is the default
 ### GitHub Actions
 
 The workflow at [`.github/workflows/test-cleaning.yml`](../.github/workflows/test-cleaning.yml) runs automatically on every pull request that touches `cleaning/`, `tests/`, `docker-compose-test.yml`, or `test-vault/`. It runs unit tests first, then integration tests only if unit tests pass. Azure credentials are stored as repository secrets (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT`, `AZURE_OPENAI_API_VERSION`) — if they are not configured the LLM tests are skipped but everything else runs normally.
-
 ## Integration
+
+- **Scrapper service**: sends files for cleaning after scraping
+- **Ruuter Internal**: receives status updates and stores cleaned content metadata
+- **File storage**: cleaned text and images are uploaded through Ruuter
+
+## Ruuter API Calls
 
 - **Scrapper service**: sends files for cleaning after scraping
 - **Ruuter Internal**: receives status updates and stores cleaned content metadata
