@@ -95,7 +95,7 @@ For detailed architecture information, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 | **Ruuter Internal** | Internal service communication            | Ruuter YAML configs | 8089 |
 | **Resql**           | SQL query engine and database abstraction | SQL with metadata   | -    |
 | **Scrapper**        | Web scraping and content extraction       | Python/Scrapy       | 8000 |
-| **Cleaning**        | Content cleaning and text extraction      | Python/FastAPI      | 8001 |
+| **Cleaning**        | Content cleaning and text extraction      | Python/FastAPI      | 8123 |
 | **File Processing** | File upload and storage management        | Python/FastAPI      | 8888 |
 | **Scheduler**       | Task scheduling and automation            | Python/FastAPI      | 8003 |
 | **Data Export**     | Database export and archival              | Python/FastAPI      | 8002 |
@@ -106,6 +106,7 @@ For detailed architecture information, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 - **S3 Storage**: Blob storage for files and content
 - **Liquibase**: Database schema migrations
 - **Celery**: Background task processing
+- **HashiCorp Vault**: Secrets management and credential rotation for service integrations (e.g. Azure OpenAI credentials used by the Cleaning Service)
 
 ## Data Flow
 
@@ -253,6 +254,8 @@ curl -X POST http://localhost:8000/specified-pages-scrapper-task \
 # Check service health
 docker-compose ps
 ```
+
+The cleaning service has a dedicated automated test suite (unit, API contract, and integration tests) that runs on every pull request via GitHub Actions. See [Cleaning Service — Testing](./cleaning/README.md#testing) for how to run tests locally.
 
 ### Configuration
 
