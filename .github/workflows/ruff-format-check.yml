@@ -1,0 +1,28 @@
+name: Ruff Format Check
+
+on:
+  pull_request:
+    branches: ["*"]        # run on PRs to any branch
+  push:
+    branches: ["*"]   # optional; expand to ["*"] if you want all pushes
+
+jobs:
+  ruff-format:
+    name: Ruff Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      # Format check only — fails if files are not formatted
+      - name: Ruff format check
+        run: uvx ruff format --check .

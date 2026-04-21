@@ -1,5 +1,6 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 import asyncio
 import logging
 import sys
@@ -9,7 +10,7 @@ from app.services import upload_service
 logger = logging.getLogger(__name__)
 
 
-async def cleanup_background_task():
+async def cleanup_background_task() -> None:
     """Background task to periodically clean up old tasks."""
     while True:
         try:
@@ -21,7 +22,7 @@ async def cleanup_background_task():
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s - %(asctime)s - %(name)s - %(message)s",
@@ -30,26 +31,22 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting File Processing API")
-    
+
     # Start cleanup task (optional)
     cleanup_task = asyncio.create_task(cleanup_background_task())
-    
+
     yield
-    
+
     # Shutdown
     cleanup_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         pass
-    
+
     logger.info("File Processing API shutdown complete")
 
 
-app = FastAPI(
-    title="File Processing API", 
-    version="1.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="File Processing API", version="1.0.0", lifespan=lifespan)
 
 app.include_router(api_router, prefix="/api/v1")

@@ -1,0 +1,28 @@
+name: Ruff Lint Check
+
+on:
+  pull_request:
+    branches: ["*"]         # run on PRs to any branch
+  push:
+    branches: ["*"]   # optional; broaden to ["*"] if desired
+
+jobs:
+  ruff:
+    name: Ruff Lint & Format Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      # Lint: exits non-zero on violations -> job fails
+      - name: Ruff lint
+        run: uvx ruff check --output-format=github .

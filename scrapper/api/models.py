@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, Field, HttpUrl
 
 
 class BaseObject(BaseModel):
@@ -29,6 +29,7 @@ class EntireSourceScrapperTask(BaseObject):
 
 class EestiScrapperTask(BaseObject):
     """Task for scraping all articles from ARVA/Eesti.ee"""
+
     pass
 
 
@@ -52,12 +53,12 @@ class EditedMetadataTask(BaseModel):
     source_file_id: str
     source_file_path: str
 
+
 class ApiFileToScrape(BaseModel):
     id: str
     hash: str
-    externalId: str
+    external_id: str = Field(alias="externalId")
 
 
 class SpecifiedApiFilesScrapeTask(BaseObject):
     api_files: list[ApiFileToScrape]
-

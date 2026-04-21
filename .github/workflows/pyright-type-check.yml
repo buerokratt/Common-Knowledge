@@ -1,0 +1,30 @@
+name: Pyright Type Check
+
+on:
+  pull_request:
+    branches: ["*"]
+  push:
+    branches: ["*"]
+
+jobs:
+  pyright:
+    name: Pyright Type Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+
+      - name: Install dependencies (locked)
+        run: uv sync --frozen
+
+      - name: Run Pyright
+        run: uv run pyright

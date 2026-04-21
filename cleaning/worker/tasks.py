@@ -8,6 +8,7 @@ import re
 import socket
 import textwrap
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin, urlparse
 
 import pymupdf4llm
@@ -17,7 +18,6 @@ from bs4 import BeautifulSoup
 from langdetect import detect, LangDetectException
 from markdownify import markdownify
 from openai import AzureOpenAI, APIError
-from pydantic import ValidationError
 from unstructured.documents.elements import Title, ListItem, Table, CodeSnippet
 from unstructured.partition.auto import partition
 from unstructured.partition.html import partition_html
@@ -35,7 +35,8 @@ logger = logging.getLogger(__name__)
 # unstructured.staging.base.elements_to_markdown was removed in 0.18.x.
 # We implement the same logic directly using the element types we care about.
 
-def _elements_to_markdown(elements: list) -> str:
+
+def _elements_to_markdown(elements: list[Any]) -> str:
     """
     Convert a list of Unstructured elements to a Markdown string.
 
@@ -66,10 +67,10 @@ def _elements_to_markdown(elements: list) -> str:
     return "\n\n".join(lines)
 
 
-
 # ---------------------------------------------------------------------------
 # Azure OpenAI client -- created per task using fresh Vault secrets
 # ---------------------------------------------------------------------------
+
 
 def _make_openai_client(secrets: VaultSecrets) -> AzureOpenAI:
     return AzureOpenAI(
@@ -83,14 +84,16 @@ def _make_openai_client(secrets: VaultSecrets) -> AzureOpenAI:
 # Text normalisation
 # ---------------------------------------------------------------------------
 
+
 def normalize_newlines(text: str) -> str:
     """Collapse 3+ consecutive newlines down to 2."""
-    return re.sub(r'\n{3,}', '\n\n', text)
+    return re.sub(r"\n{3,}", "\n\n", text)
 
 
 # ---------------------------------------------------------------------------
 # HTML extraction helpers
 # ---------------------------------------------------------------------------
+
 
 def _beautifulsoup_extract(html: str) -> str:
     """
@@ -176,7 +179,9 @@ _EXTRACT_SYSTEM = textwrap.dedent("""
 """).strip()
 
 
-def _llm_evaluate(client: AzureOpenAI, deployment: str, extracted_markdown: str) -> tuple[bool, str]:
+def _llm_evaluate(
+    client: AzureOpenAI, deployment: str, extracted_markdown: str
+) -> tuple[bool, str]:
     """
     Ask the LLM to evaluate the quality of an extraction.
     Returns (passed, reason). On any API or parse error returns (False, reason)
@@ -189,7 +194,10 @@ def _llm_evaluate(client: AzureOpenAI, deployment: str, extracted_markdown: str)
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _EVAL_SYSTEM},
-                {"role": "user", "content": f"# Extraction to evaluate\n\n{extracted_markdown}"},
+                {
+                    "role": "user",
+                    "content": f"# Extraction to evaluate\n\n{extracted_markdown}",
+                },
             ],
         )
         raw = response.choices[0].message.content or "{}"
@@ -233,7 +241,10 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
 # HTML cleaning
 # ---------------------------------------------------------------------------
 
-def clean_html(entity: EntityToClean, client: AzureOpenAI | None, deployment: str | None) -> str:
+
+def clean_html(
+    entity: EntityToClean, client: AzureOpenAI | None, deployment: str | None
+) -> str:
     """
     Three modes controlled by entity.use_llm and entity.use_llm_correction:
 
@@ -269,24 +280,32 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI | None, deployment: st
         if extracted:
             logger.info(f"[html] trafilatura succeeded for {entity.url}")
             return extracted
-        logger.warning(f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}")
+        logger.warning(
+            f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}"
+        )
         return _beautifulsoup_extract(html)
 
     # LLM paths
     extracted = _trafilatura_extract(html, url=entity.url)
     if not extracted:
-        logger.warning(f"[html] trafilatura empty for {entity.url}; using BeautifulSoup before LLM eval")
+        logger.warning(
+            f"[html] trafilatura empty for {entity.url}; using BeautifulSoup before LLM eval"
+        )
         extracted = _beautifulsoup_extract(html)
 
     logger.info(f"[html] running LLM evaluation for {entity.url}")
     passed, reason = _llm_evaluate(client, deployment, extracted)
-    logger.info(f"[html] LLM evaluation {'PASSED' if passed else 'FAILED'} for {entity.url}: {reason}")
+    logger.info(
+        f"[html] LLM evaluation {'PASSED' if passed else 'FAILED'} for {entity.url}: {reason}"
+    )
 
     if passed:
         return extracted
 
     if not entity.use_llm_correction:
-        logger.warning(f"[html] LLM eval failed, falling back to BeautifulSoup for {entity.url}")
+        logger.warning(
+            f"[html] LLM eval failed, falling back to BeautifulSoup for {entity.url}"
+        )
         return _beautifulsoup_extract(html)
 
     logger.info(f"[html] LLM correction: re-extracting from raw HTML for {entity.url}")
@@ -294,13 +313,16 @@ def clean_html(entity: EntityToClean, client: AzureOpenAI | None, deployment: st
     if corrected:
         return corrected
 
-    logger.warning(f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}")
+    logger.warning(
+        f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}"
+    )
     return _beautifulsoup_extract(html)
 
 
 # ---------------------------------------------------------------------------
 # Non-HTML cleaning
 # ---------------------------------------------------------------------------
+
 
 def clean_pdf(entity: EntityToClean) -> str:
     """
@@ -309,10 +331,7 @@ def clean_pdf(entity: EntityToClean) -> str:
     Images are intentionally skipped here — they are extracted separately by
     extract_images_from_pdf() and uploaded as individual files.
     """
-    return pymupdf4llm.to_markdown(
-        entity.file_path.as_posix(),
-        show_progress=False
-    )
+    return pymupdf4llm.to_markdown(entity.file_path.as_posix(), show_progress=False)
 
 
 def clean_any_file(entity: EntityToClean) -> str:
@@ -321,7 +340,9 @@ def clean_any_file(entity: EntityToClean) -> str:
     Output is rendered as Markdown via _elements_to_markdown so headings,
     lists, tables, and emphasis are all preserved.
     """
-    partitioned = partition(filename=entity.file_path.as_posix(), languages=settings.languages)
+    partitioned = partition(
+        filename=entity.file_path.as_posix(), languages=settings.languages
+    )
     return _elements_to_markdown(partitioned)
 
 
@@ -333,9 +354,11 @@ def clean_any_file(entity: EntityToClean) -> str:
 # A persistent session reuses the underlying TCP connection pool and ensures
 # a consistent User-Agent header without repeating it on every call.
 _HTML_IMAGE_SESSION = requests.Session()
-_HTML_IMAGE_SESSION.headers.update({
-    "User-Agent": "Mozilla/5.0 (compatible; CKB-Cleaner/1.0)",
-})
+_HTML_IMAGE_SESSION.headers.update(
+    {
+        "User-Agent": "Mozilla/5.0 (compatible; CKB-Cleaner/1.0)",
+    }
+)
 
 
 def _is_private_url(url: str) -> bool:
@@ -412,13 +435,17 @@ def extract_images_from_html(entity: EntityToClean) -> list[Path]:
             continue
 
         if _is_private_url(full_url):
-            logger.warning(f"[images/html] skipping non-public URL (SSRF guard): {full_url}")
+            logger.warning(
+                f"[images/html] skipping non-public URL (SSRF guard): {full_url}"
+            )
             continue
 
         try:
             r = _HTML_IMAGE_SESSION.get(full_url, timeout=15)
             r.raise_for_status()
-            content_type = r.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            content_type = (
+                r.headers.get("Content-Type", "image/jpeg").split(";")[0].strip()
+            )
             ext = mimetypes.guess_extension(content_type) or ".jpg"
             ext = ".jpg" if ext == ".jpe" else ext
             out_path = images_dir / f"image_{idx:03d}{ext}"
@@ -427,7 +454,9 @@ def extract_images_from_html(entity: EntityToClean) -> list[Path]:
         except Exception as e:
             logger.warning(f"[images/html] download failed for {full_url}: {e}")
 
-    logger.info(f"[images/html] extracted {len(saved)} image(s) from {entity.file_path}")
+    logger.info(
+        f"[images/html] extracted {len(saved)} image(s) from {entity.file_path}"
+    )
     return saved
 
 
@@ -490,7 +519,9 @@ def extract_images_from_docx(entity: EntityToClean) -> list[Path]:
         except Exception as e:
             logger.warning(f"[images/docx] rel {idx} extraction failed: {e}")
 
-    logger.info(f"[images/docx] extracted {len(saved)} image(s) from {entity.file_path}")
+    logger.info(
+        f"[images/docx] extracted {len(saved)} image(s) from {entity.file_path}"
+    )
     return saved
 
 
@@ -520,7 +551,9 @@ def extract_images_from_pptx(entity: EntityToClean) -> list[Path]:
             except Exception as e:
                 logger.warning(f"[images/pptx] shape extraction failed: {e}")
 
-    logger.info(f"[images/pptx] extracted {len(saved)} image(s) from {entity.file_path}")
+    logger.info(
+        f"[images/pptx] extracted {len(saved)} image(s) from {entity.file_path}"
+    )
     return saved
 
 
@@ -533,7 +566,7 @@ def extract_images(entity: EntityToClean, file_type: str) -> list[Path]:
     """
     extractors = {
         ".html": extract_images_from_html,
-        ".pdf":  extract_images_from_pdf,
+        ".pdf": extract_images_from_pdf,
         ".docx": extract_images_from_docx,
         ".pptx": extract_images_from_pptx,
     }
@@ -543,7 +576,9 @@ def extract_images(entity: EntityToClean, file_type: str) -> list[Path]:
     try:
         return extractor(entity)
     except Exception as e:
-        logger.error(f"[images] top-level extraction error for {entity.file_path} ({file_type}): {e}")
+        logger.error(
+            f"[images] top-level extraction error for {entity.file_path} ({file_type}): {e}"
+        )
         return []
 
 
@@ -551,7 +586,8 @@ def extract_images(entity: EntityToClean, file_type: str) -> list[Path]:
 # Logging setup
 # ---------------------------------------------------------------------------
 
-def set_up_logging(entity: EntityToClean):
+
+def set_up_logging(entity: EntityToClean) -> None:
     fmt = logging.Formatter(
         "[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
     )
@@ -585,7 +621,8 @@ def set_up_logging(entity: EntityToClean):
 # Main single-file task
 # ---------------------------------------------------------------------------
 
-def clean_file_task(entity: EntityToClean):
+
+def clean_file_task(entity: EntityToClean) -> None:
     with catch_error(entity):
         set_up_logging(entity)
         logger.info(f"Cleaning file {entity.file_path.as_posix()}")
@@ -612,13 +649,19 @@ def clean_file_task(entity: EntityToClean):
             logger.info(f"Cleaned as HTML for {entity.file_path.as_posix()}")
         elif file_type == ".pdf":
             cleaned_text = clean_pdf(entity)
-            logger.info(f"Cleaned as PDF (pymupdf4llm) for {entity.file_path.as_posix()}")
+            logger.info(
+                f"Cleaned as PDF (pymupdf4llm) for {entity.file_path.as_posix()}"
+            )
         elif file_type in (".pptx", ".ppt"):
             cleaned_text = clean_any_file(entity)
-            logger.info(f"Cleaned as PPTX (unstructured) for {entity.file_path.as_posix()}")
+            logger.info(
+                f"Cleaned as PPTX (unstructured) for {entity.file_path.as_posix()}"
+            )
         else:
             cleaned_text = clean_any_file(entity)
-            logger.info(f"Cleaned as unstructured file for {entity.file_path.as_posix()}")
+            logger.info(
+                f"Cleaned as unstructured file for {entity.file_path.as_posix()}"
+            )
 
         # Normalise excessive whitespace
         cleaned_text = normalize_newlines(cleaned_text)
@@ -628,9 +671,13 @@ def clean_file_task(entity: EntityToClean):
         if cleaned_text.strip():
             try:
                 detected_language = detect(cleaned_text)
-                logger.info(f"Detected language: {detected_language} for {entity.file_path.as_posix()}")
+                logger.info(
+                    f"Detected language: {detected_language} for {entity.file_path.as_posix()}"
+                )
             except LangDetectException as e:
-                logger.error(f"Language detection failed for {entity.file_path.as_posix()}: {e}")
+                logger.error(
+                    f"Language detection failed for {entity.file_path.as_posix()}: {e}"
+                )
 
         # Write and upload cleaned text
         cleaned_text_filename = entity.directory_path / "cleaned.txt"
@@ -646,9 +693,13 @@ def clean_file_task(entity: EntityToClean):
         try:
             response_json = r.json()
         except ValueError as exc:
-            raise RuntimeError("Invalid JSON response from Ruuter for cleaned text upload") from exc
+            raise RuntimeError(
+                "Invalid JSON response from Ruuter for cleaned text upload"
+            ) from exc
         if not isinstance(response_json, dict) or "response" not in response_json:
-            raise RuntimeError("Missing 'response' key in Ruuter response for cleaned text upload")
+            raise RuntimeError(
+                "Missing 'response' key in Ruuter response for cleaned text upload"
+            )
         uploaded_cleaned_text_url = response_json["response"]
         logger.info(f"Saved cleaned text for {entity.file_path.as_posix()}")
 
@@ -672,9 +723,13 @@ def clean_file_task(entity: EntityToClean):
         try:
             response_json = r.json()
         except ValueError as exc:
-            raise RuntimeError("Invalid JSON response from Ruuter for cleaned metadata upload") from exc
+            raise RuntimeError(
+                "Invalid JSON response from Ruuter for cleaned metadata upload"
+            ) from exc
         if not isinstance(response_json, dict) or "response" not in response_json:
-            raise RuntimeError("Missing 'response' key in Ruuter response for cleaned metadata upload")
+            raise RuntimeError(
+                "Missing 'response' key in Ruuter response for cleaned metadata upload"
+            )
         uploaded_cleaned_metadata_url = response_json["response"]
         logger.info(f"Saved cleaned metadata for {entity.file_path.as_posix()}")
 
@@ -682,7 +737,9 @@ def clean_file_task(entity: EntityToClean):
         # Failures on individual images are logged but never raise — a missing
         # image must not abort an otherwise-successful cleaning job.
         uploaded_image_urls: list[str] = []
-        extracted_images = extract_images(entity, file_type) if entity.extract_images else []
+        extracted_images = (
+            extract_images(entity, file_type) if entity.extract_images else []
+        )
         for img_path in extracted_images:
             try:
                 r = requests.post(
@@ -696,7 +753,9 @@ def clean_file_task(entity: EntityToClean):
                     uploaded_image_urls.append(img_url)
                     logger.info(f"Uploaded image {img_path.name} -> {img_url}")
                 else:
-                    logger.warning(f"[images] Ruuter returned empty URL for {img_path.name}")
+                    logger.warning(
+                        f"[images] Ruuter returned empty URL for {img_path.name}"
+                    )
             except Exception as e:
                 logger.warning(f"[images] failed to upload {img_path.name}: {e}")
 
@@ -729,13 +788,14 @@ def clean_file_task(entity: EntityToClean):
 # Batch source task
 # ---------------------------------------------------------------------------
 
+
 def _to_local_path(path_or_url: str | None) -> Path | None:
     if not path_or_url:
         return None
-    return Path('/' + path_or_url.replace('uploads/', '').lstrip('/'))
+    return Path("/" + path_or_url.replace("uploads/", "").lstrip("/"))
 
 
-def clean_source_task(task: SourceCleaningTask):
+def clean_source_task(task: SourceCleaningTask) -> None:
     logs_path = Path(task.logs_path)
     logs_path.parent.mkdir(parents=True, exist_ok=True)
     logs_path.touch(exist_ok=True)
@@ -744,26 +804,33 @@ def clean_source_task(task: SourceCleaningTask):
         try:
             requests.post(
                 f"{settings.ruuter_internal}/ckb/source-file/update-scrapped-file-stop-scrapping",
-                json={"base_id": file.baseId, "status": "cleaning"},
+                json={"base_id": file.base_id, "status": "cleaning"},
                 timeout=30,
             )
 
             fallback_directory = (
-                Path("/scrapped-data") / task.agency_base_id / file.sourceBaseId / file.baseId
+                Path("/scrapped-data")
+                / task.agency_base_id
+                / file.source_base_id
+                / file.base_id
             )
-            file_path = _to_local_path(file.originalDataUrl) or fallback_directory / "source.html"
+            file_path = (
+                _to_local_path(file.original_data_url)
+                or fallback_directory / "source.html"
+            )
             meta_data_path = (
-                _to_local_path(file.originalMetadataUrl) or fallback_directory / "source.meta.json"
+                _to_local_path(file.original_metadata_url)
+                or fallback_directory / "source.meta.json"
             )
 
             entity = EntityToClean(
                 file_path=file_path,
                 meta_data_path=meta_data_path,
                 directory_path=fallback_directory,
-                source_file_id=file.baseId,
+                source_file_id=file.base_id,
                 url=file.url,
                 logs_path=logs_path,
-                source_base_id=file.sourceBaseId,
+                source_base_id=file.source_base_id,
                 agency_base_id=task.agency_base_id,
                 source_run_report_base_id=task.source_run_report_base_id,
                 use_llm=task.use_llm,
@@ -775,8 +842,12 @@ def clean_source_task(task: SourceCleaningTask):
             # Catches both ValidationError and any runtime error -- both are
             # reported the same way and must not stop the remaining files.
             send_error(
-                file.url, "cleaning", str(e),
-                file.sourceBaseId, task.agency_base_id, task.source_run_report_base_id,
+                file.url,
+                "cleaning",
+                str(e),
+                file.sourceBaseId,
+                task.agency_base_id,
+                task.source_run_report_base_id,
             )
 
     # Upload the cleaning log

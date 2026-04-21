@@ -101,8 +101,8 @@ services:
   file-processing-api:
     container_name: file-processing-api
     build:
-      context: ./file-processing
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: file-processing/Dockerfile
     ports:
       - 8888:8888
     environment:
@@ -232,7 +232,8 @@ services:
   scheduler:
     container_name: scheduler
     build:
-      context: ./scheduler
+      context: .
+      dockerfile: scheduler/Dockerfile
     ports:
       - "8124:8124"
     networks:

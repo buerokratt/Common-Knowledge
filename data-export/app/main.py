@@ -23,11 +23,13 @@ def get_specified_export_task(task_name: str) -> ExportTask:
         if task.name == task_name:
             return task
 
-    raise HTTPException(status_code=404, detail='Task not found')
+    raise HTTPException(status_code=404, detail="Task not found")
 
 
 @app.post("/exports/{task_name}")
-def trigger_specified_export_task(task_name: str, background_tasks: BackgroundTasks) -> OkResponse:
+def trigger_specified_export_task(
+    task_name: str, background_tasks: BackgroundTasks
+) -> OkResponse:
     task_to_trigger = None
     for task in get_export_tasks():
         if task.name == task_name:
@@ -35,7 +37,7 @@ def trigger_specified_export_task(task_name: str, background_tasks: BackgroundTa
             break
 
     if task_to_trigger is None:
-        raise HTTPException(status_code=404, detail='Task not found')
+        raise HTTPException(status_code=404, detail="Task not found")
 
     background_tasks.add_task(perform_export, task_to_trigger)
 

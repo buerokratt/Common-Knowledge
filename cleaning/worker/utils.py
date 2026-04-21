@@ -1,7 +1,9 @@
 import contextlib
 import datetime
 import logging
+import os
 import shutil
+from collections.abc import Generator
 
 import requests
 
@@ -12,9 +14,13 @@ logger = logging.getLogger(__name__)
 
 
 def send_error(
-    url: str, error_type: str, error_message: str,
-    source_base_id: str, agency_base_id: str, source_run_report_base_id: str
-):
+    url: str,
+    error_type: str,
+    error_message: str,
+    source_base_id: str,
+    agency_base_id: str,
+    source_run_report_base_id: str,
+) -> None:
     scraped_at = datetime.datetime.now(datetime.UTC).isoformat()
     try:
         requests.post(
@@ -36,7 +42,7 @@ def send_error(
 
 
 @contextlib.contextmanager
-def catch_error(entity: EntityToClean):
+def catch_error(entity: EntityToClean) -> Generator[None, None, None]:
     """
     Context manager that catches any exception from a cleaning task,
     logs it, and reports it to Ruuter. Does NOT delete the working
@@ -57,7 +63,7 @@ def catch_error(entity: EntityToClean):
         raise
 
 
-def cleanup_directory(entity: EntityToClean):
+def cleanup_directory(entity: EntityToClean) -> None:
     """
     Called explicitly by tasks.py only after all uploads are confirmed.
     Keeping this separate from catch_error means a failed upload does NOT
@@ -66,7 +72,6 @@ def cleanup_directory(entity: EntityToClean):
     Set SKIP_CLEANUP=true in the environment to disable deletion (used in tests
     so that test assertions can read output files after the task completes).
     """
-    import os
     if os.environ.get("SKIP_CLEANUP", "").lower() in ("1", "true", "yes"):
         logger.info(f"SKIP_CLEANUP set — keeping directory: {entity.directory_path}")
         return

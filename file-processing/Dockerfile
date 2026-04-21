@@ -1,12 +1,15 @@
-FROM python:3.13
+FROM python:3.12.10-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-RUN mkdir /scrapped-data
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY file-processing/app ./app
+COPY file-processing/log_conf.yaml ./
 
-COPY . .
+EXPOSE 8888
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--log-config", "log_conf.yaml", "--port", "8888", "--reload"]
+CMD ["uv", "run", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--log-config", "log_conf.yaml", "--port", "8888"]

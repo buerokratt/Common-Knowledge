@@ -19,31 +19,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
+          enable-cache: true
 
-      - name: Install cleaning service dependencies
+      - name: Install Python
+        run: uv python install 3.12.10
+
+      - name: Install dependencies
         working-directory: cleaning
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+        run: uv sync --frozen
 
-      - name: Install test dependencies
-        run: |
-          pip install pytest pytest-cov hvac loguru requests
+      - name: Check formatting
+        working-directory: cleaning
+        run: uv run ruff format --check . ../tests
+
+      - name: Lint
+        working-directory: cleaning
+        run: uv run ruff check . ../tests
+
+      - name: Type check
+        working-directory: cleaning
+        run: uv run pyright
 
       - name: Run unit tests
+        working-directory: cleaning
         env:
           RUUTER_INTERNAL: "http://localhost:8089"
-          PYTHONPATH: "cleaning"
+          PYTHONPATH: "."
+          SKIP_CLEANUP: "true"
         run: |
-          pytest tests/test_tasks.py \
+          uv run pytest ../tests/test_tasks.py \
             -v \
             --tb=short \
-            --cov=cleaning \
+            --cov=. \
             --cov-report=term-missing \
-            --cov-report=xml:coverage.xml
+            --cov-report=xml:../coverage.xml
 
       - name: Upload coverage
         uses: codecov/codecov-action@v4
@@ -61,19 +72,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
+          enable-cache: true
 
-      - name: Install cleaning service dependencies
+      - name: Install Python
+        run: uv python install 3.12.10
+
+      - name: Install dependencies
         working-directory: cleaning
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Install test dependencies
-        run: |
-          pip install pytest pytest-timeout hvac loguru requests
+        run: uv sync --frozen
 
       - name: Prepare test directories
         run: |
@@ -85,14 +93,15 @@ jobs:
           docker compose -f docker-compose-test.yml build cleaning-server-test
 
       - name: Run API and integration tests
+        working-directory: cleaning
         env:
           AZURE_OPENAI_API_KEY: ${{ secrets.AZURE_OPENAI_API_KEY }}
           AZURE_OPENAI_ENDPOINT: ${{ secrets.AZURE_OPENAI_ENDPOINT }}
           AZURE_OPENAI_DEPLOYMENT: ${{ secrets.AZURE_OPENAI_DEPLOYMENT || 'gpt-4o-mini' }}
           AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION || '2024-02-01' }}
-          PYTHONPATH: "cleaning"
+          PYTHONPATH: "."
         run: |
-          pytest tests/test_api.py tests/test_integration.py \
+          uv run pytest ../tests/test_api.py ../tests/test_integration.py \
             -v \
             --tb=short \
             -x \

@@ -1,0 +1,21 @@
+name: Gitleaks Check
+
+on:
+  pull_request:
+    branches: ["*"]
+  push:
+    branches: ["*"]
+
+jobs:
+  gitleaks:
+    name: Gitleaks Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run Gitleaks
+        run: |
+            docker run --rm -v ${{ github.workspace }}:/code zricethezav/gitleaks:latest detect --source=/code --redact --no-banner
+

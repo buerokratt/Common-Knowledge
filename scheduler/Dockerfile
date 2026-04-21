@@ -1,13 +1,14 @@
-FROM python:3.13 AS build
+FROM python:3.12.10-slim
 
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
-COPY . .
+COPY scheduler/api ./api
 
 EXPOSE 8124
 
-CMD ["uvicorn", "api.app:app", "--port", "8124", "--host", "0.0.0.0"]
+CMD ["uv", "run", "uvicorn", "api.app:app", "--host", "0.0.0.0", "--port", "8124"]

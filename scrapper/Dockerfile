@@ -1,22 +1,26 @@
-FROM python:3.13-bookworm AS build
+FROM python:3.12.10-slim AS base
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
 
 WORKDIR /app
-RUN mkdir /scrapped-data
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock ./
+RUN uv sync --frozen --no-dev
 
-COPY . .
+COPY scrapper/api ./api
+COPY scrapper/scrapper ./scrapper
+COPY scrapper/worker ./worker
+COPY scrapper/scrapy.cfg ./
+COPY scrapper/run_*.py ./
 
-FROM build AS server
+FROM base AS server
 
 EXPOSE 8080
-CMD ["uvicorn", "api.app:app", "--port", "8080", "--host", "0.0.0.0"]
+CMD ["uv", "run", "uvicorn", "api.app:app", "--port", "8080", "--host", "0.0.0.0"]
 
-FROM build AS celery
+FROM base AS celery
 
-RUN playwright install-deps
-RUN playwright install
+RUN uv run playwright install-deps
+RUN uv run playwright install
 
-
-CMD ["celery", "-A", "worker.tasks", "worker", "--loglevel=INFO", "-E"]
+CMD ["uv", "run", "celery", "-A", "worker.tasks", "worker", "--loglevel=INFO", "-E"]

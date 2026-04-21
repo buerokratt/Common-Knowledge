@@ -5,10 +5,11 @@
 from scrapy.http import Response
 from scrapy.spiders import Spider
 
-class UrlSpider(Spider):
-    name = 'url_spider'
-    allowed_domains = ['toscrape.com']
-    start_urls = ['https://books.toscrape.com/']
 
-    def parse(self, response: Response, **kwargs):
+class UrlSpider(Spider):
+    name = "url_spider"
+    allowed_domains = ["toscrape.com"]
+    start_urls = ["https://books.toscrape.com/"]
+
+    def parse(self, response: Response, **kwargs: object) -> None:
         breakpoint()

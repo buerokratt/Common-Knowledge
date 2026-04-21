@@ -16,16 +16,16 @@ class ExportTaskException(Exception):
 
 
 def get_export_task(task_folder: Path) -> ExportTask:
-    select_file_path = task_folder / 'select.sql'
+    select_file_path = task_folder / "select.sql"
     if not select_file_path.exists():
-        raise ExportTaskException('select.sql have to exist')
+        raise ExportTaskException("select.sql have to exist")
 
     with select_file_path.open() as select_file:
         select_sql = select_file.read()
 
-    delete_file_path = task_folder / 'delete.sql'
+    delete_file_path = task_folder / "delete.sql"
     if not delete_file_path.exists():
-        raise ExportTaskException('delete.sql have to exist')
+        raise ExportTaskException("delete.sql have to exist")
 
     with delete_file_path.open() as delete_file:
         delete_sql = delete_file.read()
@@ -38,31 +38,35 @@ def get_export_task(task_folder: Path) -> ExportTask:
 
 
 def get_export_tasks() -> list[ExportTask]:
-    return [
-        get_export_task(task) for task in settings.dsl_path.iterdir()
-    ]
+    return [get_export_task(task) for task in settings.dsl_path.iterdir()]
 
 
-def perform_export(export_task: ExportTask):
+def perform_export(export_task: ExportTask) -> None:
     export_boundary = datetime.now().replace(microsecond=0, second=0, minute=0, hour=0)
     export_boundary_str = export_boundary.strftime("%Y_%m_%d-%I_%M_%S_%p")
-    export_path = settings.export_path / f'{export_task.name}-{export_boundary_str}.csv.gz'
+    export_path = (
+        settings.export_path / f"{export_task.name}-{export_boundary_str}.csv.gz"
+    )
     str_path = export_path.as_posix()
-    with gzip.open(str_path, 'w') as export_file:
+    with gzip.open(str_path, "w") as export_file:
         conn = get_connection()
         with conn.cursor() as cursor:
             cursor.copy_expert(
-                cursor.mogrify(export_task.select_query, {'export_boundary': export_boundary}),
-                export_file
+                cursor.mogrify(
+                    export_task.select_query, {"export_boundary": export_boundary}
+                ),
+                export_file,
             )
-            cursor.execute(export_task.delete_query, {'export_boundary': export_boundary})
-            cursor.execute('COMMIT;')
+            cursor.execute(
+                export_task.delete_query, {"export_boundary": export_boundary}
+            )
+            cursor.execute("COMMIT;")
 
 
-def perform_exports():
+def perform_exports() -> None:
     logger.info("Starting export...")
     exports = get_export_tasks()
     for export in exports:
-        logger.info(f'Exporting {export.name}')
+        logger.info(f"Exporting {export.name}")
         perform_export(export)
-        logger.info(f'Finished exporting {export.name}')
+        logger.info(f"Finished exporting {export.name}")

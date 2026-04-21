@@ -1,5 +1,14 @@
 from pathlib import Path
-from pydantic import BaseModel, FilePath, DirectoryPath, field_validator
+from typing import Any
+
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    FilePath,
+    DirectoryPath,
+    field_validator,
+)
 
 # Restrict all paths to this root to prevent directory traversal
 _ALLOWED_ROOT = Path("/scrapped-data")
@@ -29,21 +38,23 @@ class EntityToClean(BaseModel):
 
     @field_validator("file_path", "meta_data_path", "logs_path", mode="before")
     @classmethod
-    def validate_file_within_root(cls, v):
+    def validate_file_within_root(cls, v: Any) -> Path:
         return _assert_within_root(Path(v))
 
     @field_validator("directory_path", mode="before")
     @classmethod
-    def validate_dir_within_root(cls, v):
+    def validate_dir_within_root(cls, v: Any) -> Path:
         return _assert_within_root(Path(v))
 
 
 class SourceCleaningFile(BaseModel):
-    baseId: str
-    sourceBaseId: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    base_id: str = Field(alias="baseId")
+    source_base_id: str = Field(alias="sourceBaseId")
     url: str
-    originalDataUrl: str | None = None
-    originalMetadataUrl: str | None = None
+    original_data_url: str | None = Field(alias="originalDataUrl", default=None)
+    original_metadata_url: str | None = Field(alias="originalMetadataUrl", default=None)
 
 
 class SourceCleaningTask(BaseModel):
@@ -59,5 +70,5 @@ class SourceCleaningTask(BaseModel):
 
     @field_validator("logs_path", mode="before")
     @classmethod
-    def validate_logs_path_within_root(cls, v):
+    def validate_logs_path_within_root(cls, v: Any) -> Path:
         return _assert_within_root(Path(v))

@@ -1,0 +1,29 @@
+name: UV Environment Check
+
+on:
+  pull_request:
+    branches: ["*"]
+  push:
+    branches: ["*"]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup uv (with cache)
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.8.15"
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version-file: '.python-version'
+
+      # The authoritative guard: MUST match uv.lock and Python markers
+      - name: Sync (frozen)
+        run: uv sync --frozen

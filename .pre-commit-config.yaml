@@ -1,0 +1,13 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.6.0
+    hooks:
+      - id: uv-lock
+        args: ["--directory", "cleaning"]
+      - id: uv-lock
+        args: ["--directory", "data-export"]
