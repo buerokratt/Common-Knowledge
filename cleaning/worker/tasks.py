@@ -185,7 +185,6 @@ def _llm_evaluate(client: AzureOpenAI, deployment: str, extracted_markdown: str)
     try:
         response = client.chat.completions.create(
             model=deployment,
-            temperature=0,
             response_format={"type": "json_object"},
             messages=[
                 {"role": "system", "content": _EVAL_SYSTEM},
@@ -214,7 +213,6 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
     try:
         response = client.chat.completions.create(
             model=deployment,
-            temperature=0,
             messages=[
                 {"role": "system", "content": _EXTRACT_SYSTEM},
                 {"role": "user", "content": html},
