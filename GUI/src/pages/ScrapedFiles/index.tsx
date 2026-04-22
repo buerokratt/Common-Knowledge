@@ -178,7 +178,7 @@ const ScrapedFiles: FC = () => {
     queryFn: () => getScrapedFiles(queryParams),
     enabled: !!sourceId,
     keepPreviousData: true,
-    refetchInterval: sourceData?.status === 'running' ? 5000 : false,
+    refetchInterval: (data: any) => (sourceData?.status === 'running' || (sourceData?.status === 'in_review' && (data?.total === 0 || data == null))) ? 5000 : false,
   });
 
   // Clear row selection when data changes
