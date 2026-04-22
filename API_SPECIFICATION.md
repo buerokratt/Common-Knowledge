@@ -21,7 +21,7 @@ Each microservice exposes its own API with auto-generated documentation:
 |---------|------|----------|---------|
 | **File Processing** | 8888 | `http://localhost:8888/docs` | File operations and storage |
 | **Scrapper** | 8000 | `http://localhost:8000/docs` | Web scraping tasks |
-| **Cleaning** | 8001 | `http://localhost:8001/docs` | Content cleaning |
+| **Cleaning** | 8123 | `http://localhost:8123/docs` | Content cleaning |
 | **Scheduler** | 8003 | `http://localhost:8003/docs` | Task scheduling |
 | **Data Export** | 8002 | `http://localhost:8002/docs` | Data export operations |
 | **Search** | 3000 | - | Content search and indexing |
@@ -459,12 +459,13 @@ Generate download URL for a file.
 - `POST /uploaded-file` - Process uploaded files
 - `POST /generate-edited-metadata` - Generate file metadata
 
-### Cleaning API (Port 8001)
+### Cleaning API (Port 8123)
 
-**OpenAPI Docs**: `http://localhost:8001/docs`
+**OpenAPI Docs**: `http://localhost:8123/docs`
 
 #### Content Processing
-- `POST /clean_file` - Clean and extract text from files
+- `POST /clean_file` - Clean and extract text from a single file (synchronous, 10-minute timeout)
+- `POST /clean_source_async` - Clean a batch of files (asynchronous, returns immediately)
 
 ### Scheduler API (Port 8003)
 
@@ -725,7 +726,7 @@ open http://localhost:8888/docs
 open http://localhost:8000/docs
 
 # Cleaning API
-open http://localhost:8001/docs
+open http://localhost:8123/docs
 
 # Scheduler API
 open http://localhost:8003/docs
