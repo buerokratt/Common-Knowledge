@@ -93,8 +93,8 @@ def get_vault_secrets() -> VaultSecrets:
         )
 
     return VaultSecrets(
-        api_key=SecretStr(api_key_raw),
-        endpoint=endpoint_raw,
+        api_key=SecretStr(api_key_raw.strip()),
+        endpoint=endpoint_raw.strip(),
         api_version=data.get("api_version", settings.azure_openai_api_version),
         deployment=data.get("deployment", settings.azure_openai_deployment),
     )
