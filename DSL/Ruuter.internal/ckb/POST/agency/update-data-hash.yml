@@ -23,6 +23,12 @@ declaration:
         type: string
         description: "ZIP path"
 
+checkZipSucceeded:
+  switch:
+    - condition: ${incoming.body.results != null && incoming.body.results.length > 0 && incoming.body.results[0].status == 'success'}
+      next: updateAgencyDataHash
+  next: resetIsZipping
+
 updateAgencyDataHash:
   call: http.post
   args:
@@ -34,6 +40,18 @@ updateAgencyDataHash:
       base_id: ${incoming.body.agency_id}
       data_hash: ${incoming.body.results[0].data_hash}
   result: res
+  next: scheduleSource
+
+resetIsZipping:
+  call: http.post
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/reset-is-zipping"
+    headers:
+      type: json
+    body:
+      agency_id: ${incoming.body.agency_id}
+  result: res
+  next: returnSuccess
 
 scheduleSource:
   call: http.get

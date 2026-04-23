@@ -265,7 +265,7 @@ def process_zip_task(task_id: str) -> None:
         # Execute callback even on failure if provided
         callback = task_data.get("callback")
         if callback:
-            execute_callback(task_id, callback, task_data)
+            execute_callback(task_id, callback, task_data, results=[])
 
 
 def execute_callback(task_id: str, callback, task_data: dict, results: list[dict] | None = None) -> None:
