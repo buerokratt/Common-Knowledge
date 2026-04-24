@@ -186,7 +186,7 @@ const AgencyComponent: FC = () => {
             appearance="text"
             onClick={() => setDeleteModal(row.original)}
             className="agencies__action-btn"
-            disabled={deleteAgencyMutation.isLoading}
+            disabled={deleteAgencyMutation.isLoading || knowledgeBaseData.total === 1}
           >
             <Icon
               icon={<MdOutlineDeleteOutline fontSize={20} />}
