@@ -69,7 +69,7 @@ graph TB
 - **Purpose**: User interface for CKB management
 - **Location**: `/GUI/`
 - **Technology**: React, TypeScript, Vite
-- **Features**: Agency management, source configuration, file uploads, monitoring
+- **Features**: Agency management (single-agency enforcement), source configuration, file uploads, monitoring
 
 ### 2. Ruuter External API
 - **Purpose**: External-facing REST API with authentication
@@ -196,7 +196,7 @@ sequenceDiagram
 
 ### Core Tables
 
-1. **agency**: Organization/agency information
+1. **agency**: Organization/agency information — **only one non-deleted agency is permitted per CKB deployment**
 2. **source**: Data source configurations
 3. **source_file**: Individual file metadata
 4. **source_run_page**: Scraping execution logs
