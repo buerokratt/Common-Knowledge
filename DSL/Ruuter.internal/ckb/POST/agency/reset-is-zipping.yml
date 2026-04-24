@@ -1,7 +1,7 @@
 declaration:
   call: declare
   version: 0.1
-  description: "Reset is_zipping to FALSE for an agency without changing zip_dirty, allowing the cron to retry zipping"
+  description: "Reset is_zipping to FALSE for an agency and set zip_dirty to TRUE, allowing the cron to retry zipping"
   method: post
   accepts: json
   returns: json

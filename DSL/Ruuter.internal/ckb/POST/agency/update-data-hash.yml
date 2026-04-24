@@ -16,6 +16,8 @@ declaration:
         items:
           type: object
           properties:
+            status:
+              type: string
             data_hash:
               type: string
         description: "result of zip and upload"
