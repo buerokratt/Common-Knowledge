@@ -4,6 +4,7 @@ declaration:
   description: "list agency with data hash and url"
   method: get
   namespace: agency
+  allowlist: {}
   returns: json
   response:
     fields:

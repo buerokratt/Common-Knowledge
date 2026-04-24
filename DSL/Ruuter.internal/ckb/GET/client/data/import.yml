@@ -6,6 +6,8 @@ declaration:
   accepts: json
   returns: json
   namespace: client
+  allowlist: 
+    paramas: []
 
 getAgenciesData:
   call: http.get
