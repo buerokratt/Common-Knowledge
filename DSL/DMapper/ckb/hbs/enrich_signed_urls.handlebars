@@ -1,8 +1,7 @@
 [
   {{#each agencies}}
     {
-      "clientId": "{{this.clientId}}",
-      "clientDataHash": "{{this.clientDataHash}}",
+      "agencyDataHash": "{{this.agencyDataHash}}",
       {{#if (eq (getObjectKeyFromObjectArray ../downloadUrls "path" this.path "download_url") null) }}
         "signedS3Url": null
       {{else}}
