@@ -599,6 +599,7 @@
     "discardChanges": "Loobu muudatustest",
     "confirmDiscardChanges": "Kas oled kindel, et soovid muudatused tühistada?",
     "agencyCreated": "Asutuse lisamine õnnestus",
+    "agencyAlreadyExists": "Asutus on juba olemas. CKB toetab ühe rakenduse kohta vaid ühte agentuuri.",
     "agencyLoadError": "Asutuse laadimine ebaõnnestus",
     "agencyUpdated": "Asutuse uuendamine õnnestus",
     "agencyUpdateError": "Asutuse uuendamine ebaõnnestus",

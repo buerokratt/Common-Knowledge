@@ -12,9 +12,10 @@ declaration:
         type: string
         description: "Base ID of the agency to delete"
 
-extractRequestData:
-  assign:
-    base_id: "${incoming.body.baseId}"
+returnNotAllowed:
+  return: "Agency deletion is not permitted. CKB supports only one agency per deployment, and deletion is not allowed to prevent accidental data loss."
+  status: 405
+  next: end
 
 deleteAgencyFromDatabase:
   call: http.post

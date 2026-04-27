@@ -826,3 +826,11 @@ def clean_source_task(task: SourceCleaningTask):
         )
     except requests.exceptions.RequestException as e:
         logger.error(f"Failed to update agency zip-dirty: {e}")
+
+    try:
+        requests.get(
+            f"{settings.ruuter_internal}/ckb/pipeline/zip",
+            timeout=300,
+        )
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Failed to trigger immediate zip after first-time cleaning: {e}")

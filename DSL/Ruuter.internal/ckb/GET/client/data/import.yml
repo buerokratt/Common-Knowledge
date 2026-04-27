@@ -6,22 +6,13 @@ declaration:
   accepts: json
   returns: json
   namespace: client
-  allowlist:
-    params:
-      - field: clientIds
-        type: string
-        description: "Base IDs of the clients"
-
-extractRequestData:
-  assign:
-    clientIds: "${incoming.params.clientIds}"
+  allowlist: 
+    paramas: []
 
 getAgenciesData:
   call: http.get
   args:
     url: "[#CKB_RESQL]/agency/list_agency_data_hash_and_url"
-    query:
-      agencyIds: ${clientIds}
   result: agencyRes
 
 mapPaths:

@@ -92,14 +92,20 @@ Get specific agency details.
 #### POST /ckb/agency/add
 Create new agency.
 
+> **Constraint**: CKB supports only **one agency per deployment**. This endpoint returns `409 Conflict` if an agency already exists. The Add Agency button in the GUI is hidden once an agency has been created.
+
 **Request Body:**
 ```json
 {
   "name": "string",
-  "sector": "string", 
-  "external_id": "string"
+  "sector": "string",
+  "externalId": "string"
 }
 ```
+
+**Responses:**
+- `200 OK` — Agency created successfully.
+- `409 Conflict` — An agency already exists. Body: `"An agency already exists. CKB supports only one agency per deployment."`
 
 #### POST /ckb/agency/edit
 Update agency information.
@@ -114,14 +120,11 @@ Update agency information.
 ```
 
 #### POST /ckb/agency/remove
-Delete agency.
 
-**Request Body:**
-```json
-{
-  "base_id": "uuid"
-}
-```
+> **Blocked**: Agency deletion is not permitted. This endpoint always returns `405 Method Not Allowed`. An agency can only be updated via `POST /ckb/agency/edit`.
+
+**Response:**
+- `405 Method Not Allowed` — Body: `"Agency deletion is not permitted. An agency can only be updated."`
 
 ### Source Management
 

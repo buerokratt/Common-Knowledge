@@ -104,7 +104,9 @@ const SaveAgency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.agencyCreateError'),
+        message: error.response?.status === 409
+          ? t('knowledgeBase.agencyAlreadyExists')
+          : error.message || t('knowledgeBase.agencyCreateError'),
       });
     },
   });

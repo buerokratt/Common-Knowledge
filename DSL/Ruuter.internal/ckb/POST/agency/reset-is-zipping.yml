@@ -1,0 +1,27 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Reset is_zipping to FALSE for an agency and set zip_dirty to TRUE, allowing the cron to retry zipping"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: agency_id
+        type: string
+        description: "Agency base ID"
+
+resetIsZipping:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/reset_agency_is_zipping"
+    headers:
+      type: json
+    body:
+      base_id: ${incoming.body.agency_id}
+  result: res
+
+returnSuccess:
+  return: "OK"
+  next: end
