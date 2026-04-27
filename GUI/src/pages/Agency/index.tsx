@@ -186,7 +186,7 @@ const AgencyComponent: FC = () => {
             appearance="text"
             onClick={() => setDeleteModal(row.original)}
             className="agencies__action-btn"
-            disabled={deleteAgencyMutation.isLoading}
+            disabled={deleteAgencyMutation.isLoading || knowledgeBaseData.total === 1}
           >
             <Icon
               icon={<MdOutlineDeleteOutline fontSize={20} />}
@@ -230,9 +230,11 @@ const AgencyComponent: FC = () => {
       >
         <h1 className="h1">{t('knowledgeBase.agencies')}</h1>
         <Track gap={12}>
-          <Link to="/agency/add">
-            <Button appearance="primary">{t('knowledgeBase.addAgency')}</Button>
-          </Link>
+          {!knowledgeBaseData.total && (
+            <Link to="/agency/add">
+              <Button appearance="primary">{t('knowledgeBase.addAgency')}</Button>
+            </Link>
+          )}
         </Track>
       </Track>
 

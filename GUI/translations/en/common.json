@@ -599,6 +599,7 @@
     "discardChanges": "Discard changes",
     "confirmDiscardChanges": "Are you sure you want to discard changes?",
     "agencyCreated": "Agency created successfully",
+    "agencyAlreadyExists": "An agency already exists. CKB supports only one agency per deployment.",
     "agencyLoadError": "Failed to load agency",
     "agencyUpdated": "Agency updated successfully",
     "agencyUpdateError": "Failed to update agency",
