@@ -11,21 +11,21 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-class ExportTaskException(Exception):
+class ExportTaskError(Exception):
     pass
 
 
 def get_export_task(task_folder: Path) -> ExportTask:
     select_file_path = task_folder / "select.sql"
     if not select_file_path.exists():
-        raise ExportTaskException("select.sql have to exist")
+        raise ExportTaskError("select.sql have to exist")
 
     with select_file_path.open() as select_file:
         select_sql = select_file.read()
 
     delete_file_path = task_folder / "delete.sql"
     if not delete_file_path.exists():
-        raise ExportTaskException("delete.sql have to exist")
+        raise ExportTaskError("delete.sql have to exist")
 
     with delete_file_path.open() as delete_file:
         delete_sql = delete_file.read()
@@ -41,7 +41,7 @@ def get_export_tasks() -> list[ExportTask]:
     return [get_export_task(task) for task in settings.dsl_path.iterdir()]
 
 
-def perform_export(export_task: ExportTask):
+def perform_export(export_task: ExportTask) -> None:
     export_boundary = datetime.now().replace(microsecond=0, second=0, minute=0, hour=0)
     export_boundary_str = export_boundary.strftime("%Y_%m_%d-%I_%M_%S_%p")
     export_path = (
@@ -63,7 +63,7 @@ def perform_export(export_task: ExportTask):
             cursor.execute("COMMIT;")
 
 
-def perform_exports():
+def perform_exports() -> None:
     logger.info("Starting export...")
     exports = get_export_tasks()
     for export in exports:

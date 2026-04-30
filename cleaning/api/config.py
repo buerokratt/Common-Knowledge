@@ -48,7 +48,7 @@ class VaultSecrets:
 
     def __init__(
         self, api_key: SecretStr, endpoint: str, api_version: str, deployment: str
-    ):
+    ) -> None:
         self.azure_openai_api_key: SecretStr = api_key
         self.azure_openai_endpoint: str = endpoint
         self.azure_openai_api_version: str = api_version

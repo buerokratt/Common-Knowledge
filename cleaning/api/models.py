@@ -1,5 +1,6 @@
 from pathlib import Path
-from pydantic import BaseModel, FilePath, DirectoryPath, field_validator
+
+from pydantic import BaseModel, ConfigDict, DirectoryPath, Field, FilePath, field_validator
 
 # Restrict all paths to this root to prevent directory traversal
 _ALLOWED_ROOT = Path("/scrapped-data")
@@ -8,8 +9,10 @@ _ALLOWED_ROOT = Path("/scrapped-data")
 def _assert_within_root(p: Path) -> Path:
     try:
         p.resolve().relative_to(_ALLOWED_ROOT.resolve())
-    except ValueError:
-        raise ValueError(f"Path {p} is outside the allowed root {_ALLOWED_ROOT}")
+    except ValueError as e:
+        raise ValueError(
+            f"Path {p} is outside the allowed root {_ALLOWED_ROOT}"
+        ) from e
     return p
 
 
@@ -29,21 +32,23 @@ class EntityToClean(BaseModel):
 
     @field_validator("file_path", "meta_data_path", "logs_path", mode="before")
     @classmethod
-    def validate_file_within_root(cls, v):
-        return _assert_within_root(Path(v))
+    def validate_file_within_root(cls, v: object) -> Path:
+        return _assert_within_root(Path(v))  # type: ignore[arg-type]
 
     @field_validator("directory_path", mode="before")
     @classmethod
-    def validate_dir_within_root(cls, v):
-        return _assert_within_root(Path(v))
+    def validate_dir_within_root(cls, v: object) -> Path:
+        return _assert_within_root(Path(v))  # type: ignore[arg-type]
 
 
 class SourceCleaningFile(BaseModel):
-    baseId: str
-    sourceBaseId: str
+    model_config = ConfigDict(populate_by_name=True)
+
+    base_id: str = Field(alias="baseId")
+    source_base_id: str = Field(alias="sourceBaseId")
     url: str
-    originalDataUrl: str | None = None
-    originalMetadataUrl: str | None = None
+    original_data_url: str | None = Field(default=None, alias="originalDataUrl")
+    original_metadata_url: str | None = Field(default=None, alias="originalMetadataUrl")
 
 
 class SourceCleaningTask(BaseModel):
@@ -59,5 +64,5 @@ class SourceCleaningTask(BaseModel):
 
     @field_validator("logs_path", mode="before")
     @classmethod
-    def validate_logs_path_within_root(cls, v):
-        return _assert_within_root(Path(v))
+    def validate_logs_path_within_root(cls, v: object) -> Path:
+        return _assert_within_root(Path(v))  # type: ignore[arg-type]

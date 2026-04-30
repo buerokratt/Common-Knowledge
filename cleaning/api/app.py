@@ -12,7 +12,7 @@ _CLEAN_FILE_TIMEOUT_SECONDS = 600
 
 
 @app.post("/clean_file")
-def clean_file(entity: EntityToClean):
+def clean_file(entity: EntityToClean) -> dict:
     """
     Accept a single-file cleaning job and run it synchronously.
     Blocks until the file has been cleaned and uploaded, or until the
@@ -37,7 +37,7 @@ def clean_file(entity: EntityToClean):
 
 
 @app.post("/clean_source_async")
-def clean_source_async(task: SourceCleaningTask):
+def clean_source_async(task: SourceCleaningTask) -> dict:
     """
     Accept a batch cleaning job and return immediately.
     Processing continues in the background.

@@ -17,7 +17,7 @@ from bs4 import BeautifulSoup
 from langdetect import detect, LangDetectException
 from markdownify import markdownify
 from openai import AzureOpenAI, APIError
-from pydantic import ValidationError
+
 from unstructured.documents.elements import Title, ListItem, Table, CodeSnippet
 from unstructured.partition.auto import partition
 from unstructured.partition.html import partition_html
@@ -585,7 +585,7 @@ def extract_images(entity: EntityToClean, file_type: str) -> list[Path]:
 # ---------------------------------------------------------------------------
 
 
-def set_up_logging(entity: EntityToClean):
+def set_up_logging(entity: EntityToClean) -> None:
     fmt = logging.Formatter(
         "[%(asctime)s] %(levelname)s [%(name)s.%(funcName)s:%(lineno)d] %(message)s"
     )
@@ -620,7 +620,7 @@ def set_up_logging(entity: EntityToClean):
 # ---------------------------------------------------------------------------
 
 
-def clean_file_task(entity: EntityToClean):
+def clean_file_task(entity: EntityToClean) -> None:
     with catch_error(entity):
         set_up_logging(entity)
         logger.info(f"Cleaning file {entity.file_path.as_posix()}")
@@ -793,7 +793,7 @@ def _to_local_path(path_or_url: str | None) -> Path | None:
     return Path("/" + path_or_url.replace("uploads/", "").lstrip("/"))
 
 
-def clean_source_task(task: SourceCleaningTask):
+def clean_source_task(task: SourceCleaningTask) -> None:
     logs_path = Path(task.logs_path)
     logs_path.parent.mkdir(parents=True, exist_ok=True)
     logs_path.touch(exist_ok=True)
@@ -802,22 +802,22 @@ def clean_source_task(task: SourceCleaningTask):
         try:
             requests.post(
                 f"{settings.ruuter_internal}/ckb/source-file/update-scrapped-file-stop-scrapping",
-                json={"base_id": file.baseId, "status": "cleaning"},
+                json={"base_id": file.base_id, "status": "cleaning"},
                 timeout=30,
             )
 
             fallback_directory = (
                 Path("/scrapped-data")
                 / task.agency_base_id
-                / file.sourceBaseId
-                / file.baseId
+                / file.source_base_id
+                / file.base_id
             )
             file_path = (
-                _to_local_path(file.originalDataUrl)
+                _to_local_path(file.original_data_url)
                 or fallback_directory / "source.html"
             )
             meta_data_path = (
-                _to_local_path(file.originalMetadataUrl)
+                _to_local_path(file.original_metadata_url)
                 or fallback_directory / "source.meta.json"
             )
 
@@ -825,10 +825,10 @@ def clean_source_task(task: SourceCleaningTask):
                 file_path=file_path,
                 meta_data_path=meta_data_path,
                 directory_path=fallback_directory,
-                source_file_id=file.baseId,
+                source_file_id=file.base_id,
                 url=file.url,
                 logs_path=logs_path,
-                source_base_id=file.sourceBaseId,
+                source_base_id=file.source_base_id,
                 agency_base_id=task.agency_base_id,
                 source_run_report_base_id=task.source_run_report_base_id,
                 use_llm=task.use_llm,
@@ -843,7 +843,7 @@ def clean_source_task(task: SourceCleaningTask):
                 file.url,
                 "cleaning",
                 str(e),
-                file.sourceBaseId,
+                file.source_base_id,
                 task.agency_base_id,
                 task.source_run_report_base_id,
             )
