@@ -6,6 +6,8 @@ on:
     paths:
       - "cleaning/**"
       - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
       - "docker-compose-test.yml"
       - "test-vault/**"
       - ".github/workflows/test-cleaning.yml"
@@ -19,26 +21,23 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
+          version: "0.11.8"
 
-      - name: Install cleaning service dependencies
-        working-directory: cleaning
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Install Python
+        run: uv python install
 
-      - name: Install test dependencies
-        run: |
-          pip install pytest pytest-cov hvac loguru requests
+      - name: Sync cleaning + dev deps
+        run: uv sync --frozen --no-dev --extra cleaning --group dev
 
       - name: Run unit tests
         env:
           RUUTER_INTERNAL: "http://localhost:8089"
           PYTHONPATH: "cleaning"
         run: |
-          pytest tests/test_tasks.py \
+          uv run pytest tests/test_tasks.py \
             -v \
             --tb=short \
             --cov=cleaning \
@@ -61,19 +60,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
         with:
-          python-version: "3.11"
+          version: "0.11.8"
 
-      - name: Install cleaning service dependencies
-        working-directory: cleaning
-        run: |
-          pip install --upgrade pip
-          pip install -r requirements.txt
+      - name: Install Python
+        run: uv python install
 
-      - name: Install test dependencies
-        run: |
-          pip install pytest pytest-timeout hvac loguru requests
+      - name: Sync cleaning + dev deps
+        run: uv sync --frozen --no-dev --extra cleaning --group dev
 
       - name: Prepare test directories
         run: |
@@ -92,7 +88,7 @@ jobs:
           AZURE_OPENAI_API_VERSION: ${{ secrets.AZURE_OPENAI_API_VERSION || '2024-02-01' }}
           PYTHONPATH: "cleaning"
         run: |
-          pytest tests/test_api.py tests/test_integration.py \
+          uv run pytest tests/test_api.py tests/test_integration.py \
             -v \
             --tb=short \
             -x \
