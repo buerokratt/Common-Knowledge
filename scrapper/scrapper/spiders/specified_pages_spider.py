@@ -1,18 +1,20 @@
+from collections.abc import AsyncIterator
 from contextlib import suppress
 
 import requests
 from scrapy import Request
 from scrapy.http import Response
 
-from scrapper.spiders.base_spider import BaseSpider
 from api.models import SpecifiedLinksScrapeTask
+from scrapper.items import ScrappedItem
+from scrapper.spiders.base_spider import BaseSpider
 
 
 class SpecifiedPagesSpider(BaseSpider):
     name = "specified_pages_spider"
     custom_settings = {"ROBOTSTXT_OBEY": False}
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         if isinstance(kwargs.get("task"), SpecifiedLinksScrapeTask):
             self.task: SpecifiedLinksScrapeTask = kwargs.get("task")
@@ -22,7 +24,7 @@ class SpecifiedPagesSpider(BaseSpider):
             )
             self.urls = self.task.urls
 
-    def get_base_id_and_hash(self, url: str):
+    def get_base_id_and_hash(self, url: str) -> tuple[str | None, str | None]:
         base_id = None
         hashed = None
         self.logger.info(f"number of urls: {len(self.urls)}")
@@ -32,7 +34,9 @@ class SpecifiedPagesSpider(BaseSpider):
                 hashed = source_file.hash
         return base_id, hashed
 
-    async def parse(self, response: Response, **kwargs):
+    async def parse(
+        self, response: Response, **kwargs: object
+    ) -> AsyncIterator[ScrappedItem | Request]:
         base_id, hashed = self.get_base_id_and_hash(response.request.url)
 
         async for obj in super().parse(response, **kwargs):

@@ -30,14 +30,14 @@ app = FastAPI()
 
 
 @app.post("/specified-pages-scrapper-task")
-def trigger_specified_pages_scrapper_task(task: SpecifiedLinksScrapeTask):
+def trigger_specified_pages_scrapper_task(task: SpecifiedLinksScrapeTask) -> None:
     # Always ignore stopping for manual file refresh
     task.ignore_stopping = True
     specified_links_scrapper_task.delay(task.model_dump(mode="json"))
 
 
 @app.post("/uploaded-file")
-def trigger_uploaded_file_task(task: UploadedFileTask):
+def trigger_uploaded_file_task(task: UploadedFileTask) -> None:
     links = []
     for url in task.urls:
         for download in task.download_files:
@@ -52,29 +52,29 @@ def trigger_uploaded_file_task(task: UploadedFileTask):
 
 
 @app.post("/sitemap-collect-scrapper-task")
-def trigger_sitemap_collect_scrapper_task(task: SitemapCollectScrapperTask):
+def trigger_sitemap_collect_scrapper_task(task: SitemapCollectScrapperTask) -> None:
     sitemap_collect_scrapper_task.delay(task.model_dump(mode="json"))
 
 
 @app.post("/entire-source-scrapper-task")
-def trigger_entire_source_scrapper_task(task: EntireSourceScrapperTask):
+def trigger_entire_source_scrapper_task(task: EntireSourceScrapperTask) -> None:
     entire_source_scrapped_task.delay(task.model_dump(mode="json"))
 
 
 @app.post("/eesti-scrapper-task")
-def trigger_eesti_scrapper_task(task: EestiScrapperTask):
+def trigger_eesti_scrapper_task(task: EestiScrapperTask) -> None:
     eesti_scrapper_task.delay(task.model_dump(mode="json"))
 
 
 @app.post("/specified-api-files-scrapper-task")
-def trigger_specified_api_files_scrapper_task(task: SpecifiedApiFilesScrapeTask):
+def trigger_specified_api_files_scrapper_task(task: SpecifiedApiFilesScrapeTask) -> None:
     # Always ignore stopping for manual file refresh
     task.ignore_stopping = True
     specified_api_files_scrapper_task.delay(task.model_dump(mode="json"))
 
 
 @app.post("/generate-edited-metadata")
-def generate_edited_metadata(task: EditedMetadataTask):
+def generate_edited_metadata(task: EditedMetadataTask) -> str:
     response = requests.get(task.download_url)
     metadata = response.json()
     metadata["edited_at"] = str(datetime.now())

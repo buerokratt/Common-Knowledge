@@ -9,7 +9,7 @@ from api.models import EestiScrapperTask
 from scrapper.spiders.eesti_spider import EestiSpider
 
 
-def main():
+def main() -> None:
     logging.disable(logging.DEBUG)
     task = EestiScrapperTask(**json.loads(sys.argv[1][1:-1]))
     process = CrawlerProcess(get_project_settings())

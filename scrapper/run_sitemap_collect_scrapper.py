@@ -10,7 +10,7 @@ from api.models import SitemapCollectScrapperTask
 from scrapper.spiders.sitemap_collect_spider import SitemapCollectSpider
 
 
-def main():
+def main() -> None:
     logging.disable(logging.DEBUG)
     task = SitemapCollectScrapperTask(**json.loads(sys.argv[1][1:-1]))
     process = CrawlerProcess(get_project_settings())

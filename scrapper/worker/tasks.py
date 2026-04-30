@@ -18,7 +18,7 @@ app = Celery("ckb", broker=settings.broker_url.unicode_string())
 
 @app.task
 @un_json(SpecifiedLinksScrapeTask)
-def specified_links_scrapper_task(task: SpecifiedLinksScrapeTask):
+def specified_links_scrapper_task(task: SpecifiedLinksScrapeTask) -> None:
     dumped_version = task.model_dump_json()
     escaped_version = shlex.quote(dumped_version)
 
@@ -28,7 +28,7 @@ def specified_links_scrapper_task(task: SpecifiedLinksScrapeTask):
 
 @app.task
 @un_json(SpecifiedLinksScrapeTask)
-def uploaded_file_task(task: SpecifiedLinksScrapeTask):
+def uploaded_file_task(task: SpecifiedLinksScrapeTask) -> None:
     dumped_version = task.model_dump_json()
     escaped_version = shlex.quote(dumped_version)
 
@@ -38,7 +38,7 @@ def uploaded_file_task(task: SpecifiedLinksScrapeTask):
 
 @app.task
 @un_json(SitemapCollectScrapperTask)
-def sitemap_collect_scrapper_task(task: SitemapCollectScrapperTask):
+def sitemap_collect_scrapper_task(task: SitemapCollectScrapperTask) -> None:
     dumped_version = task.model_dump_json()
     escaped_version = shlex.quote(dumped_version)
 
@@ -48,7 +48,7 @@ def sitemap_collect_scrapper_task(task: SitemapCollectScrapperTask):
 
 @app.task
 @un_json(EntireSourceScrapperTask)
-def entire_source_scrapped_task(task: EntireSourceScrapperTask):
+def entire_source_scrapped_task(task: EntireSourceScrapperTask) -> None:
     dumped_version = task.model_dump_json()
     escaped_version = shlex.quote(dumped_version)
 
@@ -58,7 +58,7 @@ def entire_source_scrapped_task(task: EntireSourceScrapperTask):
 
 @app.task
 @un_json(EestiScrapperTask)
-def eesti_scrapper_task(task: EestiScrapperTask):
+def eesti_scrapper_task(task: EestiScrapperTask) -> None:
     dumped_version = task.model_dump_json()
     escaped_version = shlex.quote(dumped_version)
 
@@ -68,7 +68,7 @@ def eesti_scrapper_task(task: EestiScrapperTask):
 
 @app.task
 @un_json(SpecifiedApiFilesScrapeTask)
-def specified_api_files_scrapper_task(task: SpecifiedApiFilesScrapeTask):
+def specified_api_files_scrapper_task(task: SpecifiedApiFilesScrapeTask) -> None:
     dumped_version = task.model_dump_json()
     escaped_version = shlex.quote(dumped_version)
 

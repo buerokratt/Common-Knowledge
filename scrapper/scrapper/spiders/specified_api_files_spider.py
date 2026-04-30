@@ -1,12 +1,13 @@
-import requests
 import hashlib
-import datetime
-from typing import Dict, List, Optional
+from collections.abc import AsyncIterator
+from typing import Dict, Optional
+
+import requests
 from scrapy.http import Response
 
-from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
-from scrapper.items import FileItem, MetadataItem, Metadata, ScrappedItem
 from api.models import SpecifiedApiFilesScrapeTask
+from scrapper.items import FileItem, Metadata, MetadataItem, ScrappedItem
+from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
 
 class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
@@ -17,7 +18,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
         "DOWNLOAD_DELAY": 0,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         # Set API config first, before calling super()
         self.base_url = "https://www.eesti.ee"
         self.article_api = f"{self.base_url}/api/article/v2"
@@ -30,10 +31,10 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
             self.urls = self.task.api_files
             if self.urls:
                 # Set start_urls like SpecifiedPagesSpider does
-                self.start_urls = [self.construct_api_url(self.urls[0].externalId)]
+                self.start_urls = [self.construct_api_url(self.urls[0].external_id)]
                 # Create iterator for remaining URLs
                 remaining_urls = [
-                    self.construct_api_url(api_file.externalId)
+                    self.construct_api_url(api_file.external_id)
                     for api_file in self.urls[1:]
                 ]
                 self.url_iter = iter(remaining_urls)
@@ -42,7 +43,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
         """Construct API URL from external_id like EestiSpider does"""
         return f"{self.article_api}/{external_id}"
 
-    def get_base_id_and_hash(self, url: str):
+    def get_base_id_and_hash(self, url: str) -> tuple[str | None, str | None]:
         """
         Same as SpecifiedPagesSpider but matches by externalId instead of URL
         """
@@ -53,7 +54,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
         external_id = url.split("/")[-1]
 
         for api_file in self.urls:
-            if api_file.externalId == external_id:
+            if api_file.external_id == external_id:
                 base_id = api_file.id
                 hashed = api_file.hash
                 break
@@ -71,7 +72,9 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
             self.logger.error(f"Error fetching article {external_id}: {e}")
             return None
 
-    async def parse(self, response: Response, **kwargs):
+    async def parse(
+        self, response: Response, **kwargs: object
+    ) -> AsyncIterator[ScrappedItem]:
         """
         Override parse to fetch content from API instead of scraping HTML.
         Same hash comparison logic as SpecifiedPagesSpider.

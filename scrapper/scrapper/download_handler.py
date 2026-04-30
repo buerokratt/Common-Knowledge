@@ -1,14 +1,13 @@
 import asyncio
+
 from scrapy import Request, Spider
-from scrapy.http import Response
 from scrapy.core.downloader.handlers.http import HTTPDownloadHandler
+from scrapy.http import Response
 from scrapy_playwright.handler import ScrapyPlaywrightDownloadHandler
-from playwright._impl._errors import Error as PlaywrightError
-from twisted.internet import defer
 
 
 class DownloadHandler(ScrapyPlaywrightDownloadHandler):
-    def __init__(self, crawler):
+    def __init__(self, crawler: object) -> None:
         super().__init__(crawler)
         self.crawler = crawler
         # Initialize standard HTTP handler for non-Playwright requests
@@ -17,10 +16,10 @@ class DownloadHandler(ScrapyPlaywrightDownloadHandler):
         )
 
     @classmethod
-    def from_crawler(cls, crawler):
+    def from_crawler(cls, crawler: object) -> "DownloadHandler":
         return cls(crawler)
 
-    def download_request(self, request: Request, spider: Spider):
+    def download_request(self, request: Request, spider: Spider) -> object:
         """
         Main entry point for downloading requests.
         Check if Playwright is needed, otherwise use direct HTTP.

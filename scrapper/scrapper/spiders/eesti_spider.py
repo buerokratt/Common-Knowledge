@@ -1,15 +1,15 @@
-import requests
-import time
-import json
-import hashlib
 import datetime
+import hashlib
+import time
+from collections.abc import AsyncIterator
 from typing import Dict, List, Optional
-from scrapy.http import Response
-from scrapy import Request
 
-from scrapper.spiders.base_spider import BaseSpider
-from scrapper.items import FileItem, MetadataItem, Metadata, ScrappedItem
+import requests
+from scrapy.http import Response
+
 from api.models import EestiScrapperTask
+from scrapper.items import FileItem, Metadata, MetadataItem, ScrappedItem
+from scrapper.spiders.base_spider import BaseSpider
 
 
 class EestiSpider(BaseSpider):
@@ -20,7 +20,7 @@ class EestiSpider(BaseSpider):
         "DOWNLOAD_DELAY": 0,
     }
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
 
         if isinstance(kwargs.get("task"), EestiScrapperTask):
@@ -46,7 +46,7 @@ class EestiSpider(BaseSpider):
         """Recursively extract all arvaArticleId values from the menu structure"""
         article_entries = []
 
-        def recursive_search(item):
+        def recursive_search(item: object) -> None:
             if isinstance(item, dict):
                 if "arvaArticleId" in item:
                     entry = {
@@ -296,7 +296,7 @@ class EestiSpider(BaseSpider):
 
         return scrapped_item
 
-    async def start(self):
+    async def start(self) -> AsyncIterator[ScrappedItem]:
         """
         Main processing logic:
         1. Fetch all articles from Eesti API
@@ -379,6 +379,8 @@ class EestiSpider(BaseSpider):
             f"EestiSpider completed: {processed_count} processed, {skipped_count} skipped"
         )
 
-    async def parse(self, response: Response, **kwargs):
+    async def parse(
+        self, response: Response, **kwargs: object
+    ) -> AsyncIterator[ScrappedItem]:
         """Override parse - not used since we process via API"""
         pass

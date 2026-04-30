@@ -2,8 +2,10 @@ import contextlib
 import datetime
 import functools
 import typing
-import requests
+from collections.abc import Callable, Iterator
 from urllib.parse import urlparse
+
+import requests
 
 from scrapper.items import ScrappedItem
 
@@ -21,7 +23,7 @@ def send_error(
     source_base_id: str,
     agency_base_id: str,
     source_run_report_base_id: str,
-):
+) -> None:
     scraped_at = datetime.datetime.now(datetime.UTC).isoformat()
     requests.post(
         f"{ruuter_internal}/ckb/reports/logs/add",
@@ -38,16 +40,16 @@ def send_error(
 
 
 @contextlib.contextmanager
-def catch_error(url, spider: BaseSpider):
+def catch_error(url: str, spider: BaseSpider) -> Iterator[None]:
     try:
         yield
     except Exception as e:
         spider.log_error_to_source_run_page(url, "scrapper", str(e))
 
 
-def catch_error_process_item(f):
+def catch_error_process_item(f: Callable) -> Callable:
     @functools.wraps(f)
-    def process_item(self, item, spider: BaseSpider):
+    def process_item(self: object, item: object, spider: BaseSpider) -> object:
         if not isinstance(spider, BaseSpider):
             return item
 
@@ -62,11 +64,11 @@ def catch_error_process_item(f):
     return process_item
 
 
-def catch_error_spider(f):
+def catch_error_spider(f: Callable) -> Callable:
     @functools.wraps(f)
-    def decorator(self, spider: BaseSpider):
+    def decorator(self: object, spider: BaseSpider) -> object:
         if not isinstance(spider, BaseSpider):
-            return
+            return None
 
         r = None
         with catch_error("internal", spider):

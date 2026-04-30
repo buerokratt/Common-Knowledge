@@ -23,7 +23,7 @@ class BaseSpider(Spider):
     task: BaseObject
     handle_httpstatus_list = [*range(600)]
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
 
         self.ua = UserAgent(platforms="desktop")
@@ -32,7 +32,7 @@ class BaseSpider(Spider):
         if isinstance(kwargs.get("task"), BaseObject):
             self.task = kwargs["task"]
 
-    def check_source_is_stopping(self):
+    def check_source_is_stopping(self) -> None:
         # Skip check if this is a manual file refresh (ignore_stopping flag set)
         if hasattr(self.task, "ignore_stopping") and self.task.ignore_stopping:
             return
@@ -42,12 +42,12 @@ class BaseSpider(Spider):
                 f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
                 params={"baseId": self.task.source_id},
             ).json()["response"][0]["isStopping"]
-        except Exception:
-            raise CloseSpider("source not found")
+        except Exception as e:
+            raise CloseSpider("source not found") from e
         if is_stopping:
             raise CloseSpider("source is stopping")
 
-    def get_meta(self):
+    def get_meta(self) -> dict:
         return {
             "playwright": True,
             "playwright_include_page": True,
@@ -60,7 +60,7 @@ class BaseSpider(Spider):
             },
         }
 
-    def get_headers(self):
+    def get_headers(self) -> dict:
         return {
             "User-Agent": self.ua.random,
         }
@@ -92,8 +92,8 @@ class BaseSpider(Spider):
             self.logger.info(f"Page closed {response.url}")
 
     def log_error_to_source_run_page(
-        self, request, error_type: str, error_message: str
-    ):
+        self, request: object, error_type: str, error_message: str
+    ) -> None:
         if isinstance(request, str):
             url = request
         else:
@@ -112,7 +112,7 @@ class BaseSpider(Spider):
             self.report_id,
         )
 
-    async def errback(self, failure: Failure):
+    async def errback(self, failure: Failure) -> None:
         if not hasattr(failure, "request"):
             return
 
@@ -123,7 +123,9 @@ class BaseSpider(Spider):
         if page is not None:
             await page.close()
 
-    async def parse(self, response: Response, **kwargs):
+    async def parse(
+        self, response: Response, **kwargs: object
+    ) -> AsyncIterator[ScrappedItem]:
         self.check_source_is_stopping()
 
         # Check if URL is an archive page and skip if it is

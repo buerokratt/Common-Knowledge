@@ -10,7 +10,7 @@ from api.models import SpecifiedLinksScrapeTask
 from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
 
-def main():
+def main() -> None:
     logging.disable(logging.DEBUG)
     task = SpecifiedLinksScrapeTask(**json.loads(sys.argv[1][1:-1]))
     process = CrawlerProcess(get_project_settings())

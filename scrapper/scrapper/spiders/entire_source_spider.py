@@ -1,4 +1,6 @@
 import datetime
+from collections.abc import Iterator
+
 import requests
 
 from api.models import EntireSourceScrapperTask, LinkToScrape
@@ -8,18 +10,18 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 class EntireSourceSpider(SpecifiedPagesSpider):
     name = "entire_source_spider"
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args: object, **kwargs: object) -> None:
         super().__init__(*args, **kwargs)
         if isinstance(kwargs.get("task"), EntireSourceScrapperTask):
             self.task: EntireSourceScrapperTask = kwargs.get("task")
             self.url_iter = self.urls_iter_impl()
-            self.start_urls = self.start_url_impl()
+            self.start_urls = list(self.start_url_impl())
             self.urls = []
 
-    def start_url_impl(self):
+    def start_url_impl(self) -> Iterator[str]:
         yield next(self.url_iter)
 
-    def urls_iter_impl(self):
+    def urls_iter_impl(self) -> Iterator[str]:
         scrapped_before = datetime.datetime.now(datetime.UTC).isoformat()
 
         while True:

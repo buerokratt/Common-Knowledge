@@ -9,7 +9,7 @@ from api.models import SpecifiedApiFilesScrapeTask
 from scrapper.spiders.specified_api_files_spider import SpecifiedApiFilesSpider
 
 
-def main():
+def main() -> None:
     logging.disable(logging.DEBUG)
     task = SpecifiedApiFilesScrapeTask(**json.loads(sys.argv[1][1:-1]))
     process = CrawlerProcess(get_project_settings())
