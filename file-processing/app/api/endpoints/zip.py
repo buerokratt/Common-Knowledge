@@ -16,11 +16,11 @@ def zip_and_upload_folders(request: ZipAndUploadRequest) -> ZipAndUploadResponse
     try:
         return zip_service.zip_and_upload_folders(request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to zip and upload folders: {str(e)}"
-        )
+        ) from e
 
 
 @router.post("/zip-and-upload-folders-async", response_model=ZipTaskResponse)
@@ -33,11 +33,11 @@ def zip_and_upload_folders_async(
         background_tasks.add_task(zip_service.process_zip_task, task_response.task_id)
         return task_response
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to start zip task: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/zip-task/{task_id}", response_model=ZipTaskStatusResponse)

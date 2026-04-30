@@ -12,7 +12,7 @@ from app.schemas import (
     FileContentUploadRequest,
     FileContentUploadResponse,
 )
-from app.services.blob_storage import storage_provider, BlobStorageException
+from app.services.blob_storage import storage_provider, BlobStorageError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -98,7 +98,7 @@ def process_task(task_id: str) -> None:
 
         logger.info(f"Successfully uploaded task {task_id} to {blob_storage_path}")
 
-    except BlobStorageException as e:
+    except BlobStorageError as e:
         error_msg = f"Blob storage error: {str(e)}"
         update_task(task_id, TaskStatus.FAILED, error_message=error_msg)
         logger.error(f"Task {task_id} failed: {error_msg}")
@@ -135,10 +135,10 @@ def generate_upload_urls(request: UploadUrlRequest) -> UploadUrlResponse:
 
         return UploadUrlResponse(upload_urls=upload_url_items)
 
-    except BlobStorageException as e:
-        raise ValueError(f"Blob storage error: {str(e)}")
+    except BlobStorageError as e:
+        raise ValueError(f"Blob storage error: {str(e)}") from e
     except Exception as e:
-        raise ValueError(f"Failed to generate upload URLs: {str(e)}")
+        raise ValueError(f"Failed to generate upload URLs: {str(e)}") from e
 
 
 def upload_file_sync(source_file_path: str) -> str:
@@ -153,10 +153,10 @@ def upload_file_sync(source_file_path: str) -> str:
 
         return storage_provider.upload_file(full_source_path, destination_path)
 
-    except BlobStorageException as e:
-        raise ValueError(f"Blob storage error: {str(e)}")
+    except BlobStorageError as e:
+        raise ValueError(f"Blob storage error: {str(e)}") from e
     except Exception as e:
-        raise ValueError(f"Failed to upload file: {str(e)}")
+        raise ValueError(f"Failed to upload file: {str(e)}") from e
 
 
 def clean_path(path: str) -> str:
@@ -172,7 +172,7 @@ def upload_file_content(request: FileContentUploadRequest) -> FileContentUploadR
         try:
             file_content = base64.b64decode(request.file_content)
         except Exception as e:
-            raise ValueError(f"Invalid base64 content: {str(e)}")
+            raise ValueError(f"Invalid base64 content: {str(e)}") from e
 
         # Clean the file_path - remove any s3:// prefix if present
         clean_file_path = request.file_path
@@ -194,10 +194,10 @@ def upload_file_content(request: FileContentUploadRequest) -> FileContentUploadR
             file_size=len(file_content),
         )
 
-    except BlobStorageException as e:
-        raise ValueError(f"Blob storage error: {str(e)}")
+    except BlobStorageError as e:
+        raise ValueError(f"Blob storage error: {str(e)}") from e
     except Exception as e:
-        raise ValueError(f"Failed to upload file content: {str(e)}")
+        raise ValueError(f"Failed to upload file content: {str(e)}") from e
 
 
 def cleanup_old_tasks(max_age_hours: int = 24) -> int:

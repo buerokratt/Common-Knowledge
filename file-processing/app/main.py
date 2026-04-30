@@ -1,15 +1,18 @@
-from fastapi import FastAPI
-from contextlib import asynccontextmanager
 import asyncio
 import logging
 import sys
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+
 from app.api import api_router
 from app.services import upload_service
 
 logger = logging.getLogger(__name__)
 
 
-async def cleanup_background_task():
+async def cleanup_background_task() -> None:
     """Background task to periodically clean up old tasks."""
     while True:
         try:
@@ -21,7 +24,7 @@ async def cleanup_background_task():
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logging.basicConfig(
         level=logging.INFO,
         format="%(levelname)s - %(asctime)s - %(name)s - %(message)s",

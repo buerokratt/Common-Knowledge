@@ -4,8 +4,9 @@ import uuid
 import requests
 from typing import List, Dict, Optional
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from app.schemas import (
+    CallbackRequest,
     DownloadUrlItem,
     DownloadFileResponse,
     DownloadToVolumeRequest,
@@ -18,7 +19,7 @@ from app.schemas import (
     DeleteFromVolumeResponse,
     FileDeleteResult,
 )
-from app.services.blob_storage import storage_provider, BlobStorageException
+from app.services.blob_storage import storage_provider, BlobStorageError
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ _download_tasks: Dict[str, dict] = {}
 
 
 def create_download_task(
-    files: List[FileDownloadItem], callback: Optional = None
+    files: List[FileDownloadItem], callback: Optional[CallbackRequest] = None
 ) -> str:
     """Create a new download task in memory."""
     task_id = str(uuid.uuid4())
@@ -58,7 +59,7 @@ def get_download_task(task_id: str) -> Optional[dict]:
     return _download_tasks.get(task_id)
 
 
-def update_download_task(task_id: str, **updates) -> None:
+def update_download_task(task_id: str, **updates: object) -> None:
     """Update download task status and related fields."""
     if task_id in _download_tasks:
         for key, value in updates.items():
@@ -277,7 +278,9 @@ def process_download_task(task_id: str) -> None:
             execute_callback(task_id, callback, task_data)
 
 
-def execute_callback(task_id: str, callback, task_data: dict) -> None:
+def execute_callback(
+    task_id: str, callback: CallbackRequest, task_data: dict
+) -> None:
     """Execute the callback HTTP request exactly as configured."""
     try:
         # Prepare headers
@@ -425,7 +428,7 @@ def generate_download_urls(paths: List[str]) -> DownloadFileResponse:
                     path=path, download_url=download_url, expires_at=expires_at
                 )
             )
-        except BlobStorageException as e:
+        except BlobStorageError as e:
             # Include failed paths in response with error message
             download_url_items.append(
                 DownloadUrlItem(

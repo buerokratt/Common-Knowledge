@@ -16,16 +16,15 @@ router = APIRouter()
 
 @router.post("/download-urls", response_model=DownloadFileResponse)
 def generate_download_urls(request: DownloadFileRequest) -> DownloadFileResponse:
-    print(request)
     """Generate presigned download URLs for multiple files in blob storage."""
     try:
         return download_service.generate_download_urls(request.paths)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to generate download URLs: {str(e)}"
-        )
+        ) from e
 
 
 @router.post("/download-files-to-volume", response_model=DownloadToVolumeResponse)
@@ -36,11 +35,11 @@ def download_files_to_volume(
     try:
         return download_service.download_files_to_volume(request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to download files: {str(e)}"
-        )
+        ) from e
 
 
 @router.post("/download-files-to-volume-async", response_model=DownloadTaskResponse)
@@ -55,11 +54,11 @@ def download_files_to_volume_async(
         )
         return task_response
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to start download task: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/download-task/{task_id}", response_model=DownloadTaskStatusResponse)
@@ -80,6 +79,6 @@ def delete_files_from_volume(
     try:
         return download_service.delete_files_from_volume(request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to delete files: {str(e)}") from e

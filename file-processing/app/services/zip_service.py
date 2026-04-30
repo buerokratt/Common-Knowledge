@@ -8,14 +8,15 @@ import hashlib
 from typing import List, Dict, Optional
 from datetime import datetime
 from app.schemas import (
-    ZipAndUploadRequest,
-    ZipAndUploadResponse,
+    CallbackRequest,
     FolderZipItem,
     FolderZipResult,
-    ZipTaskResponse,
     TaskStatus,
+    ZipAndUploadRequest,
+    ZipAndUploadResponse,
+    ZipTaskResponse,
 )
-from app.services.blob_storage import storage_provider, BlobStorageException
+from app.services.blob_storage import storage_provider, BlobStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +44,9 @@ def should_exclude_subfolder(relative_path: str, excluded_folders: List[str]) ->
     return False
 
 
-def create_zip_task(folders: List[FolderZipItem], callback: Optional = None) -> str:
+def create_zip_task(
+    folders: List[FolderZipItem], callback: Optional[CallbackRequest] = None
+) -> str:
     """Create a new zip task in memory."""
     task_id = str(uuid.uuid4())
 
@@ -69,7 +72,7 @@ def get_zip_task(task_id: str) -> Optional[dict]:
     return _zip_tasks.get(task_id)
 
 
-def update_zip_task(task_id: str, **updates) -> None:
+def update_zip_task(task_id: str, **updates: object) -> None:
     """Update zip task status and related fields."""
     if task_id in _zip_tasks:
         for key, value in updates.items():
@@ -77,7 +80,7 @@ def update_zip_task(task_id: str, **updates) -> None:
         _zip_tasks[task_id]["updated_at"] = datetime.now()
 
 
-def compute_file_hash(file_path):
+def compute_file_hash(file_path: str) -> str:
     hash_func = hashlib.sha1()
 
     with open(file_path, "rb") as file:
@@ -182,7 +185,7 @@ def process_single_folder_zip(folder_item: FolderZipItem) -> FolderZipResult:
             data_hash=hashed,
         )
 
-    except BlobStorageException as e:
+    except BlobStorageError as e:
         error_msg = f"Blob storage error: {str(e)}"
         return FolderZipResult(
             s3_path=folder_item.s3_path,
@@ -289,7 +292,10 @@ def process_zip_task(task_id: str) -> None:
 
 
 def execute_callback(
-    task_id: str, callback, task_data: dict, results: list[dict] | None = None
+    task_id: str,
+    callback: CallbackRequest,
+    task_data: dict,
+    results: list[dict] | None = None,
 ) -> None:
     """Execute the callback HTTP request exactly as configured."""
     try:

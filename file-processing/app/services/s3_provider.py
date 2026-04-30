@@ -3,7 +3,7 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple, Callable
 from botocore.exceptions import ClientError, NoCredentialsError
-from app.services.blob_storage import BlobStorageProvider, BlobStorageException
+from app.services.blob_storage import BlobStorageProvider, BlobStorageError
 from app.core.config import settings
 import botocore.session
 import logging
@@ -15,7 +15,7 @@ session.set_config_variable("s3", {"signature_version": "s3v4"})
 
 
 class S3Provider(BlobStorageProvider):
-    def __init__(self):
+    def __init__(self) -> None:
         self.s3_client = boto3.client(
             "s3",
             aws_access_key_id=settings.aws_access_key_id,
@@ -51,32 +51,32 @@ class S3Provider(BlobStorageProvider):
             )
             return f"s3://{self.bucket_name}/{destination_path}"
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"S3 upload failed: {str(e)}")
+            raise BlobStorageError(f"S3 upload failed: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Upload failed: {str(e)}")
+            raise BlobStorageError(f"Upload failed: {str(e)}") from e
 
     def upload_file(self, source_file_path: str, destination_path: str) -> str:
         try:
             if not os.path.exists(source_file_path):
-                raise BlobStorageException(f"Source file not found: {source_file_path}")
+                raise BlobStorageError(f"Source file not found: {source_file_path}")
 
             self.s3_client.upload_file(
                 source_file_path, self.bucket_name, destination_path
             )
             return f"s3://{self.bucket_name}/{destination_path}"
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"S3 upload failed: {str(e)}")
+            raise BlobStorageError(f"S3 upload failed: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Upload failed: {str(e)}")
+            raise BlobStorageError(f"Upload failed: {str(e)}") from e
 
     def generate_download_url(self, path: str) -> tuple[str, datetime]:
         try:
             if not self.file_exists(path):
-                raise BlobStorageException(f"File not found in blob storage: {path}")
+                raise BlobStorageError(f"File not found in blob storage: {path}")
 
             url = self.s3_client.generate_presigned_url(
                 "get_object",
@@ -89,11 +89,11 @@ class S3Provider(BlobStorageProvider):
 
             return url, expires_at
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"Failed to generate download URL: {str(e)}")
+            raise BlobStorageError(f"Failed to generate download URL: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Failed to generate download URL: {str(e)}")
+            raise BlobStorageError(f"Failed to generate download URL: {str(e)}") from e
 
     def file_exists(self, path: str) -> bool:
         try:
@@ -102,9 +102,9 @@ class S3Provider(BlobStorageProvider):
         except ClientError as e:
             if e.response["Error"]["Code"] == "404":
                 return False
-            raise BlobStorageException(f"Error checking file existence: {str(e)}")
+            raise BlobStorageError(f"Error checking file existence: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Error checking file existence: {str(e)}")
+            raise BlobStorageError(f"Error checking file existence: {str(e)}") from e
 
     def download_file(self, s3_key: str, local_file_path: str) -> bool:
         """Download a file from S3 to local filesystem."""
@@ -118,15 +118,15 @@ class S3Provider(BlobStorageProvider):
             return os.path.exists(local_file_path)
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
             error_code = e.response["Error"]["Code"]
             if error_code == "NoSuchKey":
-                raise BlobStorageException(f"File not found in S3: {s3_key}")
+                raise BlobStorageError(f"File not found in S3: {s3_key}") from e
             else:
-                raise BlobStorageException(f"S3 download failed: {str(e)}")
+                raise BlobStorageError(f"S3 download failed: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Download failed: {str(e)}")
+            raise BlobStorageError(f"Download failed: {str(e)}") from e
 
     def list_folder_files(self, s3_prefix: str) -> List[Tuple[str, int]]:
         """List all files in an S3 folder/prefix.
@@ -151,19 +151,20 @@ class S3Provider(BlobStorageProvider):
 
             for page in page_iterator:
                 if "Contents" in page:
-                    for obj in page["Contents"]:
-                        # Skip folder markers, only include actual files
-                        if not obj["Key"].endswith("/"):
-                            files.append((obj["Key"], obj["Size"]))
+                    files.extend(
+                        (obj["Key"], obj["Size"])
+                        for obj in page["Contents"]
+                        if not obj["Key"].endswith("/")
+                    )
 
             return files
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"Failed to list folder contents: {str(e)}")
+            raise BlobStorageError(f"Failed to list folder contents: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Failed to list folder contents: {str(e)}")
+            raise BlobStorageError(f"Failed to list folder contents: {str(e)}") from e
 
     def download_folder(
         self,
@@ -199,10 +200,10 @@ class S3Provider(BlobStorageProvider):
 
             for page in page_iterator:
                 if "Contents" in page:
-                    for obj in page["Contents"]:
-                        all_objects.append(
-                            (obj["Key"], obj["Size"], obj["LastModified"])
-                        )
+                    all_objects.extend(
+                        (obj["Key"], obj["Size"], obj["LastModified"])
+                        for obj in page["Contents"]
+                    )
 
             if not all_objects:
                 return 0, 0, [], []
@@ -217,7 +218,7 @@ class S3Provider(BlobStorageProvider):
             parent_dirs_to_create = set()
 
             # First pass: collect all parent directories from files
-            for s3_key, file_size, last_modified in all_objects:
+            for s3_key, _file_size, _last_modified in all_objects:
                 relative_path = s3_key[len(clean_prefix) :] if clean_prefix else s3_key
 
                 # Add parent directories to the set (for files only, not folder markers)
@@ -229,7 +230,7 @@ class S3Provider(BlobStorageProvider):
                             parent_dirs_to_create.add(parent_dir)
 
             # Second pass: process all objects
-            for s3_key, file_size, last_modified in all_objects:
+            for s3_key, _file_size, last_modified in all_objects:
                 try:
                     # Calculate relative path by removing the prefix
                     relative_path = (
@@ -315,14 +316,14 @@ class S3Provider(BlobStorageProvider):
                         try:
                             os.makedirs(local_parent_path, exist_ok=True)
                             # Don't count these in successful_downloads as they're implicit
-                        except Exception as e:
+                        except Exception:
                             # Log but don't fail for directory creation issues
                             pass
 
             return successful_downloads, failed_downloads, results, excluded_paths
 
         except Exception as e:
-            raise BlobStorageException(f"Failed to download folder: {str(e)}")
+            raise BlobStorageError(f"Failed to download folder: {str(e)}") from e
 
     def clean_path(self, path: str) -> str:
         clean_path = path
@@ -378,11 +379,11 @@ class S3Provider(BlobStorageProvider):
             return upload_urls
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"Failed to generate upload URLs: {str(e)}")
+            raise BlobStorageError(f"Failed to generate upload URLs: {str(e)}") from e
         except Exception as e:
-            raise BlobStorageException(f"Failed to generate upload URLs: {str(e)}")
+            raise BlobStorageError(f"Failed to generate upload URLs: {str(e)}") from e
 
     def move_file(self, source_path: str, destination_path: str) -> bool:
         """Move a file from source to destination within S3.
@@ -397,7 +398,7 @@ class S3Provider(BlobStorageProvider):
         try:
             # Check if source file exists
             if not self.file_exists(source_path):
-                raise BlobStorageException(f"Source file not found: {source_path}")
+                raise BlobStorageError(f"Source file not found: {source_path}")
 
             # Copy the object to the new location
             copy_source = {"Bucket": self.bucket_name, "Key": source_path}
@@ -408,7 +409,7 @@ class S3Provider(BlobStorageProvider):
 
             # Verify the copy was successful
             if not self.file_exists(destination_path):
-                raise BlobStorageException("File copy verification failed")
+                raise BlobStorageError("File copy verification failed")
 
             # Delete the source file
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=source_path)
@@ -420,20 +421,20 @@ class S3Provider(BlobStorageProvider):
                     self.s3_client.delete_object(
                         Bucket=self.bucket_name, Key=destination_path
                     )
-                except:
+                except Exception:
                     pass  # Ignore cleanup errors
-                raise BlobStorageException("Source file deletion failed")
+                raise BlobStorageError("Source file deletion failed")
 
             return True
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"S3 move operation failed: {str(e)}")
-        except BlobStorageException:
+            raise BlobStorageError(f"S3 move operation failed: {str(e)}") from e
+        except BlobStorageError:
             raise  # Re-raise blob storage exceptions
         except Exception as e:
-            raise BlobStorageException(f"Move operation failed: {str(e)}")
+            raise BlobStorageError(f"Move operation failed: {str(e)}") from e
 
     def move_folder(self, source_prefix: str, destination_prefix: str) -> bool:
         """Move a folder from source to destination within S3.
@@ -456,8 +457,7 @@ class S3Provider(BlobStorageProvider):
 
             for page in page_iterator:
                 if "Contents" in page:
-                    for obj in page["Contents"]:
-                        all_objects.append(obj["Key"])
+                    all_objects.extend(obj["Key"] for obj in page["Contents"])
 
             if not all_objects:
                 # Empty folder or doesn't exist - create destination folder marker if needed
@@ -491,7 +491,7 @@ class S3Provider(BlobStorageProvider):
 
                     # Verify copy was successful
                     if not self.file_exists(destination_key):
-                        raise BlobStorageException(
+                        raise BlobStorageError(
                             f"Copy verification failed for {source_key}"
                         )
 
@@ -527,16 +527,16 @@ class S3Provider(BlobStorageProvider):
                             f"Rollback failed for {destination_key}: {str(rollback_error)}"
                         )
 
-                raise BlobStorageException(f"Folder move failed: {str(e)}")
+                raise BlobStorageError(f"Folder move failed: {str(e)}") from e
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"S3 folder move operation failed: {str(e)}")
-        except BlobStorageException:
+            raise BlobStorageError(f"S3 folder move operation failed: {str(e)}") from e
+        except BlobStorageError:
             raise  # Re-raise blob storage exceptions
         except Exception as e:
-            raise BlobStorageException(f"Folder move operation failed: {str(e)}")
+            raise BlobStorageError(f"Folder move operation failed: {str(e)}") from e
 
     def delete_file(self, path: str) -> bool:
         """Delete a file from S3.
@@ -550,25 +550,25 @@ class S3Provider(BlobStorageProvider):
         try:
             # Check if file exists before attempting deletion
             if not self.file_exists(path):
-                raise BlobStorageException(f"File not found: {path}")
+                raise BlobStorageError(f"File not found: {path}")
 
             # Delete the file
             self.s3_client.delete_object(Bucket=self.bucket_name, Key=path)
 
             # Verify the file was deleted
             if self.file_exists(path):
-                raise BlobStorageException("File deletion verification failed")
+                raise BlobStorageError("File deletion verification failed")
 
             return True
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"S3 delete operation failed: {str(e)}")
-        except BlobStorageException:
+            raise BlobStorageError(f"S3 delete operation failed: {str(e)}") from e
+        except BlobStorageError:
             raise  # Re-raise blob storage exceptions
         except Exception as e:
-            raise BlobStorageException(f"Delete operation failed: {str(e)}")
+            raise BlobStorageError(f"Delete operation failed: {str(e)}") from e
 
     def delete_folder(self, prefix: str) -> bool:
         """Delete a folder and all its contents from S3.
@@ -592,8 +592,7 @@ class S3Provider(BlobStorageProvider):
 
             for page in page_iterator:
                 if "Contents" in page:
-                    for obj in page["Contents"]:
-                        all_objects.append({"Key": obj["Key"]})
+                    all_objects.extend({"Key": obj["Key"]} for obj in page["Contents"])
 
             if not all_objects:
                 # No objects found - folder doesn't exist or is already empty
@@ -617,12 +616,11 @@ class S3Provider(BlobStorageProvider):
 
                 # Check for any errors in the batch deletion
                 if "Errors" in response and response["Errors"]:
-                    error_messages = []
-                    for error in response["Errors"]:
-                        error_messages.append(
-                            f"Key: {error['Key']}, Code: {error['Code']}, Message: {error['Message']}"
-                        )
-                    raise BlobStorageException(
+                    error_messages = [
+                        f"Key: {error['Key']}, Code: {error['Code']}, Message: {error['Message']}"
+                        for error in response["Errors"]
+                    ]
+                    raise BlobStorageError(
                         f"Batch delete errors: {'; '.join(error_messages)}"
                     )
 
@@ -641,20 +639,20 @@ class S3Provider(BlobStorageProvider):
 
             if "Contents" in verify_response and len(verify_response["Contents"]) > 0:
                 remaining_objects = [obj["Key"] for obj in verify_response["Contents"]]
-                raise BlobStorageException(
+                raise BlobStorageError(
                     f"Deletion verification failed. Remaining objects: {remaining_objects}"
                 )
 
             return True
 
         except NoCredentialsError:
-            raise BlobStorageException("AWS credentials not found")
+            raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageException(f"S3 folder delete operation failed: {str(e)}")
-        except BlobStorageException:
+            raise BlobStorageError(f"S3 folder delete operation failed: {str(e)}") from e
+        except BlobStorageError:
             raise  # Re-raise blob storage exceptions
         except Exception as e:
-            raise BlobStorageException(f"Folder delete operation failed: {str(e)}")
+            raise BlobStorageError(f"Folder delete operation failed: {str(e)}") from e
 
     def _cleanup_empty_folders(self, folder_prefix: str) -> None:
         """Clean up empty folder markers after moving folder contents.

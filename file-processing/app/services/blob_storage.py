@@ -3,7 +3,7 @@ from datetime import datetime
 from typing import List, Optional, Tuple, Callable
 
 
-class BlobStorageException(Exception):
+class BlobStorageError(Exception):
     pass
 
 
@@ -165,7 +165,7 @@ def get_blob_storage_provider(provider_name: str) -> BlobStorageProvider:
 
         return s3_provider
     else:
-        raise BlobStorageException(f"Invalid provider name: {provider_name}")
+        raise BlobStorageError(f"Invalid provider name: {provider_name}")
 
 
 storage_provider = get_blob_storage_provider("s3")

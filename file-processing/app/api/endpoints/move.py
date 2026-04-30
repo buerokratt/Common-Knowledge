@@ -16,9 +16,9 @@ def move_files(request: MoveFilesRequest) -> MoveFilesResponse:
     try:
         return move_service.move_files(request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to move files: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to move files: {str(e)}") from e
 
 
 @router.post("/move-files-async", response_model=MoveTaskResponse)
@@ -31,11 +31,11 @@ def move_files_async(
         background_tasks.add_task(move_service.process_move_task, task_response.task_id)
         return task_response
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to start move task: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/move-task/{task_id}", response_model=MoveTaskStatusResponse)

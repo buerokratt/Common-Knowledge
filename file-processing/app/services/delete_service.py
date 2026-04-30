@@ -1,21 +1,22 @@
-import os
 import logging
 import uuid
-import requests
-from typing import List, Dict, Optional
 from datetime import datetime
+from typing import Dict, List, Optional
+
+import requests
+
 from app.schemas import (
+    BlobFileDeleteItem,
+    BlobFileDeleteResult,
+    CallbackRequest,
     DeleteFilesRequest,
     DeleteFilesResponse,
-    BlobFileDeleteItem,
+    DeleteTaskResponse,
     FileDeleteItem,
     FileDeleteResult,
-    BlobFileDeleteResult,
-    DeleteTaskResponse,
-    DeleteTaskStatusResponse,
     TaskStatus,
 )
-from app.services.blob_storage import storage_provider, BlobStorageException
+from app.services.blob_storage import storage_provider, BlobStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +25,7 @@ _delete_tasks: Dict[str, dict] = {}
 
 
 def create_delete_task(
-    files: List[BlobFileDeleteItem], callback: Optional = None
+    files: List[BlobFileDeleteItem], callback: Optional[CallbackRequest] = None
 ) -> str:
     """Create a new delete task in memory."""
     task_id = str(uuid.uuid4())
@@ -51,7 +52,7 @@ def get_delete_task(task_id: str) -> Optional[dict]:
     return _delete_tasks.get(task_id)
 
 
-def update_delete_task(task_id: str, **updates) -> None:
+def update_delete_task(task_id: str, **updates: object) -> None:
     """Update delete task status and related fields."""
     if task_id in _delete_tasks:
         for key, value in updates.items():
@@ -91,7 +92,7 @@ def process_single_file_delete(file_item: BlobFileDeleteItem) -> BlobFileDeleteR
                 error_message="Delete operation failed",
             )
 
-    except BlobStorageException as e:
+    except BlobStorageError as e:
         return BlobFileDeleteResult(
             s3_path=file_item.s3_path,
             status="failed",
@@ -132,7 +133,7 @@ def process_folder_delete(file_item: FileDeleteItem) -> FileDeleteResult:
                 error_message="Folder delete operation failed",
             )
 
-    except BlobStorageException as e:
+    except BlobStorageError as e:
         return BlobFileDeleteResult(
             s3_path=file_item.s3_path,
             status="failed",
@@ -220,7 +221,9 @@ def process_delete_task(task_id: str) -> None:
             execute_callback(task_id, callback, task_data)
 
 
-def execute_callback(task_id: str, callback, task_data: dict) -> None:
+def execute_callback(
+    task_id: str, callback: CallbackRequest, task_data: dict
+) -> None:
     """Execute the callback HTTP request exactly as configured."""
     try:
         # Prepare headers

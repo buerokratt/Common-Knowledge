@@ -19,11 +19,11 @@ def generate_upload_urls(request: UploadUrlRequest) -> UploadUrlResponse:
     try:
         return upload_service.generate_upload_urls(request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to generate upload URLs: {str(e)}"
-        )
+        ) from e
 
 
 @router.post("/upload", response_model=FileUploadResponse)
@@ -56,9 +56,9 @@ def upload_file_sync(request: FileUploadRequest) -> dict:
             "status": "completed",
         }
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}") from e
 
 
 @router.post("/upload-file-content", response_model=FileContentUploadResponse)
@@ -67,11 +67,11 @@ def upload_file_content(request: FileContentUploadRequest) -> FileContentUploadR
     try:
         return upload_service.upload_file_content(request)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"Failed to upload file content: {str(e)}"
-        )
+        ) from e
 
 
 @router.get("/tasks/stats")

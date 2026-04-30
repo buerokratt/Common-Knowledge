@@ -1,19 +1,20 @@
-import os
 import logging
 import uuid
-import requests
-from typing import List, Dict, Optional
 from datetime import datetime
+from typing import Dict, List, Optional
+
+import requests
+
 from app.schemas import (
-    MoveFilesRequest,
-    MoveFilesResponse,
+    CallbackRequest,
     FileMoveItem,
     FileMoveResult,
+    MoveFilesRequest,
+    MoveFilesResponse,
     MoveTaskResponse,
-    MoveTaskStatusResponse,
     TaskStatus,
 )
-from app.services.blob_storage import storage_provider, BlobStorageException
+from app.services.blob_storage import storage_provider, BlobStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,9 @@ logger = logging.getLogger(__name__)
 _move_tasks: Dict[str, dict] = {}
 
 
-def create_move_task(files: List[FileMoveItem], callback: Optional = None) -> str:
+def create_move_task(
+    files: List[FileMoveItem], callback: Optional[CallbackRequest] = None
+) -> str:
     """Create a new move task in memory."""
     task_id = str(uuid.uuid4())
 
@@ -47,7 +50,7 @@ def get_move_task(task_id: str) -> Optional[dict]:
     return _move_tasks.get(task_id)
 
 
-def update_move_task(task_id: str, **updates) -> None:
+def update_move_task(task_id: str, **updates: object) -> None:
     """Update move task status and related fields."""
     if task_id in _move_tasks:
         for key, value in updates.items():
@@ -108,7 +111,7 @@ def process_single_file_move(file_item: FileMoveItem) -> FileMoveResult:
                 error_message="Move operation failed",
             )
 
-    except BlobStorageException as e:
+    except BlobStorageError as e:
         return FileMoveResult(
             s3_from_path=file_item.s3_from_path,
             s3_to_path=file_item.s3_to_path,
@@ -169,7 +172,7 @@ def process_folder_move(file_item: FileMoveItem) -> FileMoveResult:
                 error_message="Folder move operation failed",
             )
 
-    except BlobStorageException as e:
+    except BlobStorageError as e:
         return FileMoveResult(
             s3_from_path=file_item.s3_from_path,
             s3_to_path=file_item.s3_to_path,
@@ -264,7 +267,9 @@ def process_move_task(task_id: str) -> None:
             execute_callback(task_id, callback, task_data)
 
 
-def execute_callback(task_id: str, callback, task_data: dict) -> None:
+def execute_callback(
+    task_id: str, callback: CallbackRequest, task_data: dict
+) -> None:
     """Execute the callback HTTP request exactly as configured."""
     try:
         # Prepare headers
