@@ -1,15 +1,29 @@
-FROM python:3.13 AS build
+FROM python:3.12-slim
 
-RUN apt-get update && apt-get install ffmpeg libreoffice poppler-utils tesseract-ocr \
-                                      tesseract-ocr-est tesseract-ocr-rus -y
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    UV_COMPILE_BYTECODE=1 \
+    UV_LINK_MODE=copy \
+    PATH="/app/.venv/bin:$PATH"
+
+RUN apt-get update && apt-get install --no-install-recommends -y \
+        ffmpeg \
+        libreoffice \
+        poppler-utils \
+        tesseract-ocr \
+        tesseract-ocr-est \
+        tesseract-ocr-rus \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 RUN mkdir /scrapped-data
 
-COPY requirements.txt .
-RUN pip install -r requirements.txt
+COPY pyproject.toml uv.lock /app/
+RUN uv sync --frozen --no-dev --no-install-project --extra cleaning
 
-COPY . .
+COPY cleaning/ /app/
 
 EXPOSE 8123
 
