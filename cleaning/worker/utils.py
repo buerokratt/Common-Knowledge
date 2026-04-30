@@ -12,8 +12,12 @@ logger = logging.getLogger(__name__)
 
 
 def send_error(
-    url: str, error_type: str, error_message: str,
-    source_base_id: str, agency_base_id: str, source_run_report_base_id: str
+    url: str,
+    error_type: str,
+    error_message: str,
+    source_base_id: str,
+    agency_base_id: str,
+    source_run_report_base_id: str,
 ):
     scraped_at = datetime.datetime.now(datetime.UTC).isoformat()
     try:
@@ -67,6 +71,7 @@ def cleanup_directory(entity: EntityToClean):
     so that test assertions can read output files after the task completes).
     """
     import os
+
     if os.environ.get("SKIP_CLEANUP", "").lower() in ("1", "true", "yes"):
         logger.info(f"SKIP_CLEANUP set — keeping directory: {entity.directory_path}")
         return

@@ -3,7 +3,7 @@ from app.schemas import (
     DeleteFilesRequest,
     DeleteFilesResponse,
     DeleteTaskResponse,
-    DeleteTaskStatusResponse
+    DeleteTaskStatusResponse,
 )
 from app.services import delete_service
 
@@ -22,16 +22,22 @@ def delete_files(request: DeleteFilesRequest) -> DeleteFilesResponse:
 
 
 @router.post("/delete-files-async", response_model=DeleteTaskResponse)
-def delete_files_async(request: DeleteFilesRequest, background_tasks: BackgroundTasks) -> DeleteTaskResponse:
+def delete_files_async(
+    request: DeleteFilesRequest, background_tasks: BackgroundTasks
+) -> DeleteTaskResponse:
     """Start background deletion of multiple files/folders from blob storage."""
     try:
         task_response = delete_service.delete_files_async(request)
-        background_tasks.add_task(delete_service.process_delete_task, task_response.task_id)
+        background_tasks.add_task(
+            delete_service.process_delete_task, task_response.task_id
+        )
         return task_response
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to start delete task: {str(e)}")
+        raise HTTPException(
+            status_code=500, detail=f"Failed to start delete task: {str(e)}"
+        )
 
 
 @router.get("/delete-task/{task_id}", response_model=DeleteTaskStatusResponse)
@@ -40,5 +46,5 @@ def get_delete_task_status(task_id: str) -> DeleteTaskStatusResponse:
     task_data = delete_service.get_delete_task(task_id)
     if not task_data:
         raise HTTPException(status_code=404, detail="Delete task not found")
-    
+
     return DeleteTaskStatusResponse(**task_data)

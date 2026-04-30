@@ -10,7 +10,7 @@ from scrapper.utils import is_archive_url
 
 
 class SitemapCollectSpider(BaseSpider):
-    name = 'sitemap_collect_spider'
+    name = "sitemap_collect_spider"
     # start_urls = ['https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf']
     # start_urls = ['https://calibre-ebook.com/downloads/demos/demo.docx']
     start_urls = [
@@ -83,37 +83,39 @@ class SitemapCollectSpider(BaseSpider):
         self.scraped_urls = set()
         self.hashes = set()
 
-        if isinstance(kwargs.get('task'), SitemapCollectScrapperTask):
-            self.task: SitemapCollectScrapperTask = kwargs.get('task')
+        if isinstance(kwargs.get("task"), SitemapCollectScrapperTask):
+            self.task: SitemapCollectScrapperTask = kwargs.get("task")
             self.start_urls = [self.task.url.unicode_string()]
 
     def get_pure_domain(self, url: str) -> str:
         parsed_url = urlparse(url)
         netloc = parsed_url.netloc
         if netloc is None:
-            return ''
+            return ""
 
-        return '.'.join(netloc.split('.')[-2:])
+        return ".".join(netloc.split(".")[-2:])
 
     @staticmethod
     def _normalize_host(url: str) -> str:
-        host = (urlparse(url).hostname or '').lower()
-        if host.startswith('www.'):
+        host = (urlparse(url).hostname or "").lower()
+        if host.startswith("www."):
             return host[4:]
         return host
 
     @staticmethod
     def _normalize_path(url: str) -> str:
-        path = urlparse(url).path or '/'
-        if path != '/':
-            path = path.rstrip('/')
-        return path or '/'
+        path = urlparse(url).path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        return path or "/"
 
     @staticmethod
     def _is_path_in_scope(candidate_path: str, scope_path: str) -> bool:
-        if scope_path == '/':
+        if scope_path == "/":
             return True
-        return candidate_path == scope_path or candidate_path.startswith(f'{scope_path}/')
+        return candidate_path == scope_path or candidate_path.startswith(
+            f"{scope_path}/"
+        )
 
     @property
     @cache
@@ -142,7 +144,11 @@ class SitemapCollectSpider(BaseSpider):
 
     async def parse(self, response: Response, **kwargs):
         async for scrapped_item in super().parse(response, **kwargs):
-            if response.status is None or response.status >= 300 or response.status < 200:
+            if (
+                response.status is None
+                or response.status >= 300
+                or response.status < 200
+            ):
                 continue
 
             if response.url in self.scraped_urls:
@@ -157,36 +163,40 @@ class SitemapCollectSpider(BaseSpider):
             if not self.is_in_scope(response.url):
                 continue
 
-            if scrapped_item.metadata.file_type not in self.settings.get('ALLOWED_FILETYPES'):
+            if scrapped_item.metadata.file_type not in self.settings.get(
+                "ALLOWED_FILETYPES"
+            ):
                 self.logger.info(
-                    f'Skipping {scrapped_item.metadata.source_url} because file type '
-                    f'is {scrapped_item.metadata.file_type} and it is not allowed')
+                    f"Skipping {scrapped_item.metadata.source_url} because file type "
+                    f"is {scrapped_item.metadata.file_type} and it is not allowed"
+                )
                 continue
 
             if scrapped_item.hash in self.hashes:
                 self.logger.info(
-                    f'Skipping {scrapped_item.metadata.source_url} because no new content was found '
-                    f'and it was already scraped'
+                    f"Skipping {scrapped_item.metadata.source_url} because no new content was found "
+                    f"and it was already scraped"
                 )
             self.hashes.add(scrapped_item.hash)
 
             yield scrapped_item
 
-            if scrapped_item.metadata.file_type != '.html':
+            if scrapped_item.metadata.file_type != ".html":
                 continue
 
             # Use rendered HTML for link extraction if available (for SPAs)
-            rendered_html = response.meta.get('rendered_html')
+            rendered_html = response.meta.get("rendered_html")
             if rendered_html:
                 from bs4 import BeautifulSoup
-                soup = BeautifulSoup(rendered_html, 'lxml')
-                links = [a.get('href') for a in soup.find_all('a', href=True)]
+
+                soup = BeautifulSoup(rendered_html, "lxml")
+                links = [a.get("href") for a in soup.find_all("a", href=True)]
             else:
                 links = response.css("a::attr(href)").getall()
 
             for href in links:
                 next_url = urljoin(response.url, href)
-                next_url = next_url.split('#')[0]
+                next_url = next_url.split("#")[0]
 
                 # Only follow links within the crawl scope defined by is_in_scope (rooted at start_urls host/path)
                 if not self.is_in_scope(next_url):
@@ -194,13 +204,16 @@ class SitemapCollectSpider(BaseSpider):
 
                 # Skip archive URLs
                 if is_archive_url(next_url):
-                    self.logger.info(f'Skipping archive URL: {next_url}')
+                    self.logger.info(f"Skipping archive URL: {next_url}")
                     continue
 
                 if next_url not in self.visited_urls:
                     self.visited_urls.add(next_url)
-                    self.logger.info(f'Schedule scrape for url: {next_url}')
+                    self.logger.info(f"Schedule scrape for url: {next_url}")
                     yield Request(
-                        next_url, callback=self.parse, errback=self.errback,
-                        meta=self.get_meta(), headers=self.get_headers()
+                        next_url,
+                        callback=self.parse,
+                        errback=self.errback,
+                        meta=self.get_meta(),
+                        headers=self.get_headers(),
                     )

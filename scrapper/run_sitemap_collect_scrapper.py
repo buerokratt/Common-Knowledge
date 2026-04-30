@@ -10,9 +10,6 @@ from api.models import SitemapCollectScrapperTask
 from scrapper.spiders.sitemap_collect_spider import SitemapCollectSpider
 
 
-
-
-
 def main():
     logging.disable(logging.DEBUG)
     task = SitemapCollectScrapperTask(**json.loads(sys.argv[1][1:-1]))
@@ -21,5 +18,5 @@ def main():
     process.start()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

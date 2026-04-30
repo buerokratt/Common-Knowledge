@@ -10,5 +10,7 @@ def un_json(class_object: Type[BaseModel]):
         def wrapper(task):
             task_model = class_object.model_validate(task)
             return f(task_model)
+
         return wrapper
+
     return decorator

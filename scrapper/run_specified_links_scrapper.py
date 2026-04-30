@@ -10,9 +10,6 @@ from api.models import SpecifiedLinksScrapeTask
 from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
 
-
-
-
 def main():
     logging.disable(logging.DEBUG)
     task = SpecifiedLinksScrapeTask(**json.loads(sys.argv[1][1:-1]))
@@ -21,5 +18,5 @@ def main():
     process.start()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

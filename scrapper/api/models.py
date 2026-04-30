@@ -29,6 +29,7 @@ class EntireSourceScrapperTask(BaseObject):
 
 class EestiScrapperTask(BaseObject):
     """Task for scraping all articles from ARVA/Eesti.ee"""
+
     pass
 
 
@@ -52,6 +53,7 @@ class EditedMetadataTask(BaseModel):
     source_file_id: str
     source_file_path: str
 
+
 class ApiFileToScrape(BaseModel):
     id: str
     hash: str
@@ -60,4 +62,3 @@ class ApiFileToScrape(BaseModel):
 
 class SpecifiedApiFilesScrapeTask(BaseObject):
     api_files: list[ApiFileToScrape]
-

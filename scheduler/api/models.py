@@ -4,7 +4,7 @@ from pydantic import BaseModel
 
 class SchedulerEntity(BaseModel):
     cron_expression: str
-    timezone: str = 'Europe/Tallinn'
+    timezone: str = "Europe/Tallinn"
 
 
 class NextTimeToRun(BaseModel):

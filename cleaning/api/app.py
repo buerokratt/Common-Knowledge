@@ -44,4 +44,7 @@ def clean_source_async(task: SourceCleaningTask):
     """
     process = multiprocessing.Process(target=clean_source_task, args=(task,))
     process.start()
-    return {"status": "started", "source_run_report_base_id": task.source_run_report_base_id}
+    return {
+        "status": "started",
+        "source_run_report_base_id": task.source_run_report_base_id,
+    }

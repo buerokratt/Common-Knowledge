@@ -5,7 +5,7 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
 
 class UploadedFileSpider(SpecifiedPagesSpider):
-    name = 'uploaded_file'
+    name = "uploaded_file"
 
     def get_meta(self):
         """
@@ -20,8 +20,8 @@ class UploadedFileSpider(SpecifiedPagesSpider):
         requests.post(
             f"{self.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/delete-file-sync",
             json={
-                'source_file_id': base_id,
-            }
+                "source_file_id": base_id,
+            },
         )
 
         # async yield from super().parse(response, **kwargs)

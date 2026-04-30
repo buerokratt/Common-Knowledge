@@ -30,26 +30,22 @@ async def lifespan(app: FastAPI):
 
     # Startup
     logger.info("Starting File Processing API")
-    
+
     # Start cleanup task (optional)
     cleanup_task = asyncio.create_task(cleanup_background_task())
-    
+
     yield
-    
+
     # Shutdown
     cleanup_task.cancel()
     try:
         await cleanup_task
     except asyncio.CancelledError:
         pass
-    
+
     logger.info("File Processing API shutdown complete")
 
 
-app = FastAPI(
-    title="File Processing API", 
-    version="1.0.0",
-    lifespan=lifespan
-)
+app = FastAPI(title="File Processing API", version="1.0.0", lifespan=lifespan)
 
 app.include_router(api_router, prefix="/api/v1")

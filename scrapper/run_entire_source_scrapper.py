@@ -10,9 +10,6 @@ from api.models import EntireSourceScrapperTask
 from scrapper.spiders.entire_source_spider import EntireSourceSpider
 
 
-
-
-
 def main():
     logging.disable(logging.DEBUG)
     task = EntireSourceScrapperTask(**json.loads(sys.argv[1][1:-1]))
@@ -21,5 +18,5 @@ def main():
     process.start()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
