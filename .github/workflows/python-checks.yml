@@ -1,0 +1,47 @@
+name: python-checks
+
+on:
+  push:
+    branches: [wip, dev, main]
+  pull_request:
+    branches: [wip, dev, main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.8"
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Verify lockfile is in sync
+        run: uv lock --check
+
+      - name: Sync dependencies (all extras + dev)
+        run: uv sync --frozen --all-extras --group dev
+
+      - name: Ruff format (check only)
+        run: uv run ruff format --check .
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Pyright
+        run: uv run pyright
+
+      - name: Pytest
+        run: uv run pytest
+
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
