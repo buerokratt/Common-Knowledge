@@ -81,4 +81,6 @@ def delete_files_from_volume(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to delete files: {str(e)}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to delete files: {str(e)}"
+        ) from e

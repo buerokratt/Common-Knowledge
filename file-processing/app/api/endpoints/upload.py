@@ -58,7 +58,9 @@ def upload_file_sync(request: FileUploadRequest) -> dict:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to upload file: {str(e)}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to upload file: {str(e)}"
+        ) from e
 
 
 @router.post("/upload-file-content", response_model=FileContentUploadResponse)

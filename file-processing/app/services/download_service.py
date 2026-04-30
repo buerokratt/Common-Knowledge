@@ -278,9 +278,7 @@ def process_download_task(task_id: str) -> None:
             execute_callback(task_id, callback, task_data)
 
 
-def execute_callback(
-    task_id: str, callback: CallbackRequest, task_data: dict
-) -> None:
+def execute_callback(task_id: str, callback: CallbackRequest, task_data: dict) -> None:
     """Execute the callback HTTP request exactly as configured."""
     try:
         # Prepare headers

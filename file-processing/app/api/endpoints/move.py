@@ -18,7 +18,9 @@ def move_files(request: MoveFilesRequest) -> MoveFilesResponse:
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to move files: {str(e)}") from e
+        raise HTTPException(
+            status_code=500, detail=f"Failed to move files: {str(e)}"
+        ) from e
 
 
 @router.post("/move-files-async", response_model=MoveTaskResponse)

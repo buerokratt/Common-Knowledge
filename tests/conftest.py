@@ -45,7 +45,7 @@ from loguru import logger
 # ---------------------------------------------------------------------------
 
 
-def pytest_configure(config):
+def pytest_configure(config: "pytest.Config") -> None:
     """
     Set required env vars before pytest collects any modules.
     'api/config.py' instantiates Settings() at module level, which requires

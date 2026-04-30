@@ -67,7 +67,9 @@ def trigger_eesti_scrapper_task(task: EestiScrapperTask) -> None:
 
 
 @app.post("/specified-api-files-scrapper-task")
-def trigger_specified_api_files_scrapper_task(task: SpecifiedApiFilesScrapeTask) -> None:
+def trigger_specified_api_files_scrapper_task(
+    task: SpecifiedApiFilesScrapeTask,
+) -> None:
     # Always ignore stopping for manual file refresh
     task.ignore_stopping = True
     specified_api_files_scrapper_task.delay(task.model_dump(mode="json"))

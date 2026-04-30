@@ -1,6 +1,13 @@
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, DirectoryPath, Field, FilePath, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    DirectoryPath,
+    Field,
+    FilePath,
+    field_validator,
+)
 
 # Restrict all paths to this root to prevent directory traversal
 _ALLOWED_ROOT = Path("/scrapped-data")
@@ -10,9 +17,7 @@ def _assert_within_root(p: Path) -> Path:
     try:
         p.resolve().relative_to(_ALLOWED_ROOT.resolve())
     except ValueError as e:
-        raise ValueError(
-            f"Path {p} is outside the allowed root {_ALLOWED_ROOT}"
-        ) from e
+        raise ValueError(f"Path {p} is outside the allowed root {_ALLOWED_ROOT}") from e
     return p
 
 

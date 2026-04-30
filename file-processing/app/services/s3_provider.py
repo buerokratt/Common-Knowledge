@@ -648,7 +648,9 @@ class S3Provider(BlobStorageProvider):
         except NoCredentialsError:
             raise BlobStorageError("AWS credentials not found") from None
         except ClientError as e:
-            raise BlobStorageError(f"S3 folder delete operation failed: {str(e)}") from e
+            raise BlobStorageError(
+                f"S3 folder delete operation failed: {str(e)}"
+            ) from e
         except BlobStorageError:
             raise  # Re-raise blob storage exceptions
         except Exception as e:
