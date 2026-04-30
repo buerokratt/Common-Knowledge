@@ -21,16 +21,18 @@ from scrapper.utils import send_error, is_archive_url
 
 class BaseSpider(Spider):
     task: BaseObject
+    report_id: str | None = None
     handle_httpstatus_list = [*range(600)]
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
+        super().__init__(name, **kwargs)
 
         self.ua = UserAgent(platforms="desktop")
         self.report_id = None
 
-        if isinstance(kwargs.get("task"), BaseObject):
-            self.task = kwargs["task"]
+        task = kwargs.get("task")
+        if isinstance(task, BaseObject):
+            self.task = task
 
     def check_source_is_stopping(self) -> None:
         # Skip check if this is a manual file refresh (ignore_stopping flag set)
@@ -78,7 +80,7 @@ class BaseSpider(Spider):
     def guess_file_extension(self, content_type: str) -> str:
         pure_content_type = content_type.split(";")[0]
         guessed_extension = mimetypes.guess_extension(pure_content_type)
-        return guessed_extension
+        return guessed_extension or ".bin"
 
     @contextlib.asynccontextmanager
     async def close_page(self, response: Response) -> AsyncIterator[Page]:
@@ -92,12 +94,9 @@ class BaseSpider(Spider):
             self.logger.info(f"Page closed {response.url}")
 
     def log_error_to_source_run_page(
-        self, request: object, error_type: str, error_message: str
+        self, request: str | Request, error_type: str, error_message: str
     ) -> None:
-        if isinstance(request, str):
-            url = request
-        else:
-            url = request.url
+        url = request if isinstance(request, str) else request.url
 
         # Log to file as well as database
         self.logger.error(f"[{error_type}] {url}: {error_message}")
@@ -109,23 +108,24 @@ class BaseSpider(Spider):
             error_message,
             self.task.source_id,
             self.task.agency_id,
-            self.report_id,
+            self.report_id or "",
         )
 
     async def errback(self, failure: Failure) -> None:
-        if not hasattr(failure, "request"):
+        request = getattr(failure, "request", None)
+        if request is None:
             return
 
         self.log_error_to_source_run_page(
-            failure.request, error_type="scrapper", error_message=str(failure)
+            request, error_type="scrapper", error_message=str(failure)
         )
-        page = failure.request.meta.get("playwright_page")
+        page = request.meta.get("playwright_page")
         if page is not None:
             await page.close()
 
     async def parse(
         self, response: Response, **kwargs: object
-    ) -> AsyncIterator[ScrappedItem]:
+    ) -> AsyncIterator[ScrappedItem | Request]:
         self.check_source_is_stopping()
 
         # Check if URL is an archive page and skip if it is
@@ -133,9 +133,13 @@ class BaseSpider(Spider):
             self.logger.info(f"Skipping archive URL: {response.url}")
             return
 
-        file_extension = self.guess_file_extension(
-            response.headers.get(b"Content-Type", "text/html").decode("utf-8")
+        content_type_raw = response.headers.get(b"Content-Type", b"text/html")
+        content_type = (
+            content_type_raw.decode("utf-8")
+            if isinstance(content_type_raw, bytes)
+            else "text/html"
         )
+        file_extension = self.guess_file_extension(content_type)
 
         # Check if Playwright page is available (might not be if direct HTTP download was used)
         playwright_page = response.meta.get("playwright_page")

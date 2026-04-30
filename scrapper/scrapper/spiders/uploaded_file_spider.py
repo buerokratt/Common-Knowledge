@@ -21,6 +21,7 @@ class UploadedFileSpider(SpecifiedPagesSpider):
     async def parse(
         self, response: Response, **kwargs: object
     ) -> AsyncIterator[ScrappedItem | Request]:
+        assert response.request is not None
         base_id, _ = self.get_base_id_and_hash(response.request.url)
 
         requests.post(

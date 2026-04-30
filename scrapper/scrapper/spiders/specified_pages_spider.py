@@ -12,12 +12,16 @@ from scrapper.spiders.base_spider import BaseSpider
 
 class SpecifiedPagesSpider(BaseSpider):
     name = "specified_pages_spider"
-    custom_settings = {"ROBOTSTXT_OBEY": False}
+    custom_settings: dict = {"ROBOTSTXT_OBEY": False}
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
-        if isinstance(kwargs.get("task"), SpecifiedLinksScrapeTask):
-            self.task: SpecifiedLinksScrapeTask = kwargs.get("task")
+    # Narrower task type than BaseSpider; assignment is gated by isinstance below.
+    task: SpecifiedLinksScrapeTask  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
+        super().__init__(name, **kwargs)
+        task = kwargs.get("task")
+        if isinstance(task, SpecifiedLinksScrapeTask):
+            self.task = task
             self.start_urls = [self.task.urls[0].url.unicode_string()]
             self.url_iter = iter(
                 [url.url.unicode_string() for url in self.task.urls[1:]]
@@ -37,7 +41,9 @@ class SpecifiedPagesSpider(BaseSpider):
     async def parse(
         self, response: Response, **kwargs: object
     ) -> AsyncIterator[ScrappedItem | Request]:
-        base_id, hashed = self.get_base_id_and_hash(response.request.url)
+        assert response.request is not None
+        request = response.request
+        base_id, hashed = self.get_base_id_and_hash(request.url)
 
         async for obj in super().parse(response, **kwargs):
             if (
@@ -69,7 +75,7 @@ class SpecifiedPagesSpider(BaseSpider):
                     json={"base_id": base_id, "status": "failed"},
                 )
                 self.log_error_to_source_run_page(
-                    response.request,
+                    request,
                     "content",
                     f"new content does not match allowed file type (got {obj.metadata.file_type})",
                 )
@@ -79,14 +85,14 @@ class SpecifiedPagesSpider(BaseSpider):
 
         if response.status is None or response.status >= 300 or response.status < 200:
             self.logger.info(
-                f"{response.request.url} Not found with status code {response.status}"
+                f"{request.url} Not found with status code {response.status}"
             )
             requests.post(
                 f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
                 json={"base_id": base_id, "status": "not_found"},
             )
             self.log_error_to_source_run_page(
-                response.request, "http", f"invalid status code: {response.status}"
+                request, "http", f"invalid status code: {response.status}"
             )
 
         with suppress(StopIteration):

@@ -3,6 +3,7 @@ from collections.abc import AsyncIterator
 from typing import Dict, Optional
 
 import requests
+from scrapy import Request
 from scrapy.http import Response
 
 from api.models import SpecifiedApiFilesScrapeTask
@@ -13,20 +14,24 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
     name = "specified_api_files_spider"
 
-    custom_settings = {
+    custom_settings: dict = {
         "ROBOTSTXT_OBEY": False,
         "DOWNLOAD_DELAY": 0,
     }
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
+    # Narrower task type than SpecifiedPagesSpider; assignment is gated below.
+    task: SpecifiedApiFilesScrapeTask  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
         # Set API config first, before calling super()
         self.base_url = "https://www.eesti.ee"
         self.article_api = f"{self.base_url}/api/article/v2"
 
-        super().__init__(*args, **kwargs)
+        super().__init__(name, **kwargs)
 
-        if isinstance(kwargs.get("task"), SpecifiedApiFilesScrapeTask):
-            self.task: SpecifiedApiFilesScrapeTask = kwargs.get("task")
+        task = kwargs.get("task")
+        if isinstance(task, SpecifiedApiFilesScrapeTask):
+            self.task = task
             # Convert api_files to the format SpecifiedPagesSpider expects
             self.urls = self.task.api_files
             if self.urls:
@@ -74,16 +79,18 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
 
     async def parse(
         self, response: Response, **kwargs: object
-    ) -> AsyncIterator[ScrappedItem]:
+    ) -> AsyncIterator[ScrappedItem | Request]:
         """
         Override parse to fetch content from API instead of scraping HTML.
         Same hash comparison logic as SpecifiedPagesSpider.
         """
+        assert response.request is not None
+        request = response.request
         # Get database info for hash comparison (same as SpecifiedPagesSpider)
-        base_id, hashed = self.get_base_id_and_hash(response.request.url)
+        base_id, hashed = self.get_base_id_and_hash(request.url)
 
         # Extract external_id from API URL
-        external_id = response.request.url.split("/")[-1]
+        external_id = request.url.split("/")[-1]
 
         # Fetch article content from API instead of parsing HTML
         article_data = self.fetch_article_from_api(external_id)
@@ -145,13 +152,13 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
 
         # Create ScrappedItem (same structure as BaseSpider)
         file_item = FileItem(
-            body=body_bytes, source_url=response.request.url, extension=file_extension
+            body=body_bytes, source_url=request.url, extension=file_extension
         )
 
         metadata_item = MetadataItem(
             file_type=file_extension,
             metadata=Metadata(),
-            source_url=response.request.url,
+            source_url=request.url,
             page_title=title,
             external_id=external_id,
         )

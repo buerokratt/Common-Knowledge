@@ -10,10 +10,14 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 class EntireSourceSpider(SpecifiedPagesSpider):
     name = "entire_source_spider"
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
-        if isinstance(kwargs.get("task"), EntireSourceScrapperTask):
-            self.task: EntireSourceScrapperTask = kwargs.get("task")
+    # Narrower task type than SpecifiedPagesSpider; assignment is gated below.
+    task: EntireSourceScrapperTask  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
+        super().__init__(name, **kwargs)
+        task = kwargs.get("task")
+        if isinstance(task, EntireSourceScrapperTask):
+            self.task = task
             self.url_iter = self.urls_iter_impl()
             self.start_urls = list(self.start_url_impl())
             self.urls = []

@@ -14,14 +14,18 @@ class SitemapCollectSpider(BaseSpider):
     name = "sitemap_collect_spider"
     start_urls: list[str] = []
 
-    def __init__(self, *args: object, **kwargs: object) -> None:
-        super().__init__(*args, **kwargs)
+    # Narrower task type than BaseSpider; assignment is gated by isinstance below.
+    task: SitemapCollectScrapperTask  # pyright: ignore[reportIncompatibleVariableOverride]
+
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
+        super().__init__(name, **kwargs)
         self.visited_urls: set[str] = set()
         self.scraped_urls: set[str] = set()
         self.hashes: set[str] = set()
 
-        if isinstance(kwargs.get("task"), SitemapCollectScrapperTask):
-            self.task: SitemapCollectScrapperTask = kwargs.get("task")
+        task = kwargs.get("task")
+        if isinstance(task, SitemapCollectScrapperTask):
+            self.task = task
             self.start_urls = [self.task.url.unicode_string()]
 
         self.pure_allowed_domains = [
@@ -76,7 +80,13 @@ class SitemapCollectSpider(BaseSpider):
     async def parse(
         self, response: Response, **kwargs: object
     ) -> AsyncIterator[ScrappedItem | Request]:
-        async for scrapped_item in super().parse(response, **kwargs):
+        assert response.request is not None
+        request = response.request
+        async for item in super().parse(response, **kwargs):
+            if not isinstance(item, ScrappedItem):
+                yield item
+                continue
+            scrapped_item: ScrappedItem = item
             if (
                 response.status is None
                 or response.status >= 300
@@ -87,10 +97,10 @@ class SitemapCollectSpider(BaseSpider):
             if response.url in self.scraped_urls:
                 continue
 
-            self.visited_urls.add(response.request.url)
+            self.visited_urls.add(request.url)
             self.visited_urls.add(response.url)
 
-            self.scraped_urls.add(response.request.url)
+            self.scraped_urls.add(request.url)
             self.scraped_urls.add(response.url)
 
             if not self.is_in_scope(response.url):
@@ -120,14 +130,20 @@ class SitemapCollectSpider(BaseSpider):
             # Use rendered HTML for link extraction if available (for SPAs)
             rendered_html = response.meta.get("rendered_html")
             if rendered_html:
-                from bs4 import BeautifulSoup
+                from bs4 import BeautifulSoup, Tag
 
                 soup = BeautifulSoup(rendered_html, "lxml")
-                links = [a.get("href") for a in soup.find_all("a", href=True)]
+                links = [
+                    a.get("href")
+                    for a in soup.find_all("a", href=True)
+                    if isinstance(a, Tag)
+                ]
             else:
                 links = response.css("a::attr(href)").getall()
 
             for href in links:
+                if not isinstance(href, str):
+                    continue
                 next_url = urljoin(response.url, href)
                 next_url = next_url.split("#")[0]
 
