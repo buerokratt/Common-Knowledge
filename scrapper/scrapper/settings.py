@@ -103,7 +103,13 @@ ITEM_PIPELINES = {
 
 # Set settings whose default value is deprecated to a future-proof value
 FEED_EXPORT_ENCODING = "utf-8"
-ALLOWED_FILETYPES = os.environ.get('SUPPORTED_TYPES', '.html,.docx,.doc,.pdf').split(',')
+ALLOWED_FILETYPES = [
+    filetype.strip().lower()
+    for filetype in os.environ.get(
+        'SUPPORTED_TYPES', '.html,.docx,.doc,.pdf,.md,.txt,.pptx'
+    ).split(',')
+    if filetype.strip()
+]
 SCRAPED_DIRECTORY = os.environ.get('SCRAPED_DIRECTORY', "/scrapped-data")
 RUUTER_INTERNAL = os.environ.get('RUUTER_INTERNAL', "http://ruuter-internal:8089")
 DOWNLOAD_DELAY = 0.2
