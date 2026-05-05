@@ -1,4 +1,5 @@
 from collections.abc import AsyncIterator
+from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
 from scrapy import Request
@@ -12,10 +13,7 @@ from scrapper.utils import is_archive_url
 
 class SitemapCollectSpider(BaseSpider):
     name = "sitemap_collect_spider"
-    start_urls: list[str] = []
-
-    # Narrower task type than BaseSpider; assignment is gated by isinstance below.
-    task: SitemapCollectScrapperTask  # pyright: ignore[reportIncompatibleVariableOverride]
+    start_urls: ClassVar[list[str]] = []
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)
@@ -26,7 +24,7 @@ class SitemapCollectSpider(BaseSpider):
         task = kwargs.get("task")
         if isinstance(task, SitemapCollectScrapperTask):
             self.task = task
-            self.start_urls = [self.task.url.unicode_string()]
+            self.start_urls = [task.url.unicode_string()]
 
         self.pure_allowed_domains = [
             self.get_pure_domain(url) for url in self.start_urls

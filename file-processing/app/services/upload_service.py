@@ -185,7 +185,9 @@ def upload_file_content(request: FileContentUploadRequest) -> FileContentUploadR
 
         # Upload content to blob storage
         blob_storage_path = storage_provider.upload_file_content(
-            file_content, clean_file_path, request.content_type
+            file_content,
+            clean_file_path,
+            request.content_type or "application/octet-stream",
         )
 
         return FileContentUploadResponse(

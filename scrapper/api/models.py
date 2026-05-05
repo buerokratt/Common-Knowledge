@@ -39,7 +39,7 @@ class DownloadUrlItem(BaseModel):
 
 
 class UploadFile(LinkToScrape):
-    url: HttpUrl | None = None
+    url: HttpUrl | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
     path: str
 
 

@@ -8,7 +8,6 @@ import requests
 from pathlib import Path
 
 from itemadapter import ItemAdapter
-from scrapy import Spider
 
 from api.utils import get_path_for_task
 from scrapper.utils import catch_error_process_item, catch_error_spider
@@ -22,6 +21,8 @@ def get_path_for_scrapped_item(item: ScrappedItem, spider: BaseSpider) -> str:
 
     path = get_path_for_task(spider.task)
     source_file_path = item.source_file_id
+    if source_file_path is None:
+        raise ValueError("ScrappedItem.source_file_id must be set before this pipeline")
 
     return os.path.join(scrapper_directory, path, source_file_path)
 
@@ -49,6 +50,9 @@ class MetadataPipeline:
         if not isinstance(item, ScrappedItem):
             return item
 
+        if item.path is None:
+            raise ValueError("ScrappedItem.path must be set before MetadataPipeline")
+
         filename = "source.meta.json"
         full_path = os.path.join(item.path, filename)
 
@@ -74,6 +78,9 @@ class FilePipeline:
         if not isinstance(item, ScrappedItem):
             return item
 
+        if item.path is None:
+            raise ValueError("ScrappedItem.path must be set before FilePipeline")
+
         filename = f"source{item.file.extension}"
         full_path = os.path.join(item.path, filename)
         with open(full_path, "wb") as f:
@@ -97,7 +104,6 @@ class TriggerCleaningPipeline:
     def process_item(self, item: object, spider: BaseSpider) -> object:
         if not hasattr(spider, "report_id"):
             return item
-        spider: BaseSpider
         if not isinstance(item, ScrappedItem):
             return item
 
@@ -151,7 +157,6 @@ class CreateSourceFile:
         if item.source_file_id is not None:
             return item
 
-        spider: BaseSpider
         task: BaseObject = spider.task
 
         res = requests.post(
@@ -207,7 +212,6 @@ class ScrappingFinishedPipeline:
         if not hasattr(spider, "task"):
             return
 
-        spider: BaseSpider
         task: BaseObject = spider.task
 
         # Check if the source was manually stopped
@@ -256,7 +260,6 @@ class SetSourceStatusRunningPipeline:
         if not hasattr(spider, "task"):
             return
 
-        spider: BaseSpider
         task: BaseObject = spider.task
 
         # Skip updating source status for manual file refresh (ignore_stopping flag)
@@ -331,7 +334,7 @@ def get_logs_path_for_cleaning(spider: BaseSpider) -> str:
 
 class InitLoggingPipeline:
     @catch_error_spider
-    def open_spider(self, spider: Spider | BaseSpider) -> None:
+    def open_spider(self, spider: BaseSpider) -> None:
         if not hasattr(spider, "report_id") or spider.report_id is None:
             return
 
@@ -359,8 +362,6 @@ class UploadLogsPipeline:
     def close_spider(self, spider: BaseSpider) -> None:
         if not hasattr(spider, "report_id"):
             return
-
-        spider: BaseSpider
 
         path = get_logs_path_for_scraper(spider)
         r = requests.post(

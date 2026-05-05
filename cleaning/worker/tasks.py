@@ -283,7 +283,12 @@ def clean_html(
         )
         return _beautifulsoup_extract(html)
 
-    # LLM paths
+    # LLM paths — entity.use_llm is True here, so the caller must have provided
+    # an Azure OpenAI client + deployment; assert to narrow the optional types.
+    assert client is not None and deployment is not None, (
+        "use_llm=True requires Azure OpenAI client and deployment"
+    )
+
     extracted = _trafilatura_extract(html, url=entity.url)
     if not extracted:
         logger.warning(
@@ -400,12 +405,17 @@ def extract_images_from_html(entity: EntityToClean) -> list[Path]:
     with entity.file_path.open("r", encoding="utf-8", errors="replace") as f:
         html = f.read()
 
+    from bs4 import Tag
+
     soup = BeautifulSoup(html, "lxml")
     images_dir = _images_dir(entity)
     saved: list[Path] = []
 
     for idx, img_tag in enumerate(soup.find_all("img", src=True)):
-        src = img_tag["src"].strip()
+        if not isinstance(img_tag, Tag):
+            continue
+        src_raw = img_tag.get("src")
+        src = src_raw.strip() if isinstance(src_raw, str) else ""
         if not src:
             continue
 
@@ -531,6 +541,7 @@ def extract_images_from_pptx(entity: EntityToClean) -> list[Path]:
     """
     from pptx import Presentation  # python-pptx
     from pptx.enum.shapes import MSO_SHAPE_TYPE
+    from pptx.shapes.picture import Picture
 
     images_dir = _images_dir(entity)
     saved: list[Path] = []
@@ -539,6 +550,8 @@ def extract_images_from_pptx(entity: EntityToClean) -> list[Path]:
     for slide in prs.slides:
         for shape in slide.shapes:
             if shape.shape_type != MSO_SHAPE_TYPE.PICTURE:
+                continue
+            if not isinstance(shape, Picture):
                 continue
             try:
                 image = shape.image

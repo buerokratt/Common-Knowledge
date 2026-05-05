@@ -2,7 +2,7 @@ import datetime
 import hashlib
 import time
 from collections.abc import AsyncIterator
-from typing import Dict, List, Optional
+from typing import ClassVar, Dict, List, Optional
 
 import requests
 from scrapy import Request
@@ -15,7 +15,7 @@ from scrapper.spiders.base_spider import BaseSpider
 class EestiSpider(BaseSpider):
     name = "eesti_spider"
 
-    custom_settings: dict = {
+    custom_settings: ClassVar[dict] = {
         "ROBOTSTXT_OBEY": False,
         "DOWNLOAD_DELAY": 0,
     }

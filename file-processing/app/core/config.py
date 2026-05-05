@@ -1,9 +1,11 @@
-from pydantic_settings import BaseSettings
+from pathlib import Path
+
 from pydantic import DirectoryPath
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
-    source_path: DirectoryPath = "/source"
+    source_path: DirectoryPath = Path("/source")
     aws_access_key_id: str
     aws_secret_access_key: str
     aws_region: str = "us-east-1"
@@ -15,4 +17,4 @@ class Settings(BaseSettings):
         env_file = ".env"
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

@@ -179,7 +179,7 @@ class FolderZipResult(BaseModel):
         List[str]
     ] = []  # List of subfolders that were excluded
     error_message: Optional[str] = None
-    data_hash: str = None
+    data_hash: Optional[str] = None
 
 
 class ZipAndUploadResponse(BaseModel):

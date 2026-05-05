@@ -1,12 +1,15 @@
-import boto3
+import logging
 import os
 from datetime import datetime, timedelta, timezone
-from typing import List, Optional, Tuple, Callable
-from botocore.exceptions import ClientError, NoCredentialsError
-from app.services.blob_storage import BlobStorageProvider, BlobStorageError
-from app.core.config import settings
+from typing import Callable, List, Optional, Tuple
+
+import boto3
 import botocore.session
-import logging
+from botocore.config import Config
+from botocore.exceptions import ClientError, NoCredentialsError
+
+from app.core.config import settings
+from app.services.blob_storage import BlobStorageProvider, BlobStorageError
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +25,7 @@ class S3Provider(BlobStorageProvider):
             aws_secret_access_key=settings.aws_secret_access_key,
             region_name=settings.aws_region,
             endpoint_url=settings.s3_endpoint_url,
-            config=boto3.session.Config(signature_version="s3v4"),
+            config=Config(signature_version="s3v4"),
         )
         self.bucket_name = settings.s3_bucket_name
 
@@ -106,8 +109,9 @@ class S3Provider(BlobStorageProvider):
         except Exception as e:
             raise BlobStorageError(f"Error checking file existence: {str(e)}") from e
 
-    def download_file(self, s3_key: str, local_file_path: str) -> bool:
+    def download_file(self, blob_path: str, local_file_path: str) -> bool:
         """Download a file from S3 to local filesystem."""
+        s3_key = blob_path
         try:
             # Ensure the local directory exists
             os.makedirs(os.path.dirname(local_file_path), exist_ok=True)

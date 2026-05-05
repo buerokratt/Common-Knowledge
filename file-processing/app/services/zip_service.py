@@ -227,7 +227,7 @@ def process_zip_task(task_id: str) -> None:
     try:
         update_zip_task(task_id, status=TaskStatus.PROCESSING)
 
-        results: List[FolderZipResult] = []
+        results: list[dict] = []
         successful_zips = 0
         failed_zips = 0
 

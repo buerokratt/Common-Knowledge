@@ -1,6 +1,6 @@
 import hashlib
 from collections.abc import AsyncIterator
-from typing import Dict, Optional
+from typing import ClassVar, Dict, Optional
 
 import requests
 from scrapy import Request
@@ -14,13 +14,10 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
     name = "specified_api_files_spider"
 
-    custom_settings: dict = {
+    custom_settings: ClassVar[dict] = {
         "ROBOTSTXT_OBEY": False,
         "DOWNLOAD_DELAY": 0,
     }
-
-    # Narrower task type than SpecifiedPagesSpider; assignment is gated below.
-    task: SpecifiedApiFilesScrapeTask  # pyright: ignore[reportIncompatibleVariableOverride]
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         # Set API config first, before calling super()
@@ -33,7 +30,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
         if isinstance(task, SpecifiedApiFilesScrapeTask):
             self.task = task
             # Convert api_files to the format SpecifiedPagesSpider expects
-            self.urls = self.task.api_files
+            self.urls = task.api_files
             if self.urls:
                 # Set start_urls like SpecifiedPagesSpider does
                 self.start_urls = [self.construct_api_url(self.urls[0].external_id)]

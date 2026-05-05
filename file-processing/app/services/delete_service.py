@@ -12,8 +12,6 @@ from app.schemas import (
     DeleteFilesRequest,
     DeleteFilesResponse,
     DeleteTaskResponse,
-    FileDeleteItem,
-    FileDeleteResult,
     TaskStatus,
 )
 from app.services.blob_storage import storage_provider, BlobStorageError
@@ -105,7 +103,7 @@ def process_single_file_delete(file_item: BlobFileDeleteItem) -> BlobFileDeleteR
         )
 
 
-def process_folder_delete(file_item: FileDeleteItem) -> FileDeleteResult:
+def process_folder_delete(file_item: BlobFileDeleteItem) -> BlobFileDeleteResult:
     """Process deletion of a folder (all files within it)."""
     try:
         # Clean the s3_path - remove s3:// prefix if present

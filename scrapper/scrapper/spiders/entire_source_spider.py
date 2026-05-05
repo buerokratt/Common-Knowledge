@@ -10,9 +10,6 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 class EntireSourceSpider(SpecifiedPagesSpider):
     name = "entire_source_spider"
 
-    # Narrower task type than SpecifiedPagesSpider; assignment is gated below.
-    task: EntireSourceScrapperTask  # pyright: ignore[reportIncompatibleVariableOverride]
-
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)
         task = kwargs.get("task")

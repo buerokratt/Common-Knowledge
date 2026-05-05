@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from contextlib import suppress
+from typing import ClassVar
 
 import requests
 from scrapy import Request
@@ -12,21 +13,16 @@ from scrapper.spiders.base_spider import BaseSpider
 
 class SpecifiedPagesSpider(BaseSpider):
     name = "specified_pages_spider"
-    custom_settings: dict = {"ROBOTSTXT_OBEY": False}
-
-    # Narrower task type than BaseSpider; assignment is gated by isinstance below.
-    task: SpecifiedLinksScrapeTask  # pyright: ignore[reportIncompatibleVariableOverride]
+    custom_settings: ClassVar[dict] = {"ROBOTSTXT_OBEY": False}
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)
         task = kwargs.get("task")
         if isinstance(task, SpecifiedLinksScrapeTask):
             self.task = task
-            self.start_urls = [self.task.urls[0].url.unicode_string()]
-            self.url_iter = iter(
-                [url.url.unicode_string() for url in self.task.urls[1:]]
-            )
-            self.urls = self.task.urls
+            self.start_urls = [task.urls[0].url.unicode_string()]
+            self.url_iter = iter([url.url.unicode_string() for url in task.urls[1:]])
+            self.urls = task.urls
 
     def get_base_id_and_hash(self, url: str) -> tuple[str | None, str | None]:
         base_id = None
@@ -46,6 +42,9 @@ class SpecifiedPagesSpider(BaseSpider):
         base_id, hashed = self.get_base_id_and_hash(request.url)
 
         async for obj in super().parse(response, **kwargs):
+            if not isinstance(obj, ScrappedItem):
+                yield obj
+                continue
             if (
                 response.status is None
                 or response.status >= 300

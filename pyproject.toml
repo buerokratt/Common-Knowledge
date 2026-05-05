@@ -142,10 +142,20 @@ pythonVersion = "3.12.10"
 venvPath = "."
 venv = ".venv"
 
-include = ["*"]
+include = ["cleaning", "data-export", "file-processing", "scheduler", "scrapper"]
 exclude = [
   "**/.venv", "**/__pycache__", "build", "dist", ".git",
   ".ruff_cache", ".mypy_cache", "tests/", "**/tests/",
+]
+# Each service runs with its own dir on PYTHONPATH at runtime (Dockerfile WORKDIR
+# = /app, then COPY <service>/ /app/), so `from api.models import ...` resolves
+# inside the service. Mirror that here so pyright can resolve cross-service imports.
+extraPaths = [
+  "cleaning",
+  "data-export",
+  "file-processing",
+  "scheduler",
+  "scrapper",
 ]
 
 typeCheckingMode = "standard"

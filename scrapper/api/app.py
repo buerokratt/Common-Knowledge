@@ -33,7 +33,7 @@ app = FastAPI()
 def trigger_specified_pages_scrapper_task(task: SpecifiedLinksScrapeTask) -> None:
     # Always ignore stopping for manual file refresh
     task.ignore_stopping = True
-    specified_links_scrapper_task.delay(task.model_dump(mode="json"))
+    specified_links_scrapper_task.delay(task.model_dump(mode="json"))  # type: ignore[attr-defined]
 
 
 @app.post("/uploaded-file")
@@ -48,22 +48,22 @@ def trigger_uploaded_file_task(task: UploadedFileTask) -> None:
                 url.url = download.download_url
                 links.append(LinkToScrape(**url.model_dump()))
     task_to_run = SpecifiedLinksScrapeTask(**{**task.model_dump(), "urls": links})
-    uploaded_file_task.delay(task_to_run.model_dump(mode="json"))
+    uploaded_file_task.delay(task_to_run.model_dump(mode="json"))  # type: ignore[attr-defined]
 
 
 @app.post("/sitemap-collect-scrapper-task")
 def trigger_sitemap_collect_scrapper_task(task: SitemapCollectScrapperTask) -> None:
-    sitemap_collect_scrapper_task.delay(task.model_dump(mode="json"))
+    sitemap_collect_scrapper_task.delay(task.model_dump(mode="json"))  # type: ignore[attr-defined]
 
 
 @app.post("/entire-source-scrapper-task")
 def trigger_entire_source_scrapper_task(task: EntireSourceScrapperTask) -> None:
-    entire_source_scrapped_task.delay(task.model_dump(mode="json"))
+    entire_source_scrapped_task.delay(task.model_dump(mode="json"))  # type: ignore[attr-defined]
 
 
 @app.post("/eesti-scrapper-task")
 def trigger_eesti_scrapper_task(task: EestiScrapperTask) -> None:
-    eesti_scrapper_task.delay(task.model_dump(mode="json"))
+    eesti_scrapper_task.delay(task.model_dump(mode="json"))  # type: ignore[attr-defined]
 
 
 @app.post("/specified-api-files-scrapper-task")
@@ -72,7 +72,7 @@ def trigger_specified_api_files_scrapper_task(
 ) -> None:
     # Always ignore stopping for manual file refresh
     task.ignore_stopping = True
-    specified_api_files_scrapper_task.delay(task.model_dump(mode="json"))
+    specified_api_files_scrapper_task.delay(task.model_dump(mode="json"))  # type: ignore[attr-defined]
 
 
 @app.post("/generate-edited-metadata")
