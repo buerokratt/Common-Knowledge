@@ -257,6 +257,147 @@ docker-compose ps
 
 The cleaning service has a dedicated automated test suite (unit, API contract, and integration tests) that runs on every pull request via GitHub Actions. See [Cleaning Service — Testing](./cleaning/README.md#testing) for how to run tests locally.
 
+### Python Development Standards
+
+The five Python services in this repo — `cleaning`, `data-export`, `file-processing`, `scheduler`, `scrapper` — share one toolchain, one virtualenv, and one set of formatting/typing/test rules.
+
+#### What changed vs. the legacy layout
+
+- **No more per-service `requirements.txt`.** Each service's runtime dependencies are declared in the top-level `pyproject.toml` under `[project.optional-dependencies]` (one group per service). The shared dev toolchain (ruff, pyright, pytest, pre-commit, …) lives under `[dependency-groups].dev`.
+- **One lockfile (`uv.lock`) at the repo root** covers every service and the dev tools. CI fails if the lockfile drifts from `pyproject.toml`.
+- **All versions are pinned exactly with `==`.** No `>=`, no `~=`. Bumping a dep is an explicit, reviewable change.
+- **Single Python version (`3.12.10`)** declared in `.python-version` and `requires-python = "==3.12.10"`. Both [uv](https://docs.astral.sh/uv/) and pyright read it.
+- **Docker images consume the same `pyproject.toml` + `uv.lock`** via `uv sync --frozen --no-dev --extra <service>` into `/opt/venv`. Local dev and CI install from exactly the same lock as the runtime image.
+
+#### Repository layout
+
+```
+pyproject.toml         # all deps + tool config (ruff, pyright)
+uv.lock                # locked versions for every extra
+.python-version        # 3.12.10
+pytest.ini             # test config (pythonpath = cleaning)
+.pre-commit-config.yaml
+.gitleaks.toml         # gitleaks rules + allowlists
+cleaning/              # one service per top-level dir, no requirements.txt
+data-export/
+file-processing/
+scheduler/
+scrapper/
+tests/                 # pytest tests (currently cleaning-service tests)
+```
+
+#### Local setup
+
+```bash
+# 1. Install uv (https://docs.astral.sh/uv/getting-started/installation/)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 2. Install the pinned Python interpreter (uses .python-version)
+uv python install
+
+# 3. Install deps. Three useful shapes:
+
+# a) One service + dev tools (fastest; matches per-service Dockerfile + dev tools)
+uv sync --frozen --extra cleaning --group dev
+
+# b) All services + dev tools (what CI does; also what you need to run pyright
+#    cleanly across the whole repo, since pyright checks all five services)
+uv sync --frozen --all-extras --group dev
+
+# c) Production-style for a service (no dev tools — what the Dockerfile runs)
+uv sync --frozen --no-dev --extra cleaning
+```
+
+The venv lives at `.venv/` at the repo root. Activate manually with `source .venv/bin/activate`, or just prefix every tool call with `uv run`.
+
+#### Adding or upgrading a dependency
+
+1. Edit `pyproject.toml` — add the package with an exact `==` pin to the right `[project.optional-dependencies]` group (or to `[dependency-groups].dev` for tooling).
+2. Run `uv lock` to refresh `uv.lock`.
+3. Commit both files together. CI's `uv lock --check` will reject a `pyproject.toml` change without a matching lockfile update.
+
+#### Formatting and linting — Ruff
+
+Pinned to `ruff==0.13.3`. Config in `[tool.ruff]` of `pyproject.toml`:
+
+- Line length **88**, 4-space indent, double quotes, `target-version = "py312"`.
+- `fix = false` at the project level — the formatter does not auto-rewrite when CI runs; you opt in locally with `--fix`.
+- Lint rule sets enabled: `E4, E7, E9, F, B, T20, N, ANN, ERA, PERF` (pycodestyle errors, pyflakes, bugbear, no-print, naming, missing annotations, no commented-out code, perf hints).
+- Sibling Bürokratt language services (`Authentication-Layer`, `CronManager`, `DataMapper`, `Resql`, `Ruuter`, `TIM`) are excluded — they ship from their own repos and just happen to share this working tree.
+
+```bash
+uv run ruff format .             # rewrite files
+uv run ruff format --check .     # fail if anything would change (what CI runs)
+uv run ruff check .              # lint
+uv run ruff check --fix .        # lint + auto-fix safe issues
+```
+
+#### Type checking — Pyright
+
+Pinned to `pyright==1.1.405`. Config in `[tool.pyright]` of `pyproject.toml`:
+
+- `typeCheckingMode = "standard"` (not strict — strict would require a much bigger annotation pass).
+- `pythonVersion = "3.12.10"`, reads `venvPath = "."` + `venv = ".venv"`.
+- `include` lists the five service dirs; `tests/` is excluded from the type-check pass (tests rely on dynamic `unittest.mock` patches that fight strict typing).
+- **Per-service `executionEnvironments`** scope each service's import resolution to its own directory. Both `scheduler/api/` and `scrapper/api/` exist as siblings, and a single global `extraPaths` would make `from api.models import …` always pick the alphabetically-first match. Each `[[tool.pyright.executionEnvironments]]` block mirrors what `Dockerfile WORKDIR=/app + COPY <service>/ /app/` does at runtime.
+
+```bash
+uv run pyright          # check every included service
+uv run pyright cleaning # check just one service
+```
+
+> Pyright runs Node under the hood. If your system Node is older than v18 (older Ubuntu/snap installs ship Node 6), `uv run pyright` errors out with a JS syntax error before pyright even starts. Either upgrade Node or rely on CI for the type check.
+
+#### Tests — Pytest
+
+Pinned to `pytest==8.3.5` (with `pytest-cov`, `pytest-timeout`). Config in `pytest.ini`:
+
+- `testpaths = tests` — all test files live under `tests/` at the repo root.
+- `pythonpath = cleaning` — so `from worker.tasks import …` in `tests/test_tasks.py` resolves (`worker/` lives at `cleaning/worker/`). This replaces the older `PYTHONPATH=cleaning` env-var workaround.
+- Currently the test suite is cleaning-service-only: `tests/test_tasks.py` (unit, mocked), `tests/test_api.py` and `tests/test_integration.py` (require the cleaning Docker stack — the `cleaning_stack` fixture in `tests/conftest.py` brings it up).
+
+```bash
+uv run pytest                          # everything (integration tests need Docker)
+uv run pytest tests/test_tasks.py -v   # unit tests only, no containers needed
+```
+
+The cleaning service also has its own dedicated CI workflow ([test-cleaning.yml](./.github/workflows/test-cleaning.yml)) that runs both unit and integration jobs on PRs touching `cleaning/`, `tests/`, or the lock.
+
+#### Secret scanning — Gitleaks
+
+`gitleaks v8.21.2` runs in CI and as a pre-commit hook. `.gitleaks.toml` extends the default ruleset and carries project-specific allowlists for known false positives (e.g. SHA-style hex hashes in DB seed fixtures that the generic-api-key rule otherwise flags).
+
+```bash
+docker run --rm -v "$PWD":/code zricethezav/gitleaks:latest \
+  detect --source=/code --redact --no-banner   # exact CI invocation
+```
+
+#### Pre-commit hooks
+
+Pinned to `pre-commit==4.3.0`. Hooks defined in `.pre-commit-config.yaml`:
+
+- `ruff-pre-commit` (`v0.13.3`) — format + lint
+- `uv-pre-commit` (`0.11.8`) — `uv lock --check` so a dep change can't land without the lockfile update
+- `gitleaks` (`v8.21.2`)
+
+```bash
+uv run pre-commit install              # one-time, installs the git hook
+uv run pre-commit run --all-files      # run every hook against the whole tree
+```
+
+#### CI quality gates
+
+`.github/workflows/python-checks.yml` runs on every push and PR to `wip`/`dev`/`main`:
+
+1. `uv lock --check` — lockfile is in sync with `pyproject.toml`
+2. `uv sync --frozen --all-extras --group dev`
+3. `uv run ruff format --check .`
+4. `uv run ruff check .`
+5. `uv run pyright`
+6. `uv run pytest`
+
+A separate `gitleaks` job runs `gitleaks detect` against the full history.
+
 ### Configuration
 
 The system uses DSL (Domain Specific Language) configurations for:
