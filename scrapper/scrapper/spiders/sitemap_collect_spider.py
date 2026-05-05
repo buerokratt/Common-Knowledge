@@ -1,5 +1,4 @@
 from collections.abc import AsyncIterator
-from typing import ClassVar
 from urllib.parse import urljoin, urlparse
 
 from scrapy import Request
@@ -13,7 +12,6 @@ from scrapper.utils import is_archive_url
 
 class SitemapCollectSpider(BaseSpider):
     name = "sitemap_collect_spider"
-    start_urls: ClassVar[list[str]] = []
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)

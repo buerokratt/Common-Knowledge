@@ -1,6 +1,5 @@
 from collections.abc import AsyncIterator
 from contextlib import suppress
-from typing import ClassVar
 
 import requests
 from scrapy import Request
@@ -13,7 +12,9 @@ from scrapper.spiders.base_spider import BaseSpider
 
 class SpecifiedPagesSpider(BaseSpider):
     name = "specified_pages_spider"
-    custom_settings: ClassVar[dict] = {"ROBOTSTXT_OBEY": False}
+    custom_settings = {  # pyright: ignore[reportIncompatibleVariableOverride]
+        "ROBOTSTXT_OBEY": False,
+    }
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)

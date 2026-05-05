@@ -149,13 +149,28 @@ exclude = [
 ]
 # Each service runs with its own dir on PYTHONPATH at runtime (Dockerfile WORKDIR
 # = /app, then COPY <service>/ /app/), so `from api.models import ...` resolves
-# inside the service. Mirror that here so pyright can resolve cross-service imports.
-extraPaths = [
-  "cleaning",
-  "data-export",
-  "file-processing",
-  "scheduler",
-  "scrapper",
-]
+# inside the service. A single global extraPaths would make pyright pick the wrong
+# `api/models.py` (alphabetically first) for services that share module names like
+# `api`. Per-service executionEnvironments scope each service's PYTHONPATH locally.
 
 typeCheckingMode = "standard"
+
+[[tool.pyright.executionEnvironments]]
+root = "cleaning"
+extraPaths = ["cleaning"]
+
+[[tool.pyright.executionEnvironments]]
+root = "data-export"
+extraPaths = ["data-export"]
+
+[[tool.pyright.executionEnvironments]]
+root = "file-processing"
+extraPaths = ["file-processing"]
+
+[[tool.pyright.executionEnvironments]]
+root = "scheduler"
+extraPaths = ["scheduler"]
+
+[[tool.pyright.executionEnvironments]]
+root = "scrapper"
+extraPaths = ["scrapper"]

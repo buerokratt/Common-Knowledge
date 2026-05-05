@@ -2,7 +2,7 @@ import datetime
 import hashlib
 import time
 from collections.abc import AsyncIterator
-from typing import ClassVar, Dict, List, Optional
+from typing import Dict, List, Optional
 
 import requests
 from scrapy import Request
@@ -15,9 +15,10 @@ from scrapper.spiders.base_spider import BaseSpider
 class EestiSpider(BaseSpider):
     name = "eesti_spider"
 
-    custom_settings: ClassVar[dict] = {
+    DOWNLOAD_DELAY = 0
+    custom_settings = {  # pyright: ignore[reportIncompatibleVariableOverride]
         "ROBOTSTXT_OBEY": False,
-        "DOWNLOAD_DELAY": 0,
+        "DOWNLOAD_DELAY": DOWNLOAD_DELAY,
     }
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
@@ -370,7 +371,7 @@ class EestiSpider(BaseSpider):
 
             # Small delay between requests
             if i < len(article_entries):
-                time.sleep(self.custom_settings["DOWNLOAD_DELAY"])
+                time.sleep(self.DOWNLOAD_DELAY)
 
         self.logger.info(
             f"EestiSpider completed: {processed_count} processed, {skipped_count} skipped"
