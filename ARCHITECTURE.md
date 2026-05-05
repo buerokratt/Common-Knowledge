@@ -93,13 +93,13 @@ graph TB
 - **Purpose**: Web scraping and content collection
 - **Location**: `/scrapper/`
 - **Technology**: Python, Scrapy, FastAPI, Celery
-- **Features**: Multi-source scraping, content extraction, metadata generation
+- **Features**: Multi-source scraping, content extraction, metadata generation, specified-pages scraping for narrowed refreshes
 
 ### 6. Cleaning Service
 - **Purpose**: Content cleaning and text extraction
 - **Location**: `/cleaning/`
 - **Technology**: Python, FastAPI, trafilatura, pymupdf4llm, Unstructured, BeautifulSoup
-- **Features**: HTML cleaning, document processing, optional LLM-assisted extraction, image extraction, LLM-ready text generation
+- **Features**: HTML cleaning, document processing, optional LLM-assisted extraction, image extraction, LLM-ready text generation, quality-control modes (`basic`, `comprehensive`, none)
 
 ### 7. File Processing Service
 - **Purpose**: File upload, storage, and download management
@@ -191,6 +191,18 @@ sequenceDiagram
     GUI->>Scrapper: Process uploaded files
     Scrapper->>DB: Store file metadata
 ```
+
+### 3. Operational Behaviors
+
+1. **First-Time Scraping**: `POST /source/add` creates the source and triggers the sitemap-collect pipeline with `is_initial_scrape: true`.
+2. **Narrowed Web Scraping**: `POST /source-file/refresh` and `POST /source-file/refresh-multiple` run specified-pages scraping for the selected URL(s), including only each selected URL and its child/subpages while excluding parent pages and sibling/parallel branches.
+3. **Pre-Selected URL Source Flow**: `POST /source/add-with-url-list` creates source + source files and immediately triggers specified-pages pipeline for the provided URL list.
+4. **Bulk File Lifecycle Management**: Bulk refresh, bulk include/exclude, and bulk remove are coordinated through Ruuter + Resql + File Processing + Search index cleanup.
+5. **LLM Quality Control Routing**: Cleaning pipeline derives flags from source `qualityControl`:
+   - `basic` -> `use_llm=true`, `use_llm_correction=false`
+   - `comprehensive` -> `use_llm=true`, `use_llm_correction=true`
+   - none/empty -> `use_llm=false`, `use_llm_correction=false`
+6. **Single Agency Constraint**: Agency creation is guarded by existence check and returns `409` if one agency already exists.
 
 ## Database Schema
 

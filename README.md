@@ -15,6 +15,15 @@ The CKB serves as a critical data pipeline for the Bürokratt AI assistant, ensu
 - **Comprehensive API**: REST endpoints for all data operations
 - **Real-time Monitoring**: Processing status tracking and error reporting
 
+### Feature Highlights
+
+- **Bulk Source File Operations**: Bulk refresh, bulk include/exclude, and bulk delete are supported for source files.
+- **First-Time Scraping on Source Creation**: Creating a standard web source (adding an URL) triggers initial scraping, then pauses before cleaning and moves the source to `in_review`; cleaning starts only when the user clicks **Start Cleaning**.
+- **Narrowed Web Scraping**: For a specified URL, scraping includes that URL and only its child/subpages; parent paths and sibling/parallel paths are excluded.
+- **Pre-Selected URL List Addition**: Users can create a source from a pre-selected URL list and trigger scraping/cleaning for those URLs only.
+- **LLM Extraction Quality Control Modes**: Source-level quality control supports `basic`, `comprehensive`, or none, and controls cleaning-time LLM flags.
+- **Single Agency Enforcement**: CKB allows only one agency per deployment; creating additional agencies is blocked with `409 Conflict`.
+
 ## Quick Start
 
 ### Prerequisites
