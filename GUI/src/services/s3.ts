@@ -1,5 +1,23 @@
 import { apiDev } from './api';
 
+const MIME_BY_EXTENSION: Record<string, string> = {
+  md: 'text/markdown',
+  txt: 'text/plain',
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  html: 'text/html',
+  htm: 'text/html',
+};
+
+const getContentType = (file: File): string => {
+  if (file.type) return file.type;
+  const ext = file.name.split('.').pop()?.toLowerCase() ?? '';
+  return MIME_BY_EXTENSION[ext] ?? 'application/octet-stream';
+};
+
 export interface ApiResponse {
   response: any;
 }
@@ -77,7 +95,7 @@ export const createSourceWithFiles = async (
   // Create file metadata with names and content types
   const fileData = files.map((file) => ({
     name: file.name,
-    contentType: file.type || 'application/octet-stream',
+    contentType: getContentType(file),
   }));
 
   const response = await apiDev.post(
@@ -142,10 +160,7 @@ export const uploadFileToS3 = async (
     });
 
     xhr.open('PUT', uploadUrl);
-    xhr.setRequestHeader(
-      'Content-Type',
-      file.type || 'application/octet-stream'
-    );
+    xhr.setRequestHeader('Content-Type', getContentType(file));
     xhr.send(file);
   });
 };
@@ -258,7 +273,7 @@ export const createSourceWithFilesForExistingSource = async (
 }> => {
   const filesData = files.map((file) => ({
     name: file.name,
-    contentType: file.type || 'application/octet-stream',
+    contentType: getContentType(file),
   }));
 
   const response = await apiDev.post(
