@@ -1,7 +1,12 @@
-FROM python:3.13 AS build
+FROM python:3.13-slim AS build
 
-RUN apt-get update && apt-get install ffmpeg libreoffice poppler-utils tesseract-ocr \
-                                      tesseract-ocr-est tesseract-ocr-rus -y
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install --no-install-recommends -y \
+        libreoffice \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 RUN mkdir /scrapped-data
