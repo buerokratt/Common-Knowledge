@@ -128,6 +128,93 @@ All paths are validated to stay within `/scrapped-data` to prevent directory tra
 | true        | false                  | trafilatura → LLM evaluation → BeautifulSoup if LLM rejects                     |
 | true        | true                   | trafilatura → LLM evaluation → LLM full re-extraction → BeautifulSoup fallback |
 
+Setting `use_llm_correction=true` while `use_llm=false` has no effect — the correction step only runs after a failed LLM evaluation, so evaluation must be enabled to reach it. A warning is logged when this combination is requested.
+
+## HTML Main-Body Extraction: Options & Evaluation
+
+Extracting the *main body* of an HTML page (the article text, documentation, post, etc.) is the hardest part of the cleaning pipeline. Pages contain navigation menus, cookie banners, sidebars, related-article widgets, footers, ads, and other boilerplate that must be stripped without losing real content. The service chains together several extractors and an optional LLM-based quality gate to balance precision, completeness, and cost.
+
+### Available extractors
+
+The service has **three** independent extraction strategies for HTML, and one **quality evaluation** strategy that decides between them:
+
+#### 1. Trafilatura (primary)
+
+[`trafilatura`](https://trafilatura.readthedocs.io/) is a purpose-built main-content extractor that uses a combination of heuristics (DOM density, link density, text-block scoring) trained on a large corpus of web pages. It is fast, deterministic, and produces high-quality output on most well-structured pages (news articles, blog posts, documentation).
+
+Configuration used in `_trafilatura_extract`:
+
+| Option              | Value      | Reason                                                                                   |
+| ------------------- | ---------- | ---------------------------------------------------------------------------------------- |
+| `output_format`   | `markdown` | Downstream consumers (LLM, embeddings, GUI preview) all work with Markdown.              |
+| `include_comments`| `False`    | User comments are usually noise for knowledge-base ingestion.                            |
+| `include_tables`  | `True`     | Public-sector pages often present key information (fees, deadlines, forms) in tables.    |
+| `favor_precision` | `True`     | Prefer dropping borderline content over including boilerplate. Reduces false positives.  |
+| `url`             | source URL | Some heuristics use the URL as a hint for the site type / language.                      |
+
+Trafilatura returns `None` (treated as "empty") when it cannot identify any main content with sufficient confidence — typically on JavaScript-heavy SPAs, link directories, or pages that are mostly navigation.
+
+#### 2. BeautifulSoup + Unstructured (fallback)
+
+`_beautifulsoup_extract` is the deterministic fallback used whenever trafilatura returns empty **or** when the LLM rejects the trafilatura output. It is a multi-step chain:
+
+1. **Strip obvious noise tags**: `<header>`, `<footer>`, `<nav>`, `<script>`, `<style>`, `<aside>`, `<form>` are removed in-place from the DOM.
+2. **Prefer a `<main>` landmark**: if the page has an explicit `<main>` element, it is treated as the main body and passed to `unstructured.partition_html` (with `skip_headers_and_footers=True`). This yields a structured list of `Title`, `ListItem`, `Table`, `CodeSnippet`, and paragraph elements which are rendered to Markdown by `_elements_to_markdown`.
+3. **Otherwise use `<body>`**: if no `<main>` exists, the same partition logic is applied to the cleaned `<body>` (not the full document — passing the `<html>`/`<head>` wrapper would re-introduce noise).
+4. **Markdownify fallback**: if `partition_html` returns no elements at either step (very rare — typically empty pages or pages that are pure media), the raw HTML of the target element is run through `markdownify(..., heading_style="ATX")` so *something* is returned.
+
+This fallback is always deterministic and never calls out to a network service, so it is safe to use even without Vault / Azure access.
+
+#### 3. LLM full re-extraction (opt-in, `use_llm_correction=true`)
+
+When trafilatura's output is rejected by the quality evaluation and `use_llm_correction=true`, the **raw HTML** (not the trafilatura output) is sent to Azure OpenAI with the `_EXTRACT_SYSTEM` prompt instructing it to:
+
+- Extract ONLY the main body content (article text, documentation, etc.)
+- Ignore navigation, sidebars, footers, cookie notices, and ads
+- Return clean Markdown with headings, lists, and emphasis preserved
+- Include no commentary — only the extracted Markdown
+
+If the LLM returns an empty response or errors out, the pipeline falls back to BeautifulSoup so the job still completes.
+
+This option is the most expensive (both latency and token cost — entire HTML pages are sent as input) and is **off by default**. Use it for sources where:
+
+- The page structure is unusual (heavy JS framework markup, deeply nested wrappers, no semantic landmarks).
+- BeautifulSoup's noise-tag stripping has been observed to either miss boilerplate or strip real content.
+- Quality matters more than throughput, e.g. a small number of high-value sources.
+
+### LLM quality evaluation (opt-in, `use_llm=true`)
+
+The evaluation step is independent of the extractor — its purpose is to *decide* whether the trafilatura (or BeautifulSoup) output is good enough to use, or whether the pipeline should fall back further. It is a single Azure OpenAI chat completion using JSON-mode (`response_format={"type": "json_object"}`).
+
+The evaluator is given the already-extracted Markdown and the `_EVAL_SYSTEM` prompt that asks it to score the extraction on four criteria:
+
+| Criterion       | Question the LLM is asked                                                                                |
+| --------------- | -------------------------------------------------------------------------------------------------------- |
+| Readability     | Is the text coherent and human-readable?                                                                 |
+| Completeness    | Does it appear to contain the full main content without obvious truncation or missing sections?         |
+| Cleanliness     | Is it free from navigation menus, cookie banners, footer boilerplate, and other noise?                  |
+| Structure       | Are headings, lists, and paragraphs logically preserved?                                                 |
+
+The LLM replies with a strict JSON object:
+
+```json
+{"pass": true,  "reason": "<one-sentence explanation>"}
+{"pass": false, "reason": "<one-sentence explanation>"}
+```
+
+The `reason` field is recorded in the job log so failures can be inspected after the fact. Any API error, JSON parse error, or unexpected exception is treated as `pass=false` with the error message in `reason` — the pipeline degrades gracefully rather than crashing on a flaky LLM call.
+
+### Why three layers?
+
+| Layer                              | Cost     | Determinism | Strength                                                       | Weakness                                        |
+| ---------------------------------- | -------- | ----------- | -------------------------------------------------------------- | ----------------------------------------------- |
+| trafilatura                        | very low | yes         | Best general-purpose extractor; fast; predictable              | Empty output on unusual pages                   |
+| BeautifulSoup + Unstructured       | low      | yes         | Always returns something; no network dependency                | Less precise; may keep some boilerplate         |
+| LLM evaluation                     | medium   | no          | Catches subtle quality issues no heuristic can see             | Adds latency + token cost per page              |
+| LLM full re-extraction             | high     | no          | Handles pages where structural extractors all fail             | Expensive; non-deterministic; large prompts     |
+
+The default `use_llm=false` mode is cheap and good enough for the bulk of public-sector content. Turn on `use_llm=true` for sources where extraction quality has been a problem; turn on `use_llm_correction=true` only after observing that the evaluation step is regularly rejecting trafilatura *and* BeautifulSoup is not producing a meaningful improvement on those specific pages.
+
 ## Environment Variables
 
 | Variable              | Required       | Description                                                                             |
