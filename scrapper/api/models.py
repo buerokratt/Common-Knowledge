@@ -1,4 +1,4 @@
-from pydantic import BaseModel, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
 class BaseObject(BaseModel):
@@ -29,6 +29,7 @@ class EntireSourceScrapperTask(BaseObject):
 
 class EestiScrapperTask(BaseObject):
     """Task for scraping all articles from ARVA/Eesti.ee"""
+
     pass
 
 
@@ -38,7 +39,7 @@ class DownloadUrlItem(BaseModel):
 
 
 class UploadFile(LinkToScrape):
-    url: HttpUrl | None = None
+    url: HttpUrl | None = None  # pyright: ignore[reportIncompatibleVariableOverride]
     path: str
 
 
@@ -52,12 +53,14 @@ class EditedMetadataTask(BaseModel):
     source_file_id: str
     source_file_path: str
 
+
 class ApiFileToScrape(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     id: str
     hash: str
-    externalId: str
+    external_id: str = Field(alias="externalId")
 
 
 class SpecifiedApiFilesScrapeTask(BaseObject):
     api_files: list[ApiFileToScrape]
-

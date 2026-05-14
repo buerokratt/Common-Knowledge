@@ -1,0 +1,11 @@
+# gitleaks configuration
+#
+# Extends the default ruleset with project-specific allowlists for known
+# false positives.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "DB seed fixtures: data_hash column contains SHA1-style hex hashes that gitleaks' generic-api-key rule flags."
+paths = ['''DSL/Liquibase/data/test-fixtures/agency\.csv''']

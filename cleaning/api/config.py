@@ -10,8 +10,9 @@ class Settings(BaseSettings):
     so that token rotation by Vault Agent is always respected.
 
     """
+
     ruuter_internal: str = ""
-    languages: list[str] = ['est', 'rus', 'eng']
+    languages: list[str] = ["est", "rus", "eng"]
 
     # Vault settings — optional so the service starts fine without them
     # when use_llm is never True.
@@ -44,7 +45,10 @@ def _read_token() -> str:
 
 class VaultSecrets:
     """Holds secrets fetched from Vault. Not cached — fetched per task."""
-    def __init__(self, api_key: SecretStr, endpoint: str, api_version: str, deployment: str):
+
+    def __init__(
+        self, api_key: SecretStr, endpoint: str, api_version: str, deployment: str
+    ) -> None:
         self.azure_openai_api_key: SecretStr = api_key
         self.azure_openai_endpoint: str = endpoint
         self.azure_openai_api_version: str = api_version

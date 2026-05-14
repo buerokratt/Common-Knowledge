@@ -14,7 +14,6 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-import pytest
 import requests
 
 from conftest import TEST_SCRAPPED_DIR
@@ -29,6 +28,7 @@ def _to_container(host_path: Path) -> str:
 # ---------------------------------------------------------------------------
 # Service availability
 # ---------------------------------------------------------------------------
+
 
 class TestServiceAvailability:
     def test_docs_endpoint_reachable(self, cleaning_url: str) -> None:
@@ -46,6 +46,7 @@ class TestServiceAvailability:
 # ---------------------------------------------------------------------------
 # /clean_file — validation
 # ---------------------------------------------------------------------------
+
 
 class TestCleanFileValidation:
     def test_empty_body_returns_422(self, cleaning_url: str) -> None:
@@ -109,6 +110,7 @@ class TestCleanFileValidation:
 # /clean_source_async — validation and async behaviour
 # ---------------------------------------------------------------------------
 
+
 class TestCleanSourceAsync:
     def test_empty_body_returns_422(self, cleaning_url: str) -> None:
         r = requests.post(f"{cleaning_url}/clean_source_async", json={}, timeout=10)
@@ -136,14 +138,18 @@ class TestCleanSourceAsync:
         }
 
         start = time.monotonic()
-        r = requests.post(f"{cleaning_url}/clean_source_async", json=payload, timeout=10)
+        r = requests.post(
+            f"{cleaning_url}/clean_source_async", json=payload, timeout=10
+        )
         elapsed = time.monotonic() - start
 
         assert r.status_code == 200
         body = r.json()
         assert body["status"] == "started"
         assert body["source_run_report_base_id"] == "report-001"
-        assert elapsed < 2.0, f"Async endpoint blocked for {elapsed:.2f}s — expected < 2s"
+        assert elapsed < 2.0, (
+            f"Async endpoint blocked for {elapsed:.2f}s — expected < 2s"
+        )
 
     def test_response_contains_source_run_report_base_id(
         self, cleaning_url: str, scrapped_dir: Path
@@ -155,6 +161,8 @@ class TestCleanSourceAsync:
             "logs_path": _to_container(scrapped_dir / "x.log"),
             "files": [],
         }
-        r = requests.post(f"{cleaning_url}/clean_source_async", json=payload, timeout=10)
+        r = requests.post(
+            f"{cleaning_url}/clean_source_async", json=payload, timeout=10
+        )
         assert r.status_code == 200
         assert r.json()["source_run_report_base_id"] == "my-report-id"

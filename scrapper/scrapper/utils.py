@@ -2,8 +2,10 @@ import contextlib
 import datetime
 import functools
 import typing
-import requests
+from collections.abc import Callable, Iterator
 from urllib.parse import urlparse
+
+import requests
 
 from scrapper.items import ScrappedItem
 
@@ -15,33 +17,39 @@ else:
 
 def send_error(
     ruuter_internal: str,
-    url: str, error_type: str, error_message: str,
-    source_base_id: str, agency_base_id: str, source_run_report_base_id: str
-):
+    url: str,
+    error_type: str,
+    error_message: str,
+    source_base_id: str,
+    agency_base_id: str,
+    source_run_report_base_id: str,
+) -> None:
     scraped_at = datetime.datetime.now(datetime.UTC).isoformat()
     requests.post(
-        f"{ruuter_internal}/ckb/reports/logs/add", json={
-            'url': url,
-            'scraped_at': scraped_at,
-            'error_type': error_type,
-            'error_message': error_message,
-            'source_base_id': source_base_id,
-            'agency_base_id': agency_base_id,
-            'source_run_report_base_id': source_run_report_base_id,
-        })
+        f"{ruuter_internal}/ckb/reports/logs/add",
+        json={
+            "url": url,
+            "scraped_at": scraped_at,
+            "error_type": error_type,
+            "error_message": error_message,
+            "source_base_id": source_base_id,
+            "agency_base_id": agency_base_id,
+            "source_run_report_base_id": source_run_report_base_id,
+        },
+    )
 
 
 @contextlib.contextmanager
-def catch_error(url, spider: BaseSpider):
+def catch_error(url: str, spider: BaseSpider) -> Iterator[None]:
     try:
         yield
     except Exception as e:
-        spider.log_error_to_source_run_page(url, 'scrapper', str(e))
+        spider.log_error_to_source_run_page(url, "scrapper", str(e))
 
 
-def catch_error_process_item(f):
+def catch_error_process_item(f: Callable) -> Callable:
     @functools.wraps(f)
-    def process_item(self, item, spider: BaseSpider):
+    def process_item(self: object, item: object, spider: BaseSpider) -> object:
         if not isinstance(spider, BaseSpider):
             return item
 
@@ -52,17 +60,18 @@ def catch_error_process_item(f):
         with catch_error(item.metadata.source_url, spider):
             r = f(self, item, spider)
         return r
+
     return process_item
 
 
-def catch_error_spider(f):
+def catch_error_spider(f: Callable) -> Callable:
     @functools.wraps(f)
-    def decorator(self, spider: BaseSpider):
+    def decorator(self: object, spider: BaseSpider) -> object:
         if not isinstance(spider, BaseSpider):
-            return
+            return None
 
         r = None
-        with catch_error('internal', spider):
+        with catch_error("internal", spider):
             r = f(self, spider)
         return r
 
@@ -72,11 +81,15 @@ def catch_error_spider(f):
 # Archive URL detection keywords in multiple languages
 ARCHIVE_KEYWORDS = [
     # Estonian
-    'arhiiv', 'arhiivi', 'archive',
+    "arhiiv",
+    "arhiivi",
+    "archive",
     # English
-    'archived', 'archives',
+    "archived",
+    "archives",
     # Russian transliteration
-    'arkhiv', 'arhiv',
+    "arkhiv",
+    "arhiv",
 ]
 
 
@@ -106,13 +119,13 @@ def is_archive_url(url: str) -> bool:
         parsed = urlparse(url.lower())
 
         # Check subdomain for archive keywords
-        hostname_parts = parsed.hostname.split('.') if parsed.hostname else []
+        hostname_parts = parsed.hostname.split(".") if parsed.hostname else []
         for part in hostname_parts:
             if any(keyword in part for keyword in ARCHIVE_KEYWORDS):
                 return True
 
         # Check path segments for archive keywords
-        path_parts = parsed.path.split('/')
+        path_parts = parsed.path.split("/")
         for part in path_parts:
             if any(keyword in part for keyword in ARCHIVE_KEYWORDS):
                 return True

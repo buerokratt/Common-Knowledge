@@ -1,27 +1,34 @@
+from collections.abc import AsyncIterator
+
 import requests
+from scrapy import Request
 from scrapy.http import Response
 
+from scrapper.items import ScrappedItem
 from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
 
 class UploadedFileSpider(SpecifiedPagesSpider):
-    name = 'uploaded_file'
+    name = "uploaded_file"
 
-    def get_meta(self):
+    def get_meta(self) -> dict:
         """
         Override to disable Playwright for uploaded files.
         Uploaded files from S3 should use direct HTTP download.
         """
         return {}
 
-    async def parse(self, response: Response, **kwargs):
+    async def parse(
+        self, response: Response, **kwargs: object
+    ) -> AsyncIterator[ScrappedItem | Request]:
+        assert response.request is not None
         base_id, _ = self.get_base_id_and_hash(response.request.url)
 
         requests.post(
             f"{self.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/delete-file-sync",
             json={
-                'source_file_id': base_id,
-            }
+                "source_file_id": base_id,
+            },
         )
 
         # async yield from super().parse(response, **kwargs)

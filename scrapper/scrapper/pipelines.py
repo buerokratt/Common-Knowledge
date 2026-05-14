@@ -8,7 +8,6 @@ import requests
 from pathlib import Path
 
 from itemadapter import ItemAdapter
-from scrapy import Spider
 
 from api.utils import get_path_for_task
 from scrapper.utils import catch_error_process_item, catch_error_spider
@@ -18,21 +17,23 @@ from api.models import BaseObject
 
 
 def get_path_for_scrapped_item(item: ScrappedItem, spider: BaseSpider) -> str:
-    scrapper_directory = spider.settings.get('SCRAPED_DIRECTORY', '/scrapped-data')
+    scrapper_directory = spider.settings.get("SCRAPED_DIRECTORY", "/scrapped-data")
 
     path = get_path_for_task(spider.task)
     source_file_path = item.source_file_id
+    if source_file_path is None:
+        raise ValueError("ScrappedItem.source_file_id must be set before this pipeline")
 
     return os.path.join(scrapper_directory, path, source_file_path)
 
 
 class CreateDirectoryPipeline:
     @catch_error_process_item
-    def process_item(self, item, spider: Spider):
+    def process_item(self, item: object, spider: BaseSpider) -> object:
         if not isinstance(item, ScrappedItem):
             return item
 
-        if not hasattr(spider, 'task'):
+        if not hasattr(spider, "task"):
             return item
 
         path = get_path_for_scrapped_item(item, spider)
@@ -45,14 +46,17 @@ class CreateDirectoryPipeline:
 
 class MetadataPipeline:
     @catch_error_process_item
-    def process_item(self, item, spider: Spider):
+    def process_item(self, item: object, spider: BaseSpider) -> object:
         if not isinstance(item, ScrappedItem):
             return item
 
-        filename = 'source.meta.json'
+        if item.path is None:
+            raise ValueError("ScrappedItem.path must be set before MetadataPipeline")
+
+        filename = "source.meta.json"
         full_path = os.path.join(item.path, filename)
 
-        with open(full_path, 'w') as f:
+        with open(full_path, "w") as f:
             json.dump(ItemAdapter(item.metadata).asdict(), f)
 
         item.metadata_path = full_path
@@ -60,23 +64,26 @@ class MetadataPipeline:
         r = requests.post(
             f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
-                'source_file_path': full_path,
-            }
+                "source_file_path": full_path,
+            },
         )
-        item.metadata_path_uploaded = r.json()['response']
+        item.metadata_path_uploaded = r.json()["response"]
 
         return item
 
 
 class FilePipeline:
     @catch_error_process_item
-    def process_item(self, item, spider: Spider):
+    def process_item(self, item: object, spider: BaseSpider) -> object:
         if not isinstance(item, ScrappedItem):
             return item
 
-        filename = f'source{item.file.extension}'
+        if item.path is None:
+            raise ValueError("ScrappedItem.path must be set before FilePipeline")
+
+        filename = f"source{item.file.extension}"
         full_path = os.path.join(item.path, filename)
-        with open(full_path, 'wb') as f:
+        with open(full_path, "wb") as f:
             f.write(item.file.body)
 
         item.file_path = full_path
@@ -84,54 +91,55 @@ class FilePipeline:
         r = requests.post(
             f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
-                'source_file_path': full_path,
-            }
+                "source_file_path": full_path,
+            },
         )
-        item.file_path_uploaded = r.json()['response']
+        item.file_path_uploaded = r.json()["response"]
 
         return item
 
 
 class TriggerCleaningPipeline:
     @catch_error_process_item
-    def process_item(self, item, spider: Spider):
-        if not hasattr(spider, 'report_id'):
+    def process_item(self, item: object, spider: BaseSpider) -> object:
+        if not hasattr(spider, "report_id"):
             return item
-        spider: BaseSpider
         if not isinstance(item, ScrappedItem):
             return item
 
         # Skip cleaning trigger for initial scrape
-        if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
+        if hasattr(spider.task, "is_initial_scrape") and spider.task.is_initial_scrape:
             return item
 
         # Get quality_control from task (passed through pipeline)
-        quality_control = getattr(spider.task, 'quality_control', None)
-        
+        quality_control = getattr(spider.task, "quality_control", None)
+
         # Compute quality control flags
-        use_llm = quality_control in ('basic', 'comprehensive')
-        use_llm_correction = quality_control == 'comprehensive'
-        
+        use_llm = quality_control in ("basic", "comprehensive")
+        use_llm_correction = quality_control == "comprehensive"
+
         # DEBUG: Log computed values
-        spider.logger.info(f'[DEBUG] TriggerCleaningPipeline - quality_control={quality_control}, use_llm={use_llm}, use_llm_correction={use_llm_correction}')
+        spider.logger.info(
+            f"[DEBUG] TriggerCleaningPipeline - quality_control={quality_control}, use_llm={use_llm}, use_llm_correction={use_llm_correction}"
+        )
 
         path = get_logs_path_for_cleaning(spider)
 
         requests.post(
             f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/clean-scraped-file",
             json={
-                'logs_path': path,
-                'file_path': item.file_path,
-                'meta_data_path': item.metadata_path,
-                'directory_path': item.path,
-                'source_file_id': item.source_file_id,
-                'url': item.metadata.source_url,
-                'source_base_id': spider.task.source_id,
-                'agency_base_id': spider.task.agency_id,
-                'source_run_report_base_id': spider.report_id,
-                'use_llm': use_llm,
-                'use_llm_correction': use_llm_correction,
-            }
+                "logs_path": path,
+                "file_path": item.file_path,
+                "meta_data_path": item.metadata_path,
+                "directory_path": item.path,
+                "source_file_id": item.source_file_id,
+                "url": item.metadata.source_url,
+                "source_base_id": spider.task.source_id,
+                "agency_base_id": spider.task.agency_id,
+                "source_run_report_base_id": spider.report_id,
+                "use_llm": use_llm,
+                "use_llm_correction": use_llm_correction,
+            },
         )
 
         return item
@@ -139,8 +147,8 @@ class TriggerCleaningPipeline:
 
 class CreateSourceFile:
     @catch_error_process_item
-    def process_item(self, item, spider: Spider):
-        if not hasattr(spider, 'task'):
+    def process_item(self, item: object, spider: BaseSpider) -> object:
+        if not hasattr(spider, "task"):
             return item
 
         if not isinstance(item, ScrappedItem):
@@ -149,168 +157,185 @@ class CreateSourceFile:
         if item.source_file_id is not None:
             return item
 
-        spider: BaseSpider
         task: BaseObject = spider.task
 
-        res = requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/add-scrapped-file', json={
-            'agency_id': task.agency_id,
-            'source_id': task.source_id,
-            'url': item.metadata.source_url,
-            'page_title': item.metadata.page_title,
-            'original_data_hash': item.hash,
-            'scraped_at': item.metadata.created_at,
-            'external_id': item.metadata.external_id,
-            'type': 'api_file' if spider.task.__class__.__name__ == 'EestiScrapperTask' else 'scraped_file'
-
-        })
-        item.source_file_id = res.json()['response']
+        res = requests.post(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/add-scrapped-file",
+            json={
+                "agency_id": task.agency_id,
+                "source_id": task.source_id,
+                "url": item.metadata.source_url,
+                "page_title": item.metadata.page_title,
+                "original_data_hash": item.hash,
+                "scraped_at": item.metadata.created_at,
+                "external_id": item.metadata.external_id,
+                "type": "api_file"
+                if spider.task.__class__.__name__ == "EestiScrapperTask"
+                else "scraped_file",
+            },
+        )
+        item.source_file_id = res.json()["response"]
         return item
 
 
 class UpdateSourceFile:
     @catch_error_process_item
-    def process_item(self, item, spider: Spider):
+    def process_item(self, item: object, spider: BaseSpider) -> object:
         if not isinstance(item, ScrappedItem):
             return item
-            
-        # Set file status to 'cleaning' for normal flow, 'in_review' for initial scrape
-        file_status = 'cleaning'
-        if hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape:
-            file_status = 'in_review'
-        
 
-        requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file', json={
-            'base_id': item.source_file_id,
-            'url': item.metadata.source_url,
-            'page_title': item.metadata.page_title,
-            'original_data_url': item.file_path_uploaded,
-            'original_metadata_url': item.metadata_path_uploaded,
-            'original_data_hash': item.hash,
-            'scraped_at': item.metadata.created_at,
-            'external_id': item.metadata.external_id,
-            'status': file_status
-        })
+        # Set file status to 'cleaning' for normal flow, 'in_review' for initial scrape
+        file_status = "cleaning"
+        if hasattr(spider.task, "is_initial_scrape") and spider.task.is_initial_scrape:
+            file_status = "in_review"
+
+        requests.post(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file",
+            json={
+                "base_id": item.source_file_id,
+                "url": item.metadata.source_url,
+                "page_title": item.metadata.page_title,
+                "original_data_url": item.file_path_uploaded,
+                "original_metadata_url": item.metadata_path_uploaded,
+                "original_data_hash": item.hash,
+                "scraped_at": item.metadata.created_at,
+                "external_id": item.metadata.external_id,
+                "status": file_status,
+            },
+        )
         return item
 
 
 class ScrappingFinishedPipeline:
     @catch_error_spider
-    def close_spider(self, spider: Spider):
-        if not hasattr(spider, 'task'):
+    def close_spider(self, spider: BaseSpider) -> None:
+        if not hasattr(spider, "task"):
             return
 
-        spider: BaseSpider
         task: BaseObject = spider.task
 
         # Check if the source was manually stopped
         source_resp = requests.get(
             f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
-            params={'baseId': task.source_id}
+            params={"baseId": task.source_id},
         ).json()
-        
-        is_stopping = source_resp['response'][0].get('isStopping', False)
-        spider.logger.info(f'is_stopping: {is_stopping}')
 
+        is_stopping = source_resp["response"][0].get("isStopping", False)
+        spider.logger.info(f"is_stopping: {is_stopping}")
 
         # If stopped manually, force status to 'finished' regardless of initial/refresh state
         if is_stopping:
-            requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
-                'sourceId': task.source_id,
-                'agencyId': task.agency_id,
-            })
+            requests.post(
+                f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty",
+                json={
+                    "sourceId": task.source_id,
+                    "agencyId": task.agency_id,
+                },
+            )
             return
 
         # After all files are scraped, update source status to in_review for initial scrape
-        if hasattr(task, 'is_initial_scrape') and task.is_initial_scrape:
-            requests.post(f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status", json={
-                'source_id': task.source_id,
-                'status': 'in_review',
-            })
+        if hasattr(task, "is_initial_scrape") and task.is_initial_scrape:
+            requests.post(
+                f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status",
+                json={
+                    "source_id": task.source_id,
+                    "status": "in_review",
+                },
+            )
             return
-        
-        requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty', json={
-            'sourceId': task.source_id,
-            'agencyId': task.agency_id,
-        })
+
+        requests.post(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty",
+            json={
+                "sourceId": task.source_id,
+                "agencyId": task.agency_id,
+            },
+        )
 
 
 class SetSourceStatusRunningPipeline:
     @catch_error_spider
-    def open_spider(self, spider: Spider):
-        
-        if not hasattr(spider, 'task'):
+    def open_spider(self, spider: BaseSpider) -> None:
+        if not hasattr(spider, "task"):
             return
 
-        spider: BaseSpider
         task: BaseObject = spider.task
 
         # Skip updating source status for manual file refresh (ignore_stopping flag)
         # This prevents clearing is_stopping flag when refreshing individual files
-        if hasattr(task, 'ignore_stopping') and task.ignore_stopping:
+        if hasattr(task, "ignore_stopping") and task.ignore_stopping:
             return
 
-        requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status', json={
-            'source_id': task.source_id,
-            'status': 'running',
-        })
+        requests.post(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status",
+            json={
+                "source_id": task.source_id,
+                "status": "running",
+            },
+        )
 
 
 class CreateSourceRunReportPipeline:
     @catch_error_spider
-    def open_spider(self, spider: Spider):
-        if not hasattr(spider, 'task'):
+    def open_spider(self, spider: BaseSpider) -> None:
+        if not hasattr(spider, "task"):
             return
 
         task: BaseObject = spider.task
 
         agency_name = requests.get(
-            f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/get',
-            params={'baseId': task.agency_id}
-        ).json()['response'][0]['name']
-        spider.logger.info(f'agency_name: {agency_name}')
-        
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/get",
+            params={"baseId": task.agency_id},
+        ).json()["response"][0]["name"]
+        spider.logger.info(f"agency_name: {agency_name}")
+
         source_data = requests.get(
-            f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get',
-            params={'baseId': task.source_id}
-        ).json()['response'][0]
-        url = source_data['url']
-        
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
+            params={"baseId": task.source_id},
+        ).json()["response"][0]
+        url = source_data["url"]
+
         # Set quality_control on task for use in TriggerCleaningPipeline
-        spider.task.quality_control = source_data.get('qualityControl')
-        spider.logger.info(f'[DEBUG] CreateSourceRunReportPipeline - Set quality_control={spider.task.quality_control} on task')
+        spider.task.quality_control = source_data.get("qualityControl")
+        spider.logger.info(
+            f"[DEBUG] CreateSourceRunReportPipeline - Set quality_control={spider.task.quality_control} on task"
+        )
 
-
-        report_id = requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/add', json={
-            'agencyBaseId': task.agency_id,
-            'sourceBaseId': task.source_id,
-            'agencyName': agency_name,
-            'url': url,
-            'scrapingStartedAt': datetime.datetime.now(datetime.UTC).isoformat(),
-            'scrapingFinishedAt': None,
-            'error': 0,
-            'scrapingLogUrl': None,
-            'cleaningLogUrl': None
-        }).json()['response'][0]['baseId']
+        report_id = requests.post(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/add",
+            json={
+                "agencyBaseId": task.agency_id,
+                "sourceBaseId": task.source_id,
+                "agencyName": agency_name,
+                "url": url,
+                "scrapingStartedAt": datetime.datetime.now(datetime.UTC).isoformat(),
+                "scrapingFinishedAt": None,
+                "error": 0,
+                "scrapingLogUrl": None,
+                "cleaningLogUrl": None,
+            },
+        ).json()["response"][0]["baseId"]
 
         spider.report_id = report_id
 
 
-def get_logs_path_for_scraper(spider: BaseSpider):
-    scrapper_directory = spider.settings.get('SCRAPED_DIRECTORY', '/scrapped-data')
-    path = f'logs/scraper/{spider.report_id}.log'
+def get_logs_path_for_scraper(spider: BaseSpider) -> str:
+    scrapper_directory = spider.settings.get("SCRAPED_DIRECTORY", "/scrapped-data")
+    path = f"logs/scraper/{spider.report_id}.log"
     return os.path.join(scrapper_directory, path)
 
 
-def get_logs_path_for_cleaning(spider: BaseSpider):
-    scrapper_directory = spider.settings.get('SCRAPED_DIRECTORY', '/scrapped-data')
-    path = f'logs/cleaning/{spider.report_id}.log'
+def get_logs_path_for_cleaning(spider: BaseSpider) -> str:
+    scrapper_directory = spider.settings.get("SCRAPED_DIRECTORY", "/scrapped-data")
+    path = f"logs/cleaning/{spider.report_id}.log"
     return os.path.join(scrapper_directory, path)
 
 
 class InitLoggingPipeline:
     @catch_error_spider
-    def open_spider(self, spider: Spider | BaseSpider):
-        if not hasattr(spider, 'report_id') or spider.report_id is None:
+    def open_spider(self, spider: BaseSpider) -> None:
+        if not hasattr(spider, "report_id") or spider.report_id is None:
             return
 
         path = get_logs_path_for_scraper(spider)
@@ -334,47 +359,57 @@ class InitLoggingPipeline:
 
 class UploadLogsPipeline:
     @catch_error_spider
-    def close_spider(self, spider: Spider):
-        if not hasattr(spider, 'report_id'):
+    def close_spider(self, spider: BaseSpider) -> None:
+        if not hasattr(spider, "report_id"):
             return
-
-        spider: BaseSpider
 
         path = get_logs_path_for_scraper(spider)
         r = requests.post(
             f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
-                'source_file_path': path,
-            }
+                "source_file_path": path,
+            },
         )
-        scraping_log_url = r.json()['response']
+        scraping_log_url = r.json()["response"]
         os.remove(path)
 
-        is_initial_scrape = hasattr(spider, 'task') and hasattr(spider.task, 'is_initial_scrape') and spider.task.is_initial_scrape
+        is_initial_scrape = (
+            hasattr(spider, "task")
+            and hasattr(spider.task, "is_initial_scrape")
+            and spider.task.is_initial_scrape
+        )
 
         if is_initial_scrape:
             # Only send scrapingLogUrl in report update
-            requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update', json={
-                'baseId': spider.report_id,
-                'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
-                'scrapingLogUrl': scraping_log_url,
-                'cleaningLogUrl': "",
-            })
+            requests.post(
+                f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update",
+                json={
+                    "baseId": spider.report_id,
+                    "scrapingFinishedAt": datetime.datetime.now(
+                        datetime.UTC
+                    ).isoformat(),
+                    "scrapingLogUrl": scraping_log_url,
+                    "cleaningLogUrl": "",
+                },
+            )
             return
 
         path = get_logs_path_for_cleaning(spider)
         r = requests.post(
             f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
-                'source_file_path': path,
-            }
+                "source_file_path": path,
+            },
         )
-        cleaning_log_url = r.json()['response']
+        cleaning_log_url = r.json()["response"]
         os.remove(path)
 
-        requests.post(f'{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update', json={
-            'baseId': spider.report_id,
-            'scrapingFinishedAt': datetime.datetime.now(datetime.UTC).isoformat(),
-            'scrapingLogUrl': scraping_log_url,
-            'cleaningLogUrl': cleaning_log_url,
-        })
+        requests.post(
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update",
+            json={
+                "baseId": spider.report_id,
+                "scrapingFinishedAt": datetime.datetime.now(datetime.UTC).isoformat(),
+                "scrapingLogUrl": scraping_log_url,
+                "cleaningLogUrl": cleaning_log_url,
+            },
+        )

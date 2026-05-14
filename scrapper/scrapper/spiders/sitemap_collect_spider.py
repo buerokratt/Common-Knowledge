@@ -1,133 +1,66 @@
-from functools import cache
+from collections.abc import AsyncIterator
 from urllib.parse import urljoin, urlparse
 
 from scrapy import Request
 from scrapy.http import Response
 
 from api.models import SitemapCollectScrapperTask
+from scrapper.items import ScrappedItem
 from scrapper.spiders.base_spider import BaseSpider
 from scrapper.utils import is_archive_url
 
 
 class SitemapCollectSpider(BaseSpider):
-    name = 'sitemap_collect_spider'
-    # start_urls = ['https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf']
-    # start_urls = ['https://calibre-ebook.com/downloads/demos/demo.docx']
-    start_urls = [
-        # "https://www.terviseamet.ee",
-        # "https://www.tervisekassa.ee",
-        # "https://www.ravimiamet.ee",
-        # "https://www.sm.ee",
-        # "https://www.sotsiaalkindlustusamet.ee",
-        # "https://www.tootukassa.ee",
-        # "https://elron.ee/",
-        # "https://www.transpordiamet.ee",
-        # "https://www.airport.ee",
-        # "https://www.ts.ee",??????????????
-        # "https://www.lkf.ee/et",
-        #  "https://www.fi.ee",
-        #  "https://www.eestipank.ee",
-        #  "https://www.kredex.ee",
-        #  "https://www.emta.ee",
-        #  "https://www.fin.ee",
-        #     "https://www.ti.ee",
-        #     "https://www.eakl.ee",
-        #     "https://www.tooelu.ee",
-        #     "https://www.minukarjaar.ee",
-        #     "https://www.just.ee",
-        #     "https://www.notar.ee",
-        #     "https://www.kohus.ee",
-        #     "https://www.kpkoda.ee",
-        #     "https://www.riigiteataja.ee",
-        #     "https://www.korruptsioon.ee",
-        #     "https://www.maaamet.ee",
-        #     "https://www.tallinn.ee/et/ehitus",
-        #     "https://www.hm.ee",
-        #     "https://www.harno.ee",
-        #     "https://www.politsei.ee",
-        #     "https://www.valimised.ee",
-        #     "https://integratsioon.ee/",
-        #     "https://www.siseministeerium",
-        #     "https://www.tja.ee",
-        #     "https://www.kaitseministeerium.ee",
-        #     "https://www.mil.ee",
-        #     "https://www.kaitseliit.ee",
-        #     "https://www.kriis.ee",
-        #     "https://www.rescue.ee",
-        #     "https://www.kapo.ee",
-        #     "https://www.kul.ee",
-        #     "https://www.kik.ee",
-        #     "https://www.envir.ee",
-        #     "https://www.keskkonnaagentuur.ee",
-        #     "https://www.keskkonnaamet.ee",
-        #     "https://www.pria.ee",
-        #     "https://www.agri.ee",
-        #     "https://www.peaasi.ee",
-        #     "https://www.lasteabi.ee",
-        #     "https://www.vaimnetervis.ee",
-        #     "https://koolirahu.lastekaitseliit.ee/et/",
-        #     "https://www.itvaatlik.ee",
-        #     "https://www.riigikogu.ee",
-        #     "https://www.muinsuskaitseamet.ee",
-        #     "https://www.eesti.ee",
-        #     "https://www.epa.ee",
-    ]
+    name = "sitemap_collect_spider"
 
-    # custom_settings = {
-    #     'ROBOTSTXT_OBEY': False
-    # }
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
+        super().__init__(name, **kwargs)
+        self.visited_urls: set[str] = set()
+        self.scraped_urls: set[str] = set()
+        self.hashes: set[str] = set()
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.visited_urls = set()
-        self.scraped_urls = set()
-        self.hashes = set()
+        task = kwargs.get("task")
+        if isinstance(task, SitemapCollectScrapperTask):
+            self.task = task
+            self.start_urls = [task.url.unicode_string()]
 
-        if isinstance(kwargs.get('task'), SitemapCollectScrapperTask):
-            self.task: SitemapCollectScrapperTask = kwargs.get('task')
-            self.start_urls = [self.task.url.unicode_string()]
+        self.pure_allowed_domains = [
+            self.get_pure_domain(url) for url in self.start_urls
+        ]
+        self.scope_roots = [
+            (self._normalize_host(url), self._normalize_path(url))
+            for url in self.start_urls
+        ]
 
     def get_pure_domain(self, url: str) -> str:
         parsed_url = urlparse(url)
         netloc = parsed_url.netloc
         if netloc is None:
-            return ''
+            return ""
 
-        return '.'.join(netloc.split('.')[-2:])
+        return ".".join(netloc.split(".")[-2:])
 
     @staticmethod
     def _normalize_host(url: str) -> str:
-        host = (urlparse(url).hostname or '').lower()
-        if host.startswith('www.'):
+        host = (urlparse(url).hostname or "").lower()
+        if host.startswith("www."):
             return host[4:]
         return host
 
     @staticmethod
     def _normalize_path(url: str) -> str:
-        path = urlparse(url).path or '/'
-        if path != '/':
-            path = path.rstrip('/')
-        return path or '/'
+        path = urlparse(url).path or "/"
+        if path != "/":
+            path = path.rstrip("/")
+        return path or "/"
 
     @staticmethod
     def _is_path_in_scope(candidate_path: str, scope_path: str) -> bool:
-        if scope_path == '/':
+        if scope_path == "/":
             return True
-        return candidate_path == scope_path or candidate_path.startswith(f'{scope_path}/')
-
-    @property
-    @cache
-    def pure_allowed_domains(self):
-        pure_domains = [self.get_pure_domain(url) for url in self.start_urls]
-        return pure_domains
-
-    @property
-    @cache
-    def scope_roots(self) -> list[tuple[str, str]]:
-        return [
-            (self._normalize_host(url), self._normalize_path(url))
-            for url in self.start_urls
-        ]
+        return candidate_path == scope_path or candidate_path.startswith(
+            f"{scope_path}/"
+        )
 
     def is_in_scope(self, url: str) -> bool:
         candidate_host = self._normalize_host(url)
@@ -140,53 +73,75 @@ class SitemapCollectSpider(BaseSpider):
                 return True
         return False
 
-    async def parse(self, response: Response, **kwargs):
-        async for scrapped_item in super().parse(response, **kwargs):
-            if response.status is None or response.status >= 300 or response.status < 200:
+    async def parse(
+        self, response: Response, **kwargs: object
+    ) -> AsyncIterator[ScrappedItem | Request]:
+        assert response.request is not None
+        request = response.request
+        async for item in super().parse(response, **kwargs):
+            if not isinstance(item, ScrappedItem):
+                yield item
+                continue
+            scrapped_item: ScrappedItem = item
+            if (
+                response.status is None
+                or response.status >= 300
+                or response.status < 200
+            ):
                 continue
 
             if response.url in self.scraped_urls:
                 continue
 
-            self.visited_urls.add(response.request.url)
+            self.visited_urls.add(request.url)
             self.visited_urls.add(response.url)
 
-            self.scraped_urls.add(response.request.url)
+            self.scraped_urls.add(request.url)
             self.scraped_urls.add(response.url)
 
             if not self.is_in_scope(response.url):
                 continue
 
-            if scrapped_item.metadata.file_type not in self.settings.get('ALLOWED_FILETYPES'):
+            if scrapped_item.metadata.file_type not in self.settings.get(
+                "ALLOWED_FILETYPES"
+            ):
                 self.logger.info(
-                    f'Skipping {scrapped_item.metadata.source_url} because file type '
-                    f'is {scrapped_item.metadata.file_type} and it is not allowed')
+                    f"Skipping {scrapped_item.metadata.source_url} because file type "
+                    f"is {scrapped_item.metadata.file_type} and it is not allowed"
+                )
                 continue
 
             if scrapped_item.hash in self.hashes:
                 self.logger.info(
-                    f'Skipping {scrapped_item.metadata.source_url} because no new content was found '
-                    f'and it was already scraped'
+                    f"Skipping {scrapped_item.metadata.source_url} because no new content was found "
+                    f"and it was already scraped"
                 )
             self.hashes.add(scrapped_item.hash)
 
             yield scrapped_item
 
-            if scrapped_item.metadata.file_type != '.html':
+            if scrapped_item.metadata.file_type != ".html":
                 continue
 
             # Use rendered HTML for link extraction if available (for SPAs)
-            rendered_html = response.meta.get('rendered_html')
+            rendered_html = response.meta.get("rendered_html")
             if rendered_html:
-                from bs4 import BeautifulSoup
-                soup = BeautifulSoup(rendered_html, 'lxml')
-                links = [a.get('href') for a in soup.find_all('a', href=True)]
+                from bs4 import BeautifulSoup, Tag
+
+                soup = BeautifulSoup(rendered_html, "lxml")
+                links = [
+                    a.get("href")
+                    for a in soup.find_all("a", href=True)
+                    if isinstance(a, Tag)
+                ]
             else:
                 links = response.css("a::attr(href)").getall()
 
             for href in links:
+                if not isinstance(href, str):
+                    continue
                 next_url = urljoin(response.url, href)
-                next_url = next_url.split('#')[0]
+                next_url = next_url.split("#")[0]
 
                 # Only follow links within the crawl scope defined by is_in_scope (rooted at start_urls host/path)
                 if not self.is_in_scope(next_url):
@@ -194,13 +149,16 @@ class SitemapCollectSpider(BaseSpider):
 
                 # Skip archive URLs
                 if is_archive_url(next_url):
-                    self.logger.info(f'Skipping archive URL: {next_url}')
+                    self.logger.info(f"Skipping archive URL: {next_url}")
                     continue
 
                 if next_url not in self.visited_urls:
                     self.visited_urls.add(next_url)
-                    self.logger.info(f'Schedule scrape for url: {next_url}')
+                    self.logger.info(f"Schedule scrape for url: {next_url}")
                     yield Request(
-                        next_url, callback=self.parse, errback=self.errback,
-                        meta=self.get_meta(), headers=self.get_headers()
+                        next_url,
+                        callback=self.parse,
+                        errback=self.errback,
+                        meta=self.get_meta(),
+                        headers=self.get_headers(),
                     )
