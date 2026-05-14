@@ -165,15 +165,55 @@ Get specific source details.
 #### POST /ckb/source/add
 Create new data source.
 
+**Behavior:** Triggers first-time scraping via sitemap collect (`is_initial_scrape: true`), then pauses before cleaning, sets source and source_files state to `in_review`, and waits for user action from Start Cleaning.
+
 **Request Body:**
 ```json
 {
-  "agency_base_id": "uuid",
+  "agencyBaseId": "uuid",
   "url": "https://example.com",
   "subsector": "string",
   "type": "url_to_scrape",
-  "update_automatically": true,
-  "cron_schedule": "0 */6 * * *"
+  "qualityControl": "basic"
+}
+```
+
+**`qualityControl` values:**
+- `"basic"` - enable LLM extraction checks
+- `"comprehensive"` - enable LLM extraction + correction
+- `null` or omitted - no LLM quality control
+
+**Narrowed scraping rule (single URL):** For single-URL narrowed scraping (for example via source-file refresh), scraping is limited to the given URL scope and its subdomains/subpages under it.
+
+
+#### POST /ckb/source/add-with-url-list
+Create a source from a pre-selected URL list and trigger scraping for the explicitly specified URLs.
+
+**Selected URL list scope rule:** Only the URLs provided in `urls` are scraped.
+
+**Request Body:**
+```json
+{
+  "agencyBaseId": "uuid",
+  "url": "https://example.com",
+  "subsector": "string",
+  "type": "specified",
+  "qualityControl": "basic",
+  "urls": [
+    { "url": "https://page-1" },
+    { "url": "https://page-2" }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "source": {
+    "baseId": "uuid"
+  },
+  "urls_count": 2,
+  "scraping_triggered": true
 }
 ```
 
@@ -208,6 +248,11 @@ Trigger source scraping.
   "base_id": "uuid"
 }
 ```
+
+**Behavior by source type:**
+- `pre_selected_urls` -> refreshes eligible source files and triggers specified-pages pipeline
+- `api` -> triggers API scraping pipeline
+- other web sources -> triggers entire-source pipeline
 
 #### POST /ckb/source/stop
 Stop source processing.
@@ -299,6 +344,61 @@ Add uploaded files to a source.
 ```
 
 **Note:** The `uploaded_by` field is automatically populated from the JWT cookie (user's `idCode`).
+
+#### POST /ckb/source-file/refresh
+Refresh (re-scrape) one source file by `baseId`.
+
+**Request Body:**
+```json
+{
+  "baseId": "uuid"
+}
+```
+
+#### POST /ckb/source-file/refresh-multiple
+Refresh (re-scrape) multiple source files in one request.
+
+**Request Body:**
+```json
+{
+  "baseIds": ["uuid1", "uuid2", "uuid3"]
+}
+```
+
+**Behavior:**
+- If files are API-backed, triggers the API specified-files pipeline
+- Otherwise, triggers specified-pages pipeline
+
+
+#### POST /ckb/source-file/bulk-exclude
+Bulk include/exclude source files.
+
+**Request Body:**
+```json
+{
+  "baseIds": ["uuid1", "uuid2"],
+  "excluded": true
+}
+```
+
+**Behavior:**
+- Updates exclusion status in DB
+- Moves corresponding files between include/exclude S3 paths
+
+#### POST /ckb/source-file/bulk-remove
+Bulk delete source files.
+
+**Request Body:**
+```json
+{
+  "baseIds": ["uuid1", "uuid2"]
+}
+```
+
+**Behavior:**
+- is_deleted value updates to true in DB as a new row.
+- Removes indexed documents from search in bulk
+- Triggers async S3 deletion task
 
 #### POST /ckb/source-file/get-upload-urls
 Get presigned upload URLs.
