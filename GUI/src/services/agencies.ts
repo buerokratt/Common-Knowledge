@@ -9,7 +9,6 @@ export interface Agency {
   updatedAt: string;
   page: string;
   totalPages: number;
-  externalId?: string; // Added for edit functionality
 }
 
 export interface ApiResponse {
@@ -34,7 +33,6 @@ export interface AgencyListParams {
 export interface CreateAgencyRequest {
   name: string;
   sector: string;
-  externalId: string;
 }
 
 export interface CreateAgencyResponse {
@@ -42,7 +40,6 @@ export interface CreateAgencyResponse {
   baseId: string;
   name: string;
   sector: string;
-  externalId: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -51,7 +48,6 @@ export interface CreateAgencyResponse {
 export interface UpdateAgencyRequest {
   name: string;
   sector: string;
-  externalId: string;
 }
 
 // Get all agencies
@@ -102,7 +98,6 @@ export const createAgency = async (
   const response = await apiDev.post('/agency/add', {
     name: params.name,
     sector: params.sector,
-    externalId: params.externalId,
   });
   const apiResponse: ApiResponse = response.data;
 
@@ -118,7 +113,6 @@ export const updateAgency = async (
     baseId: baseId,
     name: data.name,
     sector: data.sector,
-    externalId: data.externalId,
   });
 
   const apiResponse: ApiResponse = response.data;
