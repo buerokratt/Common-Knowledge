@@ -101,8 +101,8 @@ services:
   cleaning-server-test:
     container_name: cleaning-server-test
     build:
-      context: ./cleaning
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: cleaning/Dockerfile
     ports:
       - "18001:8123"
     volumes:

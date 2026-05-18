@@ -1,4 +1,6 @@
 import datetime
+from collections.abc import Iterator
+
 import requests
 
 from api.models import EntireSourceScrapperTask, LinkToScrape
@@ -6,35 +8,35 @@ from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
 
 class EntireSourceSpider(SpecifiedPagesSpider):
+    name = "entire_source_spider"
 
-    name = 'entire_source_spider'
-
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        if isinstance(kwargs.get('task'), EntireSourceScrapperTask):
-            self.task: EntireSourceScrapperTask = kwargs.get('task')
+    def __init__(self, name: str | None = None, **kwargs: object) -> None:
+        super().__init__(name, **kwargs)
+        task = kwargs.get("task")
+        if isinstance(task, EntireSourceScrapperTask):
+            self.task = task
             self.url_iter = self.urls_iter_impl()
-            self.start_urls = self.start_url_impl()
+            self.start_urls = list(self.start_url_impl())
             self.urls = []
 
-    def start_url_impl(self):
+    def start_url_impl(self) -> Iterator[str]:
         yield next(self.url_iter)
 
-    def urls_iter_impl(self):
+    def urls_iter_impl(self) -> Iterator[str]:
         scrapped_before = datetime.datetime.now(datetime.UTC).isoformat()
 
         while True:
             result = requests.get(
                 f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/get-one-source-file-to-scrape",
                 params={
-                    'source_id': self.task.source_id,
-                    'reference_time': scrapped_before,
-                }
+                    "source_id": self.task.source_id,
+                    "reference_time": scrapped_before,
+                },
             )
-            if len(result.json()['response']) == 0:
+            if len(result.json()["response"]) == 0:
                 return
 
-            link = LinkToScrape(**result.json()['response'][0])
+            link = LinkToScrape(**result.json()["response"][0])
 
             self.urls.append(link)
 

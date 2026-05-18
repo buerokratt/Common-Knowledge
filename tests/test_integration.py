@@ -31,7 +31,10 @@ from conftest import (
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _clean_file(cleaning_url: str, payload: dict, timeout: int = 120) -> requests.Response:
+
+def _clean_file(
+    cleaning_url: str, payload: dict, timeout: int = 120
+) -> requests.Response:
     return requests.post(f"{cleaning_url}/clean_file", json=payload, timeout=timeout)
 
 
@@ -53,17 +56,22 @@ def _new_calls_since(mock_ruuter_url: str, before: int) -> list[dict]:
 # HTML — no LLM path
 # ---------------------------------------------------------------------------
 
-class TestHTMLCleaningNoLLM:
 
+class TestHTMLCleaningNoLLM:
     def test_article_with_main_returns_200(
         self, cleaning_url: str, scrapped_dir: Path
     ) -> None:
         fixture = (FIXTURES_DIR / "html" / "article_with_main.html").read_text()
         file_path, meta_path = write_test_file(
-            scrapped_dir, fixture, "source.html", ".html",
+            scrapped_dir,
+            fixture,
+            "source.html",
+            ".html",
             url="https://example.com/pension",
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
         assert r.json()["status"] == "ok"
 
@@ -74,7 +82,9 @@ class TestHTMLCleaningNoLLM:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
         cleaned = scrapped_dir / "cleaned.txt"
@@ -89,7 +99,9 @@ class TestHTMLCleaningNoLLM:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
 
         content = (scrapped_dir / "cleaned.txt").read_text()
         assert "pension" in content.lower() or "retirement" in content.lower()
@@ -105,11 +117,13 @@ class TestHTMLCleaningNoLLM:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
 
         content = (scrapped_dir / "cleaned.txt").read_text()
         assert "<h1>" not in content, "Raw HTML h1 tag found in output"
-        assert "<p>" not in content,  "Raw HTML p tag found in output"
+        assert "<p>" not in content, "Raw HTML p tag found in output"
 
     def test_no_triple_newlines_in_output(
         self, cleaning_url: str, scrapped_dir: Path
@@ -118,7 +132,9 @@ class TestHTMLCleaningNoLLM:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert "\n\n\n" not in (scrapped_dir / "cleaned.txt").read_text()
 
     def test_article_without_main_succeeds(
@@ -128,7 +144,9 @@ class TestHTMLCleaningNoLLM:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
         content = (scrapped_dir / "cleaned.txt").read_text()
@@ -143,8 +161,9 @@ class TestHTMLCleaningNoLLM:
         )
         r = _clean_file(
             cleaning_url,
-            make_entity_payload(file_path, meta_path, scrapped_dir,
-                                  url="https://example.com/tax"),
+            make_entity_payload(
+                file_path, meta_path, scrapped_dir, url="https://example.com/tax"
+            ),
         )
         assert r.status_code == 200
 
@@ -153,8 +172,8 @@ class TestHTMLCleaningNoLLM:
 # Metadata assertions
 # ---------------------------------------------------------------------------
 
-class TestMetadata:
 
+class TestMetadata:
     def test_cleaned_flag_set_inside_metadata_key(
         self, cleaning_url: str, scrapped_dir: Path
     ) -> None:
@@ -162,7 +181,9 @@ class TestMetadata:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
         meta = json.loads((scrapped_dir / "cleaned.meta.json").read_text())
@@ -180,7 +201,9 @@ class TestMetadata:
         original_meta["language"] = "et"
         meta_path.write_text(json.dumps(original_meta))
 
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
         meta = json.loads((scrapped_dir / "cleaned.meta.json").read_text())
@@ -196,8 +219,8 @@ class TestMetadata:
 # Mock Ruuter call verification
 # ---------------------------------------------------------------------------
 
-class TestRuuterInteraction:
 
+class TestRuuterInteraction:
     def test_two_upload_calls_and_one_update_per_file(
         self, cleaning_url: str, mock_ruuter_url: str, scrapped_dir: Path
     ) -> None:
@@ -207,7 +230,9 @@ class TestRuuterInteraction:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
         calls = _get_calls(mock_ruuter_url)
@@ -226,16 +251,22 @@ class TestRuuterInteraction:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
-        uploads = [c for c in _get_calls(mock_ruuter_url) if "upload-file-sync" in c["path"]]
+        uploads = [
+            c for c in _get_calls(mock_ruuter_url) if "upload-file-sync" in c["path"]
+        ]
         uploaded_paths = [c["body"].get("source_file_path", "") for c in uploads]
 
-        assert any("cleaned.txt" in p for p in uploaded_paths), \
+        assert any("cleaned.txt" in p for p in uploaded_paths), (
             f"cleaned.txt not found in upload paths: {uploaded_paths}"
-        assert any("cleaned.meta.json" in p for p in uploaded_paths), \
+        )
+        assert any("cleaned.meta.json" in p for p in uploaded_paths), (
             f"cleaned.meta.json not found in upload paths: {uploaded_paths}"
+        )
 
     def test_update_call_contains_correct_base_id(
         self, cleaning_url: str, mock_ruuter_url: str, scrapped_dir: Path
@@ -246,10 +277,14 @@ class TestRuuterInteraction:
         file_path, meta_path = write_test_file(
             scrapped_dir, fixture, "source.html", ".html"
         )
-        r = _clean_file(cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir))
+        r = _clean_file(
+            cleaning_url, make_entity_payload(file_path, meta_path, scrapped_dir)
+        )
         assert r.status_code == 200
 
-        updates = [c for c in _get_calls(mock_ruuter_url) if "update-cleaned-file" in c["path"]]
+        updates = [
+            c for c in _get_calls(mock_ruuter_url) if "update-cleaned-file" in c["path"]
+        ]
         assert updates[0]["body"]["base_id"] == "test-file-id-001"
         assert "cleaned_data_url" in updates[0]["body"]
         assert "cleaned_metadata_url" in updates[0]["body"]
@@ -259,8 +294,8 @@ class TestRuuterInteraction:
 # Vault / LLM path — only runs when Azure credentials are set
 # ---------------------------------------------------------------------------
 
-class TestLLMPath:
 
+class TestLLMPath:
     def test_use_llm_eval_path_returns_200(
         self, cleaning_url: str, scrapped_dir: Path, require_llm_creds: None
     ) -> None:
@@ -270,8 +305,13 @@ class TestLLMPath:
         )
         r = _clean_file(
             cleaning_url,
-            make_entity_payload(file_path, meta_path, scrapped_dir,
-                                  use_llm=True, use_llm_correction=False),
+            make_entity_payload(
+                file_path,
+                meta_path,
+                scrapped_dir,
+                use_llm=True,
+                use_llm_correction=False,
+            ),
             timeout=180,
         )
         assert r.status_code == 200
@@ -283,14 +323,22 @@ class TestLLMPath:
         """LLM correction path on a noisy page must still produce a result."""
         fixture = (FIXTURES_DIR / "html" / "noisy_page.html").read_text()
         file_path, meta_path = write_test_file(
-            scrapped_dir, fixture, "source.html", ".html",
+            scrapped_dir,
+            fixture,
+            "source.html",
+            ".html",
             url="https://example.com/tax",
         )
         r = _clean_file(
             cleaning_url,
-            make_entity_payload(file_path, meta_path, scrapped_dir,
-                                  url="https://example.com/tax",
-                                  use_llm=True, use_llm_correction=True),
+            make_entity_payload(
+                file_path,
+                meta_path,
+                scrapped_dir,
+                url="https://example.com/tax",
+                use_llm=True,
+                use_llm_correction=True,
+            ),
             timeout=180,
         )
         assert r.status_code == 200
@@ -320,8 +368,8 @@ class TestLLMPath:
 # /clean_source_async end-to-end
 # ---------------------------------------------------------------------------
 
-class TestCleanSourceAsyncEndToEnd:
 
+class TestCleanSourceAsyncEndToEnd:
     def test_async_batch_processes_single_file(
         self, cleaning_url: str, mock_ruuter_url: str, scrapped_dir: Path
     ) -> None:
@@ -339,7 +387,10 @@ class TestCleanSourceAsyncEndToEnd:
 
         fixture = (FIXTURES_DIR / "html" / "article_with_main.html").read_text()
         file_path, meta_path = write_test_file(
-            scrapped_dir, fixture, "source.html", ".html",
+            scrapped_dir,
+            fixture,
+            "source.html",
+            ".html",
             url="https://example.com/async-test",
         )
 
@@ -392,7 +443,9 @@ class TestCleanSourceAsyncEndToEnd:
         }
 
         start = time.monotonic()
-        r = requests.post(f"{cleaning_url}/clean_source_async", json=payload, timeout=10)
+        r = requests.post(
+            f"{cleaning_url}/clean_source_async", json=payload, timeout=10
+        )
         elapsed = time.monotonic() - start
 
         assert r.status_code == 200

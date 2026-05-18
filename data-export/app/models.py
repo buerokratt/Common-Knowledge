@@ -2,7 +2,7 @@ from pydantic import BaseModel
 
 
 class OkResponse(BaseModel):
-    status: str = 'Ok'
+    status: str = "Ok"
 
 
 class ExportTask(BaseModel):

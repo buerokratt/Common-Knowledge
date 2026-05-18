@@ -1,14 +1,16 @@
 import functools
-from typing import Type
+from collections.abc import Callable
 
 from pydantic import BaseModel
 
 
-def un_json(class_object: Type[BaseModel]):
-    def decorator(f):
+def un_json(class_object: type[BaseModel]) -> Callable:
+    def decorator(f: Callable) -> Callable:
         @functools.wraps(f)
-        def wrapper(task):
+        def wrapper(task: dict) -> object:
             task_model = class_object.model_validate(task)
             return f(task_model)
+
         return wrapper
+
     return decorator

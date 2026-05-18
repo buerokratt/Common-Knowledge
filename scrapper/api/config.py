@@ -6,4 +6,4 @@ class Settings(BaseSettings):
     broker_url: AnyUrl
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]
