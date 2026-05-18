@@ -21,10 +21,10 @@ declaration:
 
 */
 SELECT
-    external_id AS client_id,
+    base_id::TEXT AS client_id,
     data_hash AS client_data_hash
 FROM agency_management.agency a1
-WHERE external_id = ANY(STRING_TO_ARRAY(:agencyIds, ','))
+WHERE base_id::TEXT = ANY(STRING_TO_ARRAY(:agencyIds, ','))
   AND updated_at = (
       SELECT MAX(updated_at) 
       FROM agency_management.agency a2
