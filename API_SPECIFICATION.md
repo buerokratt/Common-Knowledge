@@ -74,7 +74,6 @@ List all agencies.
     "base_id": "uuid", 
     "name": "Agency Name",
     "sector": "Healthcare",
-    "external_id": "ext_123",
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-01T00:00:00Z",
     "type": "client",
@@ -98,8 +97,7 @@ Create new agency.
 ```json
 {
   "name": "string",
-  "sector": "string",
-  "externalId": "string"
+  "sector": "string"
 }
 ```
 
@@ -626,7 +624,6 @@ Generate download URL for a file.
   "base_id": "uuid",
   "name": "string",
   "sector": "string",
-  "external_id": "string",
   "type": "client | api",
   "zip_dirty": "boolean",
   "is_zipping": "boolean",

@@ -15,7 +15,6 @@ erDiagram
         UUID base_id UK "Business key identifier"
         TEXT name "Agency name"
         TEXT sector "Government sector"
-        TEXT external_id "External system ID"
         TIMESTAMP created_at "Creation timestamp"
         TIMESTAMP updated_at "Last update timestamp"
         BOOLEAN is_deleted "Soft delete flag"
