@@ -41,6 +41,9 @@ declaration:
       - field: use_llm_correction
         type: boolean
         description: "whether to use LLM correction for cleaning (quality_control == comprehensive)"
+      - field: extract_images
+        type: boolean
+        description: "whether to extract and store images from the source file"
     
 
 cleanScrapedData:
@@ -58,6 +61,7 @@ cleanScrapedData:
     source_run_report_base_id: ${incoming.body.source_run_report_base_id}
     use_llm: ${incoming.body.use_llm}
     use_llm_correction: ${incoming.body.use_llm_correction}
+    extract_images: ${incoming.body.extract_images}
   result: res
 
 

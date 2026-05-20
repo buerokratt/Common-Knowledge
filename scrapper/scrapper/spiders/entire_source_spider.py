@@ -12,12 +12,21 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)
+        # Defer initialization that depends on `self.settings` until
+        # the crawler calls `from_crawler` / `_set_crawler`.
+        self.url_iter = None
+        self.urls = []
+
+    @classmethod
+    def from_crawler(cls, crawler, *args, **kwargs):
+        spider = super(EntireSourceSpider, cls).from_crawler(crawler, *args, **kwargs)
         task = kwargs.get("task")
         if isinstance(task, EntireSourceScrapperTask):
-            self.task = task
-            self.url_iter = self.urls_iter_impl()
-            self.start_urls = list(self.start_url_impl())
-            self.urls = []
+            spider.task = task
+            spider.url_iter = spider.urls_iter_impl()
+            spider.start_urls = list(spider.start_url_impl())
+            spider.urls = []
+        return spider
 
     def start_url_impl(self) -> Iterator[str]:
         yield next(self.url_iter)

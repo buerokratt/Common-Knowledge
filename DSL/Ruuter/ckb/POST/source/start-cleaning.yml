@@ -30,6 +30,7 @@ checkSourceFound:
 
 sourceNotFoundError:
   return: "Error: Source not found."
+  status: 404
   next: end
 
 assignSourceData:
@@ -39,6 +40,7 @@ assignSourceData:
     agency_base_id: ${sourceResult.response.body.response[0].agencyBaseId}
     source_url: ${sourceResult.response.body.response[0].url}
     quality_control: ${sourceResult.response.body.response[0].qualityControl}
+    extract_images: ${sourceResult.response.body.response[0].extractImages == true}
   next: computeQualityControlFlags
 
 computeQualityControlFlags:
@@ -57,10 +59,12 @@ validateSourceStatus:
 
 alreadyRunning:
   return: "Scrapping or Cleaning is already in progress for this source."
+  status: 409
   next: end
 
 invalidSourceStatus:
   return: "Error: Source must be in_review before starting cleaning."
+  status: 400
   next: end
 
 getAgency:
@@ -80,6 +84,7 @@ checkAgencyFound:
 
 agencyNotFoundError:
   return: "Error: Agency not found for source."
+  status: 404
   next: end
 
 assignAgencyName:
@@ -139,6 +144,7 @@ checkFilesExist:
 
 noFilesToClean:
   return: "No in_review files found to clean for this source."
+  status: 400
   next: end
 
 triggerAsyncSourceCleaning:
@@ -154,6 +160,7 @@ triggerAsyncSourceCleaning:
       files: ${filesResult.response.body}
       use_llm: ${use_llm}
       use_llm_correction: ${use_llm_correction}
+      extract_images: ${extract_images}
   result: asyncCleaningResult
   next: returnSuccess
 
@@ -163,4 +170,5 @@ returnSuccess:
 
 reportMissingScrappingLogFile:
   return: "Error: No existing run report found for source, cannot determine logs path for cleaning. Please run scraping at least once before starting cleaning."
+  status: 400
   next: end
