@@ -12,20 +12,35 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)
-        # Defer initialization that depends on `self.settings` until
-        # the crawler calls `from_crawler` / `_set_crawler`.
-        self.url_iter = None
-        self.urls = []
+        task = kwargs.get("task")
+        if isinstance(task, EntireSourceScrapperTask):
+            self.task = task
+            # Defer any initialization that requires Scrapy settings until
+            # after the crawler has been attached (see from_crawler below).
+            self.url_iter = None
+            self.start_urls = []
+            self.urls = []
 
     @classmethod
     def from_crawler(cls, crawler, *args, **kwargs):
-        spider = super(EntireSourceSpider, cls).from_crawler(crawler, *args, **kwargs)
+        """Create spider and perform crawler-dependent initialization.
+
+        Scrapy calls the classmethod `from_crawler` which attaches the
+        crawler (and therefore `settings`) to the spider *after* the
+        instance is constructed. Any initialization that needs access to
+        `self.settings` must happen here, not in `__init__`.
+        """
+        spider = super().from_crawler(crawler, *args, **kwargs)
         task = kwargs.get("task")
         if isinstance(task, EntireSourceScrapperTask):
-            spider.task = task
             spider.url_iter = spider.urls_iter_impl()
-            spider.start_urls = list(spider.start_url_impl())
-            spider.urls = []
+            # start_url_impl consumes the iterator once to produce the
+            # initial start URL; wrap in try/except in case the iterator
+            # is empty.
+            try:
+                spider.start_urls = list(spider.start_url_impl())
+            except StopIteration:
+                spider.start_urls = []
         return spider
 
     def start_url_impl(self) -> Iterator[str]:
