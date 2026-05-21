@@ -14,9 +14,6 @@ declaration:
       - field: sector
         type: string
         description: "Agency sector"
-      - field: external_id
-        type: string
-        description: "External identifier"
   response:
     fields:
       - field: id
@@ -31,9 +28,6 @@ declaration:
       - field: sector
         type: string
         description: "Agency sector"
-      - field: external_id
-        type: string
-        description: "External identifier"
       - field: created_at
         type: string
         description: "Record creation timestamp"
@@ -59,8 +53,8 @@ WITH
             WHERE is_deleted = FALSE
         ) AS already_exists
     )
-INSERT INTO agency_management.agency (name, sector, external_id)
-SELECT :name, :sector, :external_id
+INSERT INTO agency_management.agency (name, sector)
+SELECT :name, :sector
 FROM _lock, _guard
 WHERE NOT already_exists
-RETURNING id, base_id, name, sector, external_id, created_at, updated_at;
+RETURNING id, base_id, name, sector, created_at, updated_at;
