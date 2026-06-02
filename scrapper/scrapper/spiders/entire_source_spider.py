@@ -35,16 +35,21 @@ class EntireSourceSpider(SpecifiedPagesSpider):
         if isinstance(task, EntireSourceScrapperTask):
             spider.url_iter = spider.urls_iter_impl()
             # start_url_impl consumes the iterator once to produce the
-            # initial start URL; wrap in try/except in case the iterator
-            # is empty.
-            try:
-                spider.start_urls = list(spider.start_url_impl())
-            except StopIteration:
-                spider.start_urls = []
+            # initial start URL. If the iterator is empty, it returns an
+            # empty iterator (so start_urls becomes []).
+            spider.start_urls = list(spider.start_url_impl())
         return spider
 
     def start_url_impl(self) -> Iterator[str]:
-        yield next(self.url_iter)
+        if self.url_iter is None:
+            return iter(())
+
+        try:
+            first_url = next(self.url_iter)
+        except StopIteration:
+            return iter(())
+
+        return iter((first_url,))
 
     def urls_iter_impl(self) -> Iterator[str]:
         scrapped_before = datetime.datetime.now(datetime.UTC).isoformat()

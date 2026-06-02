@@ -57,6 +57,10 @@ declaration:
         enum: ['basic', 'comprehensive']
         description: "Quality control method"
         required: false
+      - field: extract_images
+        type: boolean
+        description: "Whether to extract images when cleaning"
+        required: false
 */
 INSERT INTO data_collection.source (
     agency_base_id, url, subsector, type, status, quality_control, extract_images

@@ -56,6 +56,9 @@ declaration:
         type: string
         enum: ['basic', 'comprehensive']
         description: "Quality control method for content extraction"
+      - field: extract_images
+        type: boolean
+        description: "Whether to extract images when cleaning"
 */
 SELECT
     id, base_id, url, subsector, last_scraped_at, status, agency_base_id,

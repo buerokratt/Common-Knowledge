@@ -23,6 +23,7 @@ export interface Source {
   hasFinishedFiles?: boolean;
   type?: string;
   qualityControl?: 'basic' | 'comprehensive' | null;
+  extractImages?: boolean;
 }
 
 // API Integration interface - extends Source but with specific properties
