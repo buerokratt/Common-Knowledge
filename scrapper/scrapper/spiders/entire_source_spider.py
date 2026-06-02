@@ -23,7 +23,9 @@ class EntireSourceSpider(SpecifiedPagesSpider):
             self.urls = []
 
     @classmethod
-    def from_crawler(cls, crawler: Any, *args: object, **kwargs: object) -> "EntireSourceSpider":
+    def from_crawler(
+        cls, crawler: Any, *args: object, **kwargs: object
+    ) -> "EntireSourceSpider":
         """Create spider and perform crawler-dependent initialization.
 
         Scrapy calls the classmethod `from_crawler` which attaches the
