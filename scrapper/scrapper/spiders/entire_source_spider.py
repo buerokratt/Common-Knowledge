@@ -1,7 +1,11 @@
 import datetime
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 import requests
+
+if TYPE_CHECKING:
+    from scrapy.crawler import Crawler  # type: ignore[import-untyped]
 
 from api.models import EntireSourceScrapperTask, LinkToScrape
 from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
@@ -23,7 +27,7 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
     @classmethod
     def from_crawler(
-        cls, crawler, *args: object, **kwargs: object
+        cls, crawler: "Crawler", *args: object, **kwargs: object
     ) -> "EntireSourceSpider":
         """Create spider and perform crawler-dependent initialization.
 
