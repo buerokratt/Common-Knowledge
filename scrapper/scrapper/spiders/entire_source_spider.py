@@ -1,6 +1,5 @@
 import datetime
 from collections.abc import Iterator
-from typing import Any
 
 import requests
 
@@ -24,7 +23,7 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
     @classmethod
     def from_crawler(
-        cls, crawler: Any, *args: object, **kwargs: object
+        cls, crawler: object, *args: object, **kwargs: object
     ) -> "EntireSourceSpider":
         """Create spider and perform crawler-dependent initialization.
 
