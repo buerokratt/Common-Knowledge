@@ -23,7 +23,7 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
     @classmethod
     def from_crawler(
-        cls, crawler: object, *args: object, **kwargs: object
+        cls, crawler, *args: object, **kwargs: object
     ) -> "EntireSourceSpider":
         """Create spider and perform crawler-dependent initialization.
 
