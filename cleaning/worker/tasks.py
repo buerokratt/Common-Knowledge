@@ -349,6 +349,19 @@ def clean_any_file(entity: EntityToClean) -> str:
     return _elements_to_markdown(partitioned)
 
 
+def clean_plain_text(entity: EntityToClean) -> str:
+    """
+    Read a plain-text file (.txt / .md) as UTF-8 and return its contents.
+
+    No extraction is performed — the file *is* the text. Whitespace
+    normalisation is applied by the caller via normalize_newlines().
+    Invalid bytes are replaced rather than raising so a single bad byte
+    in a long file doesn't kill the whole job.
+    """
+    with entity.file_path.open("r", encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
 # ---------------------------------------------------------------------------
 # Image extraction
 # ---------------------------------------------------------------------------
@@ -668,6 +681,9 @@ def clean_file_task(entity: EntityToClean) -> None:
             logger.info(
                 f"Cleaned as PPTX (unstructured) for {entity.file_path.as_posix()}"
             )
+        elif file_type in (".txt", ".md"):
+            cleaned_text = clean_plain_text(entity)
+            logger.info(f"Cleaned as plain text for {entity.file_path.as_posix()}")
         else:
             cleaned_text = clean_any_file(entity)
             logger.info(

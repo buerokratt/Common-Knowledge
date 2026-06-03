@@ -454,6 +454,99 @@ class TestSetUpLogging:
 
 
 # ---------------------------------------------------------------------------
+# Plain-text routing (.txt, .md)
+# ---------------------------------------------------------------------------
+
+
+class TestPlainTextRouting:
+    """
+    .txt and .md files must bypass unstructured.partition() and read the
+    file verbatim. Previously they fell through to clean_any_file(), which
+    treats each line as a Title element and produces useless output —
+    especially for files where the content happens to be HTML markup.
+    """
+
+    def test_clean_plain_text_returns_file_contents_verbatim(
+        self, tmp_path: Path
+    ) -> None:
+        from worker.tasks import clean_plain_text
+
+        body = "First line.\nSecond line.\n\nThird paragraph after blank line.\n"
+        entity = _make_entity(tmp_path, ".txt", body)
+
+        assert clean_plain_text(entity) == body
+
+    def test_clean_plain_text_replaces_invalid_utf8(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_plain_text
+
+        source = tmp_path / "source.txt"
+        source.write_bytes(b"good bytes \xff\xfe bad bytes ok\n")
+        meta = tmp_path / "source.meta.json"
+        meta.write_text(json.dumps({"file_type": ".txt", "metadata": {}}))
+
+        entity = MagicMock()
+        entity.file_path = source
+        entity.meta_data_path = meta
+        entity.directory_path = tmp_path
+        entity.use_llm = False
+
+        out = clean_plain_text(entity)
+        assert "good bytes" in out
+        assert "bad bytes ok" in out
+
+    def test_txt_routes_to_plain_text_not_unstructured(self, tmp_path: Path) -> None:
+        """
+        clean_file_task with file_type=".txt" must call clean_plain_text
+        and must NOT call clean_any_file (which would invoke unstructured).
+        """
+        from worker.tasks import clean_file_task
+
+        body = "Some real text content for a .txt source.\n"
+        entity = _make_entity(tmp_path, ".txt", body, use_llm=False)
+
+        with (
+            patch("worker.tasks.requests.post") as mock_post,
+            patch("worker.tasks.cleanup_directory"),
+            patch("worker.tasks.clean_any_file") as mock_any,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"response": "http://mock/file"}
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+
+            clean_file_task(entity)
+
+        assert mock_any.call_count == 0, (
+            ".txt must not be routed through clean_any_file()"
+        )
+        cleaned = (tmp_path / "cleaned.txt").read_text()
+        assert "Some real text content" in cleaned
+
+    def test_md_routes_to_plain_text(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_file_task
+
+        body = "# Heading\n\nParagraph with **bold** text.\n"
+        entity = _make_entity(tmp_path, ".md", body, use_llm=False)
+
+        with (
+            patch("worker.tasks.requests.post") as mock_post,
+            patch("worker.tasks.cleanup_directory"),
+            patch("worker.tasks.clean_any_file") as mock_any,
+        ):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"response": "http://mock/file"}
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+
+            clean_file_task(entity)
+
+        assert mock_any.call_count == 0
+        cleaned = (tmp_path / "cleaned.txt").read_text()
+        assert "# Heading" in cleaned
+        assert "**bold**" in cleaned
+
+
+# ---------------------------------------------------------------------------
 # Metadata mutation
 # ---------------------------------------------------------------------------
 
