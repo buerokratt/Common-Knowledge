@@ -42,6 +42,7 @@ erDiagram
         source_type type "url_to_scrape, file, api, pre_selected_urls"
         source_status_type status "new, running, in_review, finished, failed"
         quality_control_type quality_control "basic, comprehensive, or NULL"
+        BOOLEAN extract_images "Extract images during cleaning (default: false)"
         BOOLEAN update_automatically "Auto-update enabled"
         TEXT cron_schedule "Scheduling expression"
     }

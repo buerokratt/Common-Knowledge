@@ -59,6 +59,7 @@ interface KnowledgeBaseFormData {
   qualityControlLevel: '' | 'basic' | 'comprehensive';
   csvFile?: File | null;
   urlList?: { url: string }[];
+  extractImages: boolean;
 }
 
 const getInitialFormData = (): KnowledgeBaseFormData => ({
@@ -69,6 +70,7 @@ const getInitialFormData = (): KnowledgeBaseFormData => ({
   qualityControlLevel: '',
   csvFile: null,
   urlList: [],
+  extractImages: false,
 });
 
 const Agency: FC = () => {
@@ -445,6 +447,7 @@ const Agency: FC = () => {
       subsector: formData.subsector,
       type: 'url',
       qualityControlLevel: formData.qualityControlLevel,
+      extractImages: formData.extractImages,
     });
   };
 
@@ -537,6 +540,7 @@ const Agency: FC = () => {
       type: 'specified',
       urls: formData.urlList,
       qualityControlLevel: formData.qualityControlLevel,
+      extractImages: formData.extractImages,
     });
   };
 
@@ -914,6 +918,40 @@ const Agency: FC = () => {
             />
             <div className="quality-control-options">
               <span className="quality-control-options__title">
+                {t('knowledgeBase.imageExtraction')}
+              </span>
+              <div className="quality-control-options__row">
+                <label className="quality-control-options__item">
+                  <input
+                    type="checkbox"
+                    name="extractImages"
+                    checked={formData.extractImages}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        extractImages: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>{t('knowledgeBase.extractImages')}</span>
+                </label>
+                <Tooltip content={t('knowledgeBase.extractImagesTooltip') as string}>
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.extractImagesTooltip') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
+                    />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
                 {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
               <div className="quality-control-options__row">
@@ -1092,6 +1130,40 @@ const Agency: FC = () => {
               </div>
             )}
 
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
+                {t('knowledgeBase.imageExtraction')}
+              </span>
+              <div className="quality-control-options__row">
+                <label className="quality-control-options__item">
+                  <input
+                    type="checkbox"
+                    name="extractImages"
+                    checked={formData.extractImages}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        extractImages: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>{t('knowledgeBase.extractImages')}</span>
+                </label>
+                <Tooltip content={t('knowledgeBase.extractImagesTooltip') as string}>
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.extractImagesTooltip') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
+                    />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
             <div className="quality-control-options">
               <span className="quality-control-options__title">
                 {t('knowledgeBase.contentExtractionQualityControlOptions')}

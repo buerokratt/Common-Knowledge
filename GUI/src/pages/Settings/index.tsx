@@ -35,6 +35,7 @@ interface UpdateSettings {
   yearlyType?: 'dayOfMonth' | 'weekPosition';
   timeOfUpdate: string;
   qualityControlLevel?: '' | 'basic' | 'comprehensive';
+  extractImages?: boolean;
 }
 
 const SourceSettings: FC = () => {
@@ -56,6 +57,7 @@ const SourceSettings: FC = () => {
     monthOfYear: 'December',
     daysOfWeek: ['Mon'],
     qualityControlLevel: '',
+    extractImages: false,
   });
 
   const [isInitialized, setIsInitialized] = useState(false);
@@ -241,6 +243,7 @@ const SourceSettings: FC = () => {
         url: sourceData.url,
         updateAutomatically: sourceData.updateAutomatically || false,
         qualityControlLevel: sourceData.qualityControl || '',
+        extractImages: sourceData.extractImages ?? false,
         ...parsedSettings,
       }));
 
@@ -255,12 +258,14 @@ const SourceSettings: FC = () => {
       cronSchedule,
       updateAutomatically,
       qualityControl,
+      extractImages,
     }: {
       baseId: string;
       cronSchedule: string;
       updateAutomatically: boolean;
       qualityControl?: 'basic' | 'comprehensive' | null;
-    }) => updateSourceScrapeInterval(baseId, cronSchedule, updateAutomatically, qualityControl),
+      extractImages?: boolean;
+    }) => updateSourceScrapeInterval(baseId, cronSchedule, updateAutomatically, qualityControl, extractImages),
     onSuccess: () => {
       toast.open({
         type: 'success',
@@ -420,6 +425,7 @@ const SourceSettings: FC = () => {
       cronSchedule: cronExpression,
       updateAutomatically: settings.updateAutomatically,
       qualityControl: settings.qualityControlLevel || null,
+      extractImages: settings.extractImages ?? false,
     });
   };
 
@@ -959,6 +965,39 @@ const SourceSettings: FC = () => {
             <Button appearance="primary" onClick={handleUpdateManually}>
               {t('knowledgeBase.updateData')}
             </Button>
+          </div>
+
+          <div className="knowledge-base-settings__divider" />
+
+          <div className="quality-control-standalone">
+            <span className="quality-control-standalone__title">
+              {t('knowledgeBase.imageExtraction')}
+            </span>
+            <div className="quality-control-standalone__options">
+              <label className="quality-control-standalone__item">
+                <input
+                  type="checkbox"
+                  name="extractImages"
+                  checked={settings.extractImages ?? false}
+                  onChange={(e) =>
+                    setSettings((prev) => ({
+                      ...prev,
+                      extractImages: e.target.checked,
+                    }))
+                  }
+                />
+                <span>{t('knowledgeBase.extractImages')}</span>
+                <Tooltip content={t('knowledgeBase.extractImagesTooltip') as string}>
+                  <button
+                    type="button"
+                    className="quality-control-standalone__info-btn"
+                    aria-label={t('knowledgeBase.extractImagesTooltip') as string}
+                  >
+                    <Icon icon={<MdInfoOutline fontSize={18} color="#005AA3" />} size="medium" />
+                  </button>
+                </Tooltip>
+              </label>
+            </div>
           </div>
 
           <div className="knowledge-base-settings__divider" />

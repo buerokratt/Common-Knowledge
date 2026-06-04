@@ -113,6 +113,7 @@ class TriggerCleaningPipeline:
 
         # Get quality_control from task (passed through pipeline)
         quality_control = getattr(spider.task, "quality_control", None)
+        extract_images = getattr(spider.task, "extract_images", False)
 
         # Compute quality control flags
         use_llm = quality_control in ("basic", "comprehensive")
@@ -120,7 +121,7 @@ class TriggerCleaningPipeline:
 
         # DEBUG: Log computed values
         spider.logger.info(
-            f"[DEBUG] TriggerCleaningPipeline - quality_control={quality_control}, use_llm={use_llm}, use_llm_correction={use_llm_correction}"
+            f"[DEBUG] TriggerCleaningPipeline - quality_control={quality_control}, use_llm={use_llm}, use_llm_correction={use_llm_correction}, extract_images={extract_images}"
         )
 
         path = get_logs_path_for_cleaning(spider)
@@ -139,6 +140,7 @@ class TriggerCleaningPipeline:
                 "source_run_report_base_id": spider.report_id,
                 "use_llm": use_llm,
                 "use_llm_correction": use_llm_correction,
+                "extract_images": extract_images,
             },
         )
 
@@ -298,8 +300,9 @@ class CreateSourceRunReportPipeline:
 
         # Set quality_control on task for use in TriggerCleaningPipeline
         spider.task.quality_control = source_data.get("qualityControl")
+        spider.task.extract_images = source_data.get("extractImages", False)
         spider.logger.info(
-            f"[DEBUG] CreateSourceRunReportPipeline - Set quality_control={spider.task.quality_control} on task"
+            f"[DEBUG] CreateSourceRunReportPipeline - Set quality_control={spider.task.quality_control}, extract_images={spider.task.extract_images} on task"
         )
 
         report_id = requests.post(
