@@ -14,15 +14,11 @@ declaration:
       - field: sector
         type: string
         description: "Sector of the agency"
-      - field: externalId
-        type: string
-        description: "Centops ID for the agency"
 
 extractRequestData:
   assign:
     name: "${incoming.body.name}"
     sector: "${incoming.body.sector}"
-    external_id: "${incoming.body.externalId}"
 
 checkAgencyExists:
   call: http.get
@@ -51,7 +47,6 @@ createAgency:
     body:
       name: ${name}
       sector: ${sector}
-      external_id: ${external_id}
   result: res
 
 returnSuccess:

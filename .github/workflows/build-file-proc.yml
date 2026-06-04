@@ -38,8 +38,8 @@ jobs:
            echo "$GITHUB_ENV"
       - name: Docker Build server
         run: | 
-           cd file-processing
-           docker build --tag $DOCKER_TAG_CUSTOM .
+           
+           docker build -f file-processing/Dockerfile --tag $DOCKER_TAG_CUSTOM .
 
       - name: Log in to GitHub container registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin

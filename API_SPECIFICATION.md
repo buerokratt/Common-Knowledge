@@ -74,7 +74,6 @@ List all agencies.
     "base_id": "uuid", 
     "name": "Agency Name",
     "sector": "Healthcare",
-    "external_id": "ext_123",
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-01T00:00:00Z",
     "type": "client",
@@ -98,8 +97,7 @@ Create new agency.
 ```json
 {
   "name": "string",
-  "sector": "string",
-  "externalId": "string"
+  "sector": "string"
 }
 ```
 
@@ -174,7 +172,8 @@ Create new data source.
   "url": "https://example.com",
   "subsector": "string",
   "type": "url_to_scrape",
-  "qualityControl": "basic"
+  "qualityControl": "basic",
+  "extractImages": true
 }
 ```
 
@@ -199,6 +198,7 @@ Create a source from a pre-selected URL list and trigger scraping for the explic
   "subsector": "string",
   "type": "specified",
   "qualityControl": "basic",
+  "extractImages": true,
   "urls": [
     { "url": "https://page-1" },
     { "url": "https://page-2" }
@@ -223,8 +223,11 @@ Update scraping frequency.
 **Request Body:**
 ```json
 {
-  "base_id": "uuid",
-  "cron_schedule": "0 */12 * * *"
+  "baseId": "uuid",
+  "cronSchedule": "0 */12 * * *",
+  "updateAutomatically": true,
+  "qualityControl": "basic",
+  "extractImages": true
 }
 ```
 
@@ -626,7 +629,6 @@ Generate download URL for a file.
   "base_id": "uuid",
   "name": "string",
   "sector": "string",
-  "external_id": "string",
   "type": "client | api",
   "zip_dirty": "boolean",
   "is_zipping": "boolean",

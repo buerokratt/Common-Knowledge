@@ -15,7 +15,6 @@ erDiagram
         UUID base_id UK "Business key identifier"
         TEXT name "Agency name"
         TEXT sector "Government sector"
-        TEXT external_id "External system ID"
         TIMESTAMP created_at "Creation timestamp"
         TIMESTAMP updated_at "Last update timestamp"
         BOOLEAN is_deleted "Soft delete flag"
@@ -43,6 +42,7 @@ erDiagram
         source_type type "url_to_scrape, file, api, pre_selected_urls"
         source_status_type status "new, running, in_review, finished, failed"
         quality_control_type quality_control "basic, comprehensive, or NULL"
+        BOOLEAN extract_images "Extract images during cleaning (default: false)"
         BOOLEAN update_automatically "Auto-update enabled"
         TEXT cron_schedule "Scheduling expression"
     }

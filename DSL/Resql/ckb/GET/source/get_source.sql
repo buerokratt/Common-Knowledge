@@ -56,10 +56,13 @@ declaration:
         type: string
         enum: ['basic', 'comprehensive']
         description: "Quality control method for content extraction"
+      - field: extract_images
+        type: boolean
+        description: "Whether to extract images when cleaning"
 */
 SELECT
     id, base_id, url, subsector, last_scraped_at, status, agency_base_id,
-    cron_schedule, update_automatically, created_at, updated_at, type, is_stopping, quality_control 
+    cron_schedule, update_automatically, created_at, updated_at, type, is_stopping, quality_control, extract_images 
 FROM data_collection.source 
 WHERE base_id = :base_id::UUID
   AND updated_at = (

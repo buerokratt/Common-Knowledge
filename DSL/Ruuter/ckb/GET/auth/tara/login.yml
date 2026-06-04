@@ -5,7 +5,7 @@ declaration:
   method: post
   accepts: json
   returns: json
-  namespace: centops
+  namespace: ckb-tara
   allowlist:
     header:
       - field: cookie

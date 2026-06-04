@@ -7,6 +7,7 @@ class BaseObject(BaseModel):
     ignore_stopping: bool = False
     is_initial_scrape: bool = False
     quality_control: str | None = None
+    extract_images: bool = False
 
 
 class LinkToScrape(BaseModel):

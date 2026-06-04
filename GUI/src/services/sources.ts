@@ -23,6 +23,7 @@ export interface Source {
   hasFinishedFiles?: boolean;
   type?: string;
   qualityControl?: 'basic' | 'comprehensive' | null;
+  extractImages?: boolean;
 }
 
 // API Integration interface - extends Source but with specific properties
@@ -97,6 +98,7 @@ export interface CreateSourceRequest {
   files?: File[];
   apiUrl?: string;
   qualityControlLevel?: '' | 'basic' | 'comprehensive';
+  extractImages?: boolean;
 }
 
 export interface CreateSourceWithUrlListRequest {
@@ -106,6 +108,7 @@ export interface CreateSourceWithUrlListRequest {
   type: 'specified';
   urls: { url: string }[];
   qualityControlLevel?: '' | 'basic' | 'comprehensive';
+  extractImages?: boolean;
 }
 
 export interface UpdateSourceSubsectorRequest {
@@ -363,6 +366,7 @@ export const createSourceUrl = async (
     subsector: data.subsector,
     type: 'url_to_scrape',
     qualityControl: data.qualityControlLevel || null,
+    extractImages: data.extractImages ?? false,
   });
 
   const apiResponse: ApiResponse = response.data;
@@ -382,6 +386,7 @@ export const createSourceWithUrlList = async (
     type: 'specified',
     qualityControl: data.qualityControlLevel || null,
     urls: data.urls,
+    extractImages: data.extractImages ?? false,
   });
 
   const apiResponse: ApiResponse = response.data;
@@ -503,13 +508,15 @@ export const updateSourceScrapeInterval = async (
   sourceId: string,
   cronSchedule: string,
   updateAutomatically: boolean,
-  qualityControl?: 'basic' | 'comprehensive' | null
+  qualityControl?: 'basic' | 'comprehensive' | null,
+  extractImages?: boolean
 ): Promise<Source> => {
   const response = await apiDev.post('/source/edit-scrape-interval', {
     baseId: sourceId,
     cronSchedule: cronSchedule,
     updateAutomatically: updateAutomatically,
     qualityControl: qualityControl,
+    extractImages: extractImages ?? false,
   });
 
   const apiResponse: ApiResponse = response.data;

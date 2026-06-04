@@ -24,6 +24,10 @@ declaration:
         type: string
         description: "Quality control method (basic, comprehensive, or null)"
         required: false
+      - field: extractImages
+        type: boolean
+        description: "Whether to extract images during cleaning"
+        required: false
 
 extractRequestData:
   assign:
@@ -32,6 +36,7 @@ extractRequestData:
     subsector: "${incoming.body.subsector}"
     type: "${incoming.body.type}"
     quality_control: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
+    extract_images: "${incoming.body.extractImages == true}"
 
 createSource:
   call: http.post
@@ -45,6 +50,7 @@ createSource:
       subsector: ${subsector}
       type: ${type}
       quality_control: ${quality_control}
+      extract_images: ${extract_images}
   result: res
 
 

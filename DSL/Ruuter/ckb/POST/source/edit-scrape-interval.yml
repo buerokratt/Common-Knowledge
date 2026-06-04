@@ -20,6 +20,10 @@ declaration:
       - field: qualityControl
         type: string
         description: "Quality control method (basic, comprehensive, or null)"
+      - field: extractImages
+        type: boolean
+        description: "Whether to extract images during cleaning"
+        required: false
 
 extractRequestData:
   assign:
@@ -27,6 +31,7 @@ extractRequestData:
     cron_schedule: "${incoming.body.cronSchedule}"
     updateAutomatically: "${incoming.body.updateAutomatically}"
     qualityControl: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
+    extractImages: "${incoming.body.extractImages == true}"
 
 updateSourceScrapeInterval:
   call: http.post
@@ -39,6 +44,7 @@ updateSourceScrapeInterval:
       cron_schedule: ${cron_schedule}
       updateAutomatically: ${updateAutomatically}
       qualityControl: ${qualityControl}
+      extractImages: ${extractImages}
   result: res
 
 triggerScheduler:
