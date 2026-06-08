@@ -482,7 +482,9 @@ class TestPlainTextRouting:
         source = tmp_path / "source.txt"
         source.write_bytes(b"good bytes \xff\xfe bad bytes ok\n")
         meta = tmp_path / "source.meta.json"
-        meta.write_text(json.dumps({"file_type": ".txt", "metadata": {}}))
+        meta.write_text(
+            json.dumps({"file_type": ".txt", "metadata": {}}), encoding="utf-8"
+        )
 
         entity = MagicMock()
         entity.file_path = source
@@ -519,7 +521,7 @@ class TestPlainTextRouting:
         assert mock_any.call_count == 0, (
             ".txt must not be routed through clean_any_file()"
         )
-        cleaned = (tmp_path / "cleaned.txt").read_text()
+        cleaned = (tmp_path / "cleaned.txt").read_text(encoding="utf-8")
         assert "Some real text content" in cleaned
 
     def test_md_routes_to_plain_text(self, tmp_path: Path) -> None:
@@ -541,7 +543,7 @@ class TestPlainTextRouting:
             clean_file_task(entity)
 
         assert mock_any.call_count == 0
-        cleaned = (tmp_path / "cleaned.txt").read_text()
+        cleaned = (tmp_path / "cleaned.txt").read_text(encoding="utf-8")
         assert "# Heading" in cleaned
         assert "**bold**" in cleaned
 
