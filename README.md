@@ -465,9 +465,10 @@ Resql provides type-safe database operations:
 
 ```bash
 # Login to get JWT token
-curl -X POST http://localhost:8080/ckb/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username": "user", "password": "pass"}'
+curl -X POST -H "Content-Type: application/json" -d '{
+  "login": "EE30303039914",
+  "password": "OK"
+}' http://localhost:8086/ckb/auth/login 
 
 # Use token in subsequent requests
 curl -H "Authorization: Bearer <token>" \

@@ -94,6 +94,16 @@
     "reports": "Aruanded",
     "apiIntegrations": "API integratsioonid"
   },
+  "multiDomains": {
+    "addNew": "Lisa uus",
+    "title": "Multidomeenid",
+    "domains": "Domeenid",
+    "domainName": "Domeeni nimi",
+    "selectDomains": "Vali Domeenid",
+    "chooseDomain": "Vali domeen:",
+    "allDomains": "Kõik",
+    "noDomains": "Domeene ei ole saadaval. Palun võtke ühendust süsteemiadministraatoriga."
+  },
   "chat": {
     "userTyping": "Kasutaja kirjutab",
     "chatForwardedTo": "Vestlus edastati aadressile",

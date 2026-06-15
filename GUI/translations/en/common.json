@@ -94,6 +94,16 @@
     "reports": "Reports",
     "apiIntegrations": "API integrations"
   },
+  "multiDomains": {
+    "addNew": "Add new",
+    "title": "Multidomains",
+    "domains": "Domains",
+    "domainName": "Domain name",
+    "selectDomains": "Select Domains",
+    "chooseDomain": "Select domain:",
+    "allDomains": "All",
+    "noDomains": "No domains available. Please contact your system administrator."
+  },
   "chat": {
     "userTyping": "User Typing",
     "chatForwardedTo": "Chat forwarded to",
