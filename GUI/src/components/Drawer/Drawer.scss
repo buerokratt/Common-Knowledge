@@ -21,7 +21,7 @@
     display: flex;
     align-items: center;
     gap: get-spacing(haapsalu);
-    padding: get-spacing(haapsalu);
+    padding: get-spacing(haapsalu) !important;
     border-bottom: 1px solid get-color(black-coral-2);
 
     .icon {
