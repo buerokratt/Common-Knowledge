@@ -39,8 +39,6 @@ const Layout: FC = () => {
     const menuCountConf = useMenuCountConf();
 
   return (
-    console.log('Menu count configuration:', menuCountConf), // Debug log to check the menu count configuration --- IGNORE ---
-    console.log('Domain selector visibility:', domainBarShowing), // Debug log to check if the domain selector is visible --- IGNORE ---
     <div className="layout">
       {/* <NavigationSidebar menuItems={menuItems} /> */}
       <MainNavigation countConf={menuCountConf} />
