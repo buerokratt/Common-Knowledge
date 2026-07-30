@@ -181,10 +181,10 @@ const ScrapedFiles: FC = () => {
     refetchInterval: (data: any) => (sourceData?.status === 'running' || (sourceData?.status === 'in_review' && (data?.total === 0 || data == null))) ? 5000 : false,
   });
 
-  // Clear row selection when data changes
+  // Clear row selection when data changes (including page/page-size changes)
   useEffect(() => {
     setRowSelection({});
-  }, [scrapedFilesData?.total]);
+  }, [scrapedFilesData?.total, pagination.pageIndex, pagination.pageSize]);
 
   // Refresh file mutation
   const refreshMutation = useMutation({
