@@ -31,6 +31,8 @@ interface StoreState {
   getGroupedUnansweredChats: () => GroupedChat;
   loadPendingChats: () => Promise<void>;
   getGroupedPendingChats: () => GroupedPendingChat;
+  userDomains: string[];
+  setUserDomains: (domains: string[]) => void;
 }
 
 const useStore = create<StoreState>((set, get, store) => ({
@@ -73,6 +75,8 @@ const useStore = create<StoreState>((set, get, store) => ({
   },
   unansweredChatsLength: () => get().unansweredChats().length,
   forwordedChatsLength: () => get().forwordedChats().length,
+  userDomains: [],
+  setUserDomains: (domains: string[]) => set({ userDomains: domains }),
 
   loadActiveChats: async () => {
     const res = await apiDev.get('agents/chats/active');
