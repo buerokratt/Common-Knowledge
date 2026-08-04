@@ -621,6 +621,7 @@
     "contentSaved": "File saved successfully",
     "failed": "Failed",
     "in_review": "In Review",
+    "not_found": "Not Found",
     "startCleaningNotification":"All pages have been scraped. Before continuing, delete all pages that you do not want to make available to the chatbot, like news and archived pages. Once you have made your selection, continue cleaning the pages by clicking the 'Start cleaning' button.",
     "cleaningStarted": "Cleaning started"
   },
