@@ -4,10 +4,13 @@
 
 .knowledge-base-settings {
   height: 100%;
+  max-width: 100%;
   display: flex;
   flex-direction: column;
   padding: get-spacing(haapsalu);
-  
+  box-sizing: border-box;
+  overflow-x: auto;
+
   &__path {
     display: flex;
     align-items: center;
@@ -35,9 +38,15 @@
 
   &__content {
     flex: 1;
+    min-width: fit-content;
     display: flex;
     flex-direction: column;
     gap: get-spacing(haapsalu);
+  }
+
+  &__url {
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   &__section {
@@ -54,6 +63,10 @@
     font-size: $veera-font-size-100;
     font-weight: $veera-font-weight-beta;
     color: get-color(black-coral-15);
+  }
+
+  &__section--indent {
+    margin-left: 318px;
   }
 
   &__repeat-group {
@@ -183,21 +196,16 @@
   // Responsive design
   @media (max-width: 768px) {
     padding: get-spacing(paldiski);
-    
+
     &__content {
       gap: get-spacing(paldiski);
     }
-    
+
     &__days-grid {
       button {
         min-width: 50px;
         font-size: $veera-font-size-80;
       }
-    }
-    
-    .track {
-      flex-wrap: wrap;
-      gap: get-spacing(paldiski);
     }
   }
 }
