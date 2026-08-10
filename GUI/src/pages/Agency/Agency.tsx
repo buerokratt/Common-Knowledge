@@ -814,12 +814,19 @@ const Agency: FC = () => {
       {uploadModal && (
         <Dialog
           title={t('knowledgeBase.uploadFiles')}
-          onClose={() => !uploadProgress.isUploading && setUploadModal(false)}
+          onClose={() => {
+            if (uploadProgress.isUploading) return;
+            setUploadModal(false);
+            setFormData(getInitialFormData());
+          }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
-                onClick={() => setUploadModal(false)}
+                onClick={() => {
+                  setUploadModal(false);
+                  setFormData(getInitialFormData());
+                }}
                 disabled={uploadProgress.isUploading}
               >
                 {t('global.cancel')}
@@ -870,12 +877,18 @@ const Agency: FC = () => {
       {addUrlModal && (
         <Dialog
           title={t('knowledgeBase.addUrl')}
-          onClose={() => setAddUrlModal(false)}
+          onClose={() => {
+            setAddUrlModal(false);
+            setFormData(getInitialFormData());
+          }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
-                onClick={() => setAddUrlModal(false)}
+                onClick={() => {
+                  setAddUrlModal(false);
+                  setFormData(getInitialFormData());
+                }}
               >
                 {t('global.cancel')}
               </Button>
@@ -1027,12 +1040,18 @@ const Agency: FC = () => {
       {addUrlListModal && (
         <Dialog
           title={t('knowledgeBase.addUrlList')}
-          onClose={() => setAddUrlListModal(false)}
+          onClose={() => {
+            setAddUrlListModal(false);
+            setFormData(getInitialFormData());
+          }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
-                onClick={() => setAddUrlListModal(false)}
+                onClick={() => {
+                  setAddUrlListModal(false);
+                  setFormData(getInitialFormData());
+                }}
               >
                 {t('global.cancel')}
               </Button>
