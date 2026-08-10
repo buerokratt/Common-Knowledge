@@ -1,0 +1,29 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "check if a source_file already exists for this source by url"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    params:
+      - field: source_id
+        type: string
+        description: "source base id"
+      - field: url
+        type: string
+        description: "url to check"
+
+checkSourceFileExists:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_file/get_source_file_exists_by_url"
+    query:
+      source_base_id: ${incoming.params.source_id}
+      url: ${incoming.params.url}
+  result: existsResult
+
+returnResult:
+  return: ${existsResult.response.body[0].exists}
+  next: end

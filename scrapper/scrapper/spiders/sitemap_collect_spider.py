@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from urllib.parse import urljoin, urlparse
 
+import requests
 from scrapy import Request
 from scrapy.http import Response
 
@@ -118,7 +119,21 @@ class SitemapCollectSpider(BaseSpider):
                 )
             self.hashes.add(scrapped_item.hash)
 
-            yield scrapped_item
+            # Only register brand-new pages here. Updating already-known
+            # pages' content is entire_source_spider's job (it does the
+            # hash comparison against the stored version); creating a
+            # source_file for it again here would duplicate it.
+            already_exists = requests.get(
+                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/get-source-file-exists-by-url",
+                params={"source_id": self.task.source_id, "url": response.url},
+            ).json()["response"]
+
+            if already_exists:
+                self.logger.info(
+                    f"Skipping {scrapped_item.metadata.source_url} because it already exists as a source_file"
+                )
+            else:
+                yield scrapped_item
 
             if scrapped_item.metadata.file_type != ".html":
                 continue

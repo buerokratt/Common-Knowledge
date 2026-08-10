@@ -1,0 +1,22 @@
+extractRequestData:
+  assign:
+    agency_id: ${incoming.body.agency_id}
+    source_id: ${incoming.body.source_id}
+    url: ${incoming.body.url}
+    is_initial_scrape: ${incoming.body.is_initial_scrape}
+
+
+triggerScrapper:
+  call: http.post
+  args:
+    url: "[#CKB_SCRAPPER_SERVICE]/sitemap-collect-scrapper-task"
+    contentType: json
+    body:
+      agency_id: ${agency_id}
+      source_id: ${source_id}
+      url: ${url}
+      is_initial_scrape: ${is_initial_scrape}
+  result: triggerScrapperResult
+
+returnResult:
+  return: "OK"
