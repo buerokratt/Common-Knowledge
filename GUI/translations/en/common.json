@@ -543,6 +543,7 @@
     "apiError": "Failed to add API integration",
     "urlSuccess": "The URL source was successfully added",
     "urlError": "Failed to add website URL",
+    "invalidUrl": "Please enter a valid URL",
     "urlAddedSuccess": "URL added successfully",
     "urlAddError": "Failed to add URL",
     "urlDeleteSuccess": "URL deleted successfully",
