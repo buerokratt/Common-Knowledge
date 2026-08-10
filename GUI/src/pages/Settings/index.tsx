@@ -566,10 +566,9 @@ const SourceSettings: FC = () => {
       case 'months':
         return (
           <div
-            className="knowledge-base-settings__section"
+            className="knowledge-base-settings__section knowledge-base-settings__section--indent"
             style={{
               flexDirection: 'column',
-              marginLeft: 318,
               gap: 24,
               alignItems: 'flex-start',
             }}
@@ -695,10 +694,9 @@ const SourceSettings: FC = () => {
       case 'years':
         return (
           <div
-            className="knowledge-base-settings__section"
+            className="knowledge-base-settings__section knowledge-base-settings__section--indent"
             style={{
               flexDirection: 'column',
-              marginLeft: 318,
               gap: 24,
               alignItems: 'flex-start',
             }}
