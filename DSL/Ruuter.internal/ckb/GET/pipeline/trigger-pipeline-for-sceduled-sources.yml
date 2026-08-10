@@ -91,6 +91,23 @@ triggerScrapperPipelineForSource:
     source_id: ${sourceToRun.response.body[0].baseId}
     agency_id: ${sourceToRun.response.body[0].agencyBaseId}
   result: res
+  next: triggerSitemapCollectForScheduledSource
+
+# Scheduled refresh also re-runs sitemap collection so that pages added to
+# the site since the last crawl get discovered and registered as new
+# source_files, matching manual refresh's behavior. Pages that already
+# exist are skipped by the spider itself (see SitemapCollectSpider), so
+# this only ever adds new pages here.
+triggerSitemapCollectForScheduledSource:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-sitemap-collect"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+    url: ${sourceToRun.response.body[0].url}
+    is_initial_scrape: false
+  result: sitemapRes
   next: getOneSourceToRun
 
 returnSuccess:
