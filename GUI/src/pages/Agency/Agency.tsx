@@ -109,6 +109,11 @@ const Agency: FC = () => {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
+  // Set right after clicking Refresh; cleared once that source's "running"
+  // status is actually observed in a fetch. Lets refetchInterval keep polling
+  // through the gap before the backend has marked anything running yet.
+  const [awaitingRefreshStart, setAwaitingRefreshStart] = useState(false);
+
    const [formData, setFormData] = useState<KnowledgeBaseFormData>(
     getInitialFormData()
   );
@@ -161,6 +166,22 @@ const Agency: FC = () => {
     queryFn: () => getSources(queryParams),
     enabled: !!agencyBaseId,
     keepPreviousData: true,
+    // Keep polling every 2s as long as some source is in a transient state
+    // (running, or just refreshed and not yet reflected as running), so both
+    // the idle->running and running->finished transitions show up without a
+    // manual reload. Stops on its own once nothing is in flight.
+    refetchInterval: (data) => {
+      const sources = data?.data ?? [];
+      const hasRunningSource = sources.some(
+        (source: Source) => source.status === 'running'
+      );
+
+      if (hasRunningSource && awaitingRefreshStart) {
+        setAwaitingRefreshStart(false);
+      }
+
+      return hasRunningSource || awaitingRefreshStart ? 2000 : false;
+    },
   });
 
   // File upload mutation
@@ -417,7 +438,17 @@ const Agency: FC = () => {
         title: t('global.notification'),
         message: t('knowledgeBase.refreshSuccess'),
       });
+
+      // The backend flips the source's status to "running" asynchronously
+      // (Celery task -> subprocess -> Scrapy spider startup), so a single
+      // refetch right after this call often lands before that happens.
+      // Polling (see refetchInterval above) picks up the change once it
+      // lands, and continues through running->finished afterwards. The
+      // timeout below is just a safety net in case the backend never marks
+      // it running (e.g. the job fails before reaching that point).
       queryClient.invalidateQueries(['sources']);
+      setAwaitingRefreshStart(true);
+      setTimeout(() => setAwaitingRefreshStart(false), 15000);
     },
     onError: (error: any) => {
       toast.open({
@@ -836,12 +867,19 @@ const Agency: FC = () => {
       {uploadModal && (
         <Dialog
           title={t('knowledgeBase.uploadFiles')}
-          onClose={() => !uploadProgress.isUploading && setUploadModal(false)}
+          onClose={() => {
+            if (uploadProgress.isUploading) return;
+            setUploadModal(false);
+            setFormData(getInitialFormData());
+          }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
-                onClick={() => setUploadModal(false)}
+                onClick={() => {
+                  setUploadModal(false);
+                  setFormData(getInitialFormData());
+                }}
                 disabled={uploadProgress.isUploading}
               >
                 {t('global.cancel')}
@@ -893,7 +931,10 @@ const Agency: FC = () => {
         <Dialog
           title={t('knowledgeBase.addUrl')}
           onClose={() => {
+            {
             setAddUrlModal(false);
+            setFormData(getInitialFormData());
+          };
             setUrlError(null);
           }}
           footer={
@@ -901,7 +942,10 @@ const Agency: FC = () => {
               <Button
                 appearance="secondary"
                 onClick={() => {
+                  {
                   setAddUrlModal(false);
+                  setFormData(getInitialFormData());
+                };
                   setUrlError(null);
                 }}
               >
@@ -1062,7 +1106,10 @@ const Agency: FC = () => {
         <Dialog
           title={t('knowledgeBase.addUrlList')}
           onClose={() => {
+            {
             setAddUrlListModal(false);
+            setFormData(getInitialFormData());
+          };
             setUrlError(null);
           }}
           footer={
@@ -1070,7 +1117,10 @@ const Agency: FC = () => {
               <Button
                 appearance="secondary"
                 onClick={() => {
+                  {
                   setAddUrlListModal(false);
+                  setFormData(getInitialFormData());
+                };
                   setUrlError(null);
                 }}
               >

@@ -541,7 +541,7 @@
     "uploadError": "Failed to upload document",
     "apiSuccess": "API integration added successfully", 
     "apiError": "Failed to add API integration",
-    "urlSuccess": "URL-i allika lisamine õnnestus",
+    "urlSuccess": "The URL source was successfully added",
     "urlError": "Failed to add website URL",
     "invalidUrl": "Please enter a valid URL",
     "urlAddedSuccess": "URL added successfully",
