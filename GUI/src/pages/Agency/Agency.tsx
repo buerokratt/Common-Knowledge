@@ -73,6 +73,15 @@ const getInitialFormData = (): KnowledgeBaseFormData => ({
   extractImages: false,
 });
 
+const isValidUrl = (value: string): boolean => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
+
 const Agency: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
@@ -108,6 +117,7 @@ const Agency: FC = () => {
    const [formData, setFormData] = useState<KnowledgeBaseFormData>(
     getInitialFormData()
   );
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
@@ -472,6 +482,12 @@ const Agency: FC = () => {
       return;
     }
 
+    if (!isValidUrl(formData.websiteUrl)) {
+      setUrlError(t('knowledgeBase.invalidUrl'));
+      return;
+    }
+
+    setUrlError(null);
     addUrlMutation.mutate({
       agencyBaseId,
       url: formData.websiteUrl,
@@ -564,6 +580,12 @@ const Agency: FC = () => {
       return;
     }
 
+    if (!isValidUrl(formData.websiteUrl)) {
+      setUrlError(t('knowledgeBase.invalidUrl'));
+      return;
+    }
+
+    setUrlError(null);
     addUrlListMutation.mutate({
       agencyBaseId,
       url: formData.websiteUrl,
@@ -909,16 +931,22 @@ const Agency: FC = () => {
         <Dialog
           title={t('knowledgeBase.addUrl')}
           onClose={() => {
+            {
             setAddUrlModal(false);
             setFormData(getInitialFormData());
+          };
+            setUrlError(null);
           }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
                 onClick={() => {
+                  {
                   setAddUrlModal(false);
                   setFormData(getInitialFormData());
+                };
+                  setUrlError(null);
                 }}
               >
                 {t('global.cancel')}
@@ -955,11 +983,17 @@ const Agency: FC = () => {
               label={t('knowledgeBase.url')}
               name="websiteUrl"
               value={formData.websiteUrl || ''}
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
-              }
+              onChange={(e) => {
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }));
+                if (urlError) setUrlError(null);
+              }}
               required
             />
+            {urlError && (
+              <span style={{ color: '#AC3232', fontSize: '13px' }}>
+                {urlError}
+              </span>
+            )}
             <div className="quality-control-options">
               <span className="quality-control-options__title">
                 {t('knowledgeBase.imageExtraction')}
@@ -1072,16 +1106,22 @@ const Agency: FC = () => {
         <Dialog
           title={t('knowledgeBase.addUrlList')}
           onClose={() => {
+            {
             setAddUrlListModal(false);
             setFormData(getInitialFormData());
+          };
+            setUrlError(null);
           }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
                 onClick={() => {
+                  {
                   setAddUrlListModal(false);
                   setFormData(getInitialFormData());
+                };
+                  setUrlError(null);
                 }}
               >
                 {t('global.cancel')}
@@ -1120,12 +1160,18 @@ const Agency: FC = () => {
               label={t('knowledgeBase.mainSourceUrl')}
               name="websiteUrl"
               value={formData.websiteUrl || ''}
-              onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
-              }
+              onChange={(e) => {
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }));
+                if (urlError) setUrlError(null);
+              }}
               required
             />
-            
+            {urlError && (
+              <span style={{ color: '#AC3232', fontSize: '13px' }}>
+                {urlError}
+              </span>
+            )}
+
             <div style={{ marginTop: '16px', width: '100%', textAlign: 'left', alignSelf: 'flex-start' }}>
               <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>
                 {t('knowledgeBase.uploadCsvWithUrls')}

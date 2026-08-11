@@ -543,6 +543,7 @@
     "apiError": "API integratsiooni lisamine ebaõnnestus",
     "urlSuccess": "Veebilehe URL lisamine õnnestus",
     "urlError": "Veebilehe URL-i lisamine ebaõnnestus",
+    "invalidUrl": "Palun sisesta kehtiv URL",
     "urlAddedSuccess": "URL lisamine õnnestus",
     "urlAddError": "URL-i lisamine ebaõnnestus",
     "urlDeleteSuccess": "URL kustutamine õnnestus",

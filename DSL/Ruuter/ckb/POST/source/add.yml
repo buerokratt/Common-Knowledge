@@ -38,6 +38,17 @@ extractRequestData:
     quality_control: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
     extract_images: "${incoming.body.extractImages == true}"
 
+validateUrl:
+  switch:
+    - condition: "${type == 'url_to_scrape' && !(url != null && (url.startsWith('http://') || url.startsWith('https://')))}"
+      next: returnInvalidUrl
+  next: createSource
+
+returnInvalidUrl:
+  return: "Invalid URL"
+  status: 400
+  next: end
+
 createSource:
   call: http.post
   args:
