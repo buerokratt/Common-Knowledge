@@ -732,7 +732,11 @@ const Agency: FC = () => {
               appearance="text"
               size="s"
               onClick={() => handleStopScraping(row.original.baseId)}
-              disabled={stopScrapingMutation.isLoading}
+              disabled={
+                (stopScrapingMutation.isLoading &&
+                  stopScrapingMutation.variables === row.original.baseId) ||
+                row.original.isStopping
+              }
             >
               <Icon
                 icon={<MdOutlineStopCircle fontSize={20} />}
