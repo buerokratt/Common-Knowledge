@@ -8,6 +8,9 @@ from scrapy_playwright.handler import ScrapyPlaywrightDownloadHandler
 from twisted.internet.defer import Deferred
 
 
+PLAYWRIGHT_TIMEOUT_MAX_RETRIES = 3
+
+
 class DownloadHandler(ScrapyPlaywrightDownloadHandler):
     def __init__(self, crawler: Crawler) -> None:
         super().__init__(crawler)
@@ -36,10 +39,16 @@ class DownloadHandler(ScrapyPlaywrightDownloadHandler):
         spider.logger.info(f"Playwright download: {request.url}")
         return super().download_request(request, spider)
 
-    async def _download_request(self, request: Request, spider: Spider) -> Response:
+    async def _download_request(
+        self, request: Request, spider: Spider, _attempt: int = 1
+    ) -> Response:
         """
         Internal async download method with fallback for download errors.
         This is called by the parent's download_request when using Playwright.
+        Retries on Playwright timeout up to PLAYWRIGHT_TIMEOUT_MAX_RETRIES times
+        before giving up, so a single unresponsive URL can never wedge the
+        spider in an infinite retry loop and block it from ever reaching
+        parse() again (where the source's stop flag is checked).
         """
         try:
             spider.logger.info(f"Playwright request started: {request.url}")
@@ -48,13 +57,20 @@ class DownloadHandler(ScrapyPlaywrightDownloadHandler):
                 spider.logger.info(f"Playwright request finished: {request.url}")
                 return r
         except TimeoutError:
+            if _attempt >= PLAYWRIGHT_TIMEOUT_MAX_RETRIES:
+                spider.logger.error(
+                    f"request timed out due to playwright: {request.url}. "
+                    f"Giving up after {_attempt} attempts"
+                )
+                raise
             spider.logger.warning(
-                f"request timed out due to playwright: {request.url}. Try again"
+                f"request timed out due to playwright: {request.url}. "
+                f"Try again ({_attempt}/{PLAYWRIGHT_TIMEOUT_MAX_RETRIES})"
             )
             await self._close()
             super().__init__(self.crawler)  # Re-initialize with the same crawler
             await self._launch()
-            return await self._download_request(request, spider)
+            return await self._download_request(request, spider, _attempt + 1)
         except Exception as e:
             # Catch "Download is starting" and similar download errors as safety net
             if "Download is starting" in str(e) or "net::ERR_ABORTED" in str(e):
