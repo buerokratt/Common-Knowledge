@@ -24,6 +24,7 @@ export interface Source {
   type?: string;
   qualityControl?: 'basic' | 'comprehensive' | null;
   extractImages?: boolean;
+  isStopping?: boolean;
 }
 
 // API Integration interface - extends Source but with specific properties

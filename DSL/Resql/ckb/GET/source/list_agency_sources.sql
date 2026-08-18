@@ -64,16 +64,19 @@ declaration:
       - field: has_finished_files
         type: boolean
         description: "True if source has at least one finished file"
+      - field: is_stopping
+        type: boolean
+        description: "True if a stop was requested and is still being processed"
 */
 WITH latest_sources AS (
     SELECT DISTINCT ON (base_id)
-        id, base_id, agency_base_id, url, subsector, status, last_scraped_at, type, is_deleted, updated_at
+        id, base_id, agency_base_id, url, subsector, status, last_scraped_at, type, is_deleted, updated_at, is_stopping
     FROM data_collection.source
     WHERE agency_base_id = :agency_base_id::UUID
     ORDER BY base_id, updated_at DESC
 )
 SELECT
-    ls.id, ls.base_id, ls.agency_base_id, ls.url, ls.subsector, ls.status, ls.last_scraped_at, ls.type,
+    ls.id, ls.base_id, ls.agency_base_id, ls.url, ls.subsector, ls.status, ls.last_scraped_at, ls.type, ls.is_stopping,
     :page as page,
     CEIL(COUNT(*) OVER () / :page_size::DECIMAL) AS total_pages,
     (COUNT(*) OVER ()) AS total,
