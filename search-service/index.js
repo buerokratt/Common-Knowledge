@@ -424,7 +424,7 @@ app.delete("/documents/:sourceId/:sourceFileId", async (req, res) => {
     // Check if index exists
     const exists = await opensearch.indices.exists({ index: indexName });
     if (!exists.body) {
-      console.warn(`⚠️  Index not found for source: ${sourceId}`);
+      console.warn(`Index not found for source: ${sourceId}`);
       return res.json({
         success: true,
         source_id: sourceId,
