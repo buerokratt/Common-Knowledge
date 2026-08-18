@@ -16,6 +16,7 @@ import {
   ReportPage,
   ReportPagesListParams,
 } from 'services/reports';
+import { getSanitizedErrorDetail } from 'utils/report-error-utils';
 import 'pages/Agency/AgencyList.scss';
 
 const Report: FC = () => {
@@ -168,19 +169,22 @@ const Report: FC = () => {
       accessorKey: 'errorMessage',
       header: t('reports.errorMessage'),
       enableColumnFilter: false,
-      cell: ({ row }) => (
-        <div
-          style={{
-            maxWidth: 300,
-            overflow: 'hidden',
-            textOverflow: 'ellipsis',
-          }}
-        >
-          <Tooltip content={row.original.errorMessage || '-'}>
-            <span>{row.original.errorMessage || '-'}</span>
-          </Tooltip>
-        </div>
-      ),
+      cell: ({ row }) => {
+        const errorDetail = getSanitizedErrorDetail(row.original.errorMessage);
+        return (
+          <div
+            style={{
+              maxWidth: 300,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            <Tooltip content={errorDetail}>
+              <span>{errorDetail}</span>
+            </Tooltip>
+          </div>
+        );
+      },
     },
     {
       accessorKey: 'scrapedAt',
