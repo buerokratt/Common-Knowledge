@@ -54,7 +54,12 @@ async function createSourceIndex(sourceId) {
               document_type: { type: "keyword" },
               page_title: { type: "text", analyzer: "standard" },
               file_name: { type: "text" },
-              url: { type: "keyword" },
+              url: {
+                type: "keyword",
+                fields: {
+                  text: { type: "text", analyzer: "standard" },
+                },
+              },
               subsector: { type: "keyword" },
               content: { type: "text", analyzer: "standard" },
               indexed_at: { type: "date" },
@@ -245,7 +250,7 @@ app.get("/search/:sourceId", async (req, res) => {
                       multi_match: {
                         query: q.trim(),
                         fields: [
-                          "url^5",
+                          "url.text^5",
                           "content^3",
                           "page_title^2",
                           "file_name^2",
@@ -313,7 +318,7 @@ app.get("/search/:sourceId", async (req, res) => {
                       multi_match: {
                         query: q.trim(),
                         fields: [
-                          "url^5",
+                          "url.text^5",
                           "content^3",
                           "page_title^2",
                           "file_name^2",
