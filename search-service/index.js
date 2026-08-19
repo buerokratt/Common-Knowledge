@@ -54,7 +54,12 @@ async function createSourceIndex(sourceId) {
               document_type: { type: "keyword" },
               page_title: { type: "text", analyzer: "standard" },
               file_name: { type: "text" },
-              url: { type: "keyword" },
+              url: {
+                type: "keyword",
+                fields: {
+                  text: { type: "text", analyzer: "standard" },
+                },
+              },
               subsector: { type: "keyword" },
               content: { type: "text", analyzer: "standard" },
               indexed_at: { type: "date" },
@@ -245,7 +250,7 @@ app.get("/search/:sourceId", async (req, res) => {
                       multi_match: {
                         query: q.trim(),
                         fields: [
-                          "url^5",
+                          "url.text^5",
                           "content^3",
                           "page_title^2",
                           "file_name^2",
@@ -313,7 +318,7 @@ app.get("/search/:sourceId", async (req, res) => {
                       multi_match: {
                         query: q.trim(),
                         fields: [
-                          "url^5",
+                          "url.text^5",
                           "content^3",
                           "page_title^2",
                           "file_name^2",
@@ -424,9 +429,13 @@ app.delete("/documents/:sourceId/:sourceFileId", async (req, res) => {
     // Check if index exists
     const exists = await opensearch.indices.exists({ index: indexName });
     if (!exists.body) {
-      return res.status(404).json({
-        error: "Index not found",
+      console.warn(`Index not found for source: ${sourceId}`);
+      return res.json({
+        success: true,
         source_id: sourceId,
+        source_file_id: sourceFileId,
+        deleted_count: 0,
+        status: "index_not_found",
       });
     }
 

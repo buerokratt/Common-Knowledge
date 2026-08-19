@@ -732,7 +732,11 @@ const Agency: FC = () => {
               appearance="text"
               size="s"
               onClick={() => handleStopScraping(row.original.baseId)}
-              disabled={stopScrapingMutation.isLoading}
+              disabled={
+                (stopScrapingMutation.isLoading &&
+                  stopScrapingMutation.variables === row.original.baseId) ||
+                row.original.isStopping
+              }
             >
               <Icon
                 icon={<MdOutlineStopCircle fontSize={20} />}
@@ -1265,43 +1269,72 @@ const Agency: FC = () => {
                 {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
               <div
-                className="quality-control-options__row"
-                style={{ flexDirection: 'column', alignItems: 'flex-start' }}
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', width: '100%' }}
               >
-                <label className="quality-control-options__item">
-                  <input
-                    type="radio"
-                    name="qualityControlLevelUrlList"
-                    checked={formData.qualityControlLevel === 'basic'}
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        qualityControlLevel:
-                          prev.qualityControlLevel === 'basic' ? '' : 'basic',
-                      }))
-                    }
-                    onChange={() => {}}
-                  />
-                  <span>{t('knowledgeBase.basicQualityControl')}</span>
-                </label>
-                <label className="quality-control-options__item">
-                  <input
-                    type="radio"
-                    name="qualityControlLevelUrlList"
-                    checked={formData.qualityControlLevel === 'comprehensive'}
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        qualityControlLevel:
-                          prev.qualityControlLevel === 'comprehensive'
-                            ? ''
-                            : 'comprehensive',
-                      }))
-                    }
-                    onChange={() => {}}
-                  />
-                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
-                </label>
+                <div className="quality-control-options__row">
+                  <label className="quality-control-options__item">
+                    <input
+                      type="radio"
+                      name="qualityControlLevelUrlList"
+                      checked={formData.qualityControlLevel === 'basic'}
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          qualityControlLevel:
+                            prev.qualityControlLevel === 'basic' ? '' : 'basic',
+                        }))
+                      }
+                      onChange={() => {}}
+                    />
+                    <span>{t('knowledgeBase.basicQualityControl')}</span>
+                  </label>
+                  <Tooltip content="Tooltip to be implemented">
+                    <button
+                      type="button"
+                      className="quality-control-options__info-btn"
+                      aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
+                    >
+                      <Icon
+                        className="quality-control-options__info"
+                        icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                        size="medium"
+                      />
+                    </button>
+                  </Tooltip>
+                </div>
+                <div className="quality-control-options__row">
+                  <label className="quality-control-options__item">
+                    <input
+                      type="radio"
+                      name="qualityControlLevelUrlList"
+                      checked={formData.qualityControlLevel === 'comprehensive'}
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          qualityControlLevel:
+                            prev.qualityControlLevel === 'comprehensive'
+                              ? ''
+                              : 'comprehensive',
+                        }))
+                      }
+                      onChange={() => {}}
+                    />
+                    <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
+                  </label>
+                  <Tooltip content="Tooltip to be implemented">
+                    <button
+                      type="button"
+                      className="quality-control-options__info-btn"
+                      aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
+                    >
+                      <Icon
+                        className="quality-control-options__info"
+                        icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                        size="medium"
+                      />
+                    </button>
+                  </Tooltip>
+                </div>
               </div>
             </div>
           </Track>

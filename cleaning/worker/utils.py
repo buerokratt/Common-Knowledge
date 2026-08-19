@@ -1,6 +1,7 @@
 import contextlib
 import datetime
 import logging
+import re
 import shutil
 from collections.abc import Iterator
 
@@ -10,6 +11,44 @@ from api.config import settings
 from api.models import EntityToClean
 
 logger = logging.getLogger(__name__)
+
+# Query/form params commonly used to pass credentials or tokens.
+_SENSITIVE_PARAM_NAMES = (
+    "token",
+    "api_key",
+    "apikey",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "access_token",
+    "auth",
+    "session",
+    "sessionid",
+    "sid",
+)
+
+_USERINFO_RE = re.compile(r"://[^\s/@]+:[^\s/@]+@")
+_AUTH_HEADER_RE = re.compile(
+    r"(authorization[\"']?\s*[:=]\s*[\"']?(basic|bearer)\s+)\S+", re.IGNORECASE
+)
+_SENSITIVE_PARAM_RE = re.compile(
+    r"([?&](?:" + "|".join(_SENSITIVE_PARAM_NAMES) + r")=)[^&\s\"'<>]+",
+    re.IGNORECASE,
+)
+
+
+def sanitize_sensitive_text(text: str) -> str:
+    """Redact credentials/tokens from a URL or error message before it is
+    logged or sent to the backend (e.g. userinfo in a URL, Authorization
+    headers appearing in exception text, credential-style query params)."""
+    if not text:
+        return text
+
+    sanitized = _USERINFO_RE.sub("://[redacted]@", text)
+    sanitized = _AUTH_HEADER_RE.sub(r"\1[redacted]", sanitized)
+    sanitized = _SENSITIVE_PARAM_RE.sub(r"\1[redacted]", sanitized)
+    return sanitized
 
 
 def send_error(
@@ -28,7 +67,7 @@ def send_error(
                 "url": url,
                 "scraped_at": scraped_at,
                 "error_type": error_type,
-                "error_message": error_message,
+                "error_message": sanitize_sensitive_text(error_message),
                 "source_base_id": source_base_id,
                 "agency_base_id": agency_base_id,
                 "source_run_report_base_id": source_run_report_base_id,
