@@ -75,6 +75,7 @@ createSource:
       subsector: ${subsector}
       type: ${type}
       quality_control: ''
+      extract_images: false
   result: sourceResponse
 
 extractSourceId:
