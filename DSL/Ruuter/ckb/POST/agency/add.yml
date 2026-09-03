@@ -14,35 +14,28 @@ declaration:
       - field: sector
         type: string
         description: "Sector of the agency"
-      - field: externalId
-        type: string
-        description: "Centops ID for the agency"
 
 extractRequestData:
   assign:
     name: "${incoming.body.name}"
     sector: "${incoming.body.sector}"
-    external_id: "${incoming.body.externalId}"
 
-checkNameExists:
+checkAgencyExists:
   call: http.get
   args:
-    url: "[#CKB_RESQL]/agency/check_name_exists"
-    query:
-      name: ${name}
-      exclude_base_id: ""
-  result: nameCheckResult
-  next: validateNameUnique
+    url: "[#CKB_RESQL]/agency/check_agency_exists"
+  result: agencyExistsResult
+  next: validateSingleAgency
 
-validateNameUnique:
+validateSingleAgency:
   switch:
-    - condition: ${nameCheckResult.response.body[0].exists == true}
-      next: returnError
+    - condition: ${agencyExistsResult.response.body[0].exists == true}
+      next: returnAgencyExistsError
   next: createAgency
 
-returnError:
-  return: "Agency with this name already exists"
-  status: 400
+returnAgencyExistsError:
+  return: "An agency already exists. CKB supports only one agency per deployment."
+  status: 409
   next: end
 
 createAgency:
@@ -54,7 +47,6 @@ createAgency:
     body:
       name: ${name}
       sector: ${sector}
-      external_id: ${external_id}
   result: res
 
 returnSuccess:

@@ -3,7 +3,7 @@ name: Build and publish Common-Knowledge services
 on:
   push:
     branches:
-      - dev
+      - wip
     paths:
       - '.env.dev'
   workflow_dispatch:

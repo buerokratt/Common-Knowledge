@@ -1,0 +1,174 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Start cleaning for all in_review, non-excluded, non-deleted source_files of a source"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: source_id
+        type: string
+        description: "Source base ID (UUID)"
+
+# 1. Load source and agency context and create a fresh run report
+getSource:
+  call: http.get
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/source/get"
+    query:
+      baseId: ${incoming.body.source_id}
+  result: sourceResult
+  next: checkSourceFound
+
+checkSourceFound:
+  switch:
+    - condition: ${sourceResult.response.body.response.length > 0}
+      next: assignSourceData
+  next: sourceNotFoundError
+
+sourceNotFoundError:
+  return: "Error: Source not found."
+  status: 404
+  next: end
+
+assignSourceData:
+  assign:
+    source: ${sourceResult.response.body.response[0]}
+    source_base_id: ${sourceResult.response.body.response[0].baseId}
+    agency_base_id: ${sourceResult.response.body.response[0].agencyBaseId}
+    source_url: ${sourceResult.response.body.response[0].url}
+    quality_control: ${sourceResult.response.body.response[0].qualityControl}
+    extract_images: ${sourceResult.response.body.response[0].extractImages == true}
+  next: computeQualityControlFlags
+
+computeQualityControlFlags:
+  assign:
+    use_llm: "${quality_control == 'basic' || quality_control == 'comprehensive'}"
+    use_llm_correction: "${quality_control == 'comprehensive'}"
+  next: validateSourceStatus
+
+validateSourceStatus:
+  switch:
+    - condition: ${source.status == 'in_review'}
+      next: getAgency
+    - condition: ${source.status == 'running'}
+      next: alreadyRunning
+  next: invalidSourceStatus
+
+alreadyRunning:
+  return: "Scrapping or Cleaning is already in progress for this source."
+  status: 409
+  next: end
+
+invalidSourceStatus:
+  return: "Error: Source must be in_review before starting cleaning."
+  status: 400
+  next: end
+
+getAgency:
+  call: http.get
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/get"
+    query:
+      baseId: ${agency_base_id}
+  result: agencyResult
+  next: checkAgencyFound
+
+checkAgencyFound:
+  switch:
+    - condition: ${agencyResult.response.body.response.length > 0}
+      next: assignAgencyName
+  next: agencyNotFoundError
+
+agencyNotFoundError:
+  return: "Error: Agency not found for source."
+  status: 404
+  next: end
+
+assignAgencyName:
+  assign:
+    agency_name: ${agencyResult.response.body.response[0].name}
+    scraping_started_at: "${new Date().toISOString().replace('T', ' ').replace('Z', '')}"
+  next: getLatestReportBySource
+
+getLatestReportBySource:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/reports/get_latest_source_run_report_by_source_base_id"
+    query:
+      source_base_id: ${source_base_id}
+  result: existingReportResult
+  next: checkResults
+
+checkResults:
+  switch:
+    - condition: ${existingReportResult.response.body.length > 0}
+      next: assignExistingRunData
+  next: reportMissingScrappingLogFile
+
+assignExistingRunData:
+  assign:
+    source_run_report_base_id: ${existingReportResult.response.body[0].baseId}
+    scraping_log_url: ${existingReportResult.response.body[0].scrapingLogUrl ?? ""}
+    logs_path: "/scrapped-data/logs/cleaning/${existingReportResult.response.body[0].baseId}.log"
+  next: getInReviewFiles
+
+setSourceRunning:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_status"
+    body:
+      base_id: ${incoming.body.source_id}
+      status: running
+  result: setSourceRunningResult
+  next: triggerAsyncSourceCleaning
+
+
+# 2. Get all eligible files
+getInReviewFiles:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_file/list_in_review_source_files"
+    query:
+      source_id: ${incoming.body.source_id}
+  result: filesResult
+  next: checkFilesExist
+
+checkFilesExist:
+  switch:
+    - condition: ${filesResult.response.body.length > 0}
+      next: setSourceRunning
+  next: noFilesToClean
+
+noFilesToClean:
+  return: "No in_review files found to clean for this source."
+  status: 400
+  next: end
+
+triggerAsyncSourceCleaning:
+  call: http.post
+  args:
+    url: "[#CKB_CLEANING_SERVICE]/clean_source_async"
+    body:
+      source_base_id: ${incoming.body.source_id}
+      agency_base_id: ${agency_base_id}
+      source_run_report_base_id: ${source_run_report_base_id}
+      scraping_log_url: ${scraping_log_url}
+      logs_path: ${logs_path}
+      files: ${filesResult.response.body}
+      use_llm: ${use_llm}
+      use_llm_correction: ${use_llm_correction}
+      extract_images: ${extract_images}
+  result: asyncCleaningResult
+  next: returnSuccess
+
+returnSuccess:
+  return: "Cleaning started asynchronously."
+  next: end
+
+reportMissingScrappingLogFile:
+  return: "Error: No existing run report found for source, cannot determine logs path for cleaning. Please run scraping at least once before starting cleaning."
+  status: 400
+  next: end

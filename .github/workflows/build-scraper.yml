@@ -2,7 +2,7 @@ name: Build and publish GUI
 
 on:
   push:
-    branches: [ dev ]
+    branches: [ wip ]
     paths:
       - '.env.scrapper'
 
@@ -38,12 +38,12 @@ jobs:
            echo "$GITHUB_ENV"
       - name: Docker Build server
         run: | 
-           cd scrapper
-           docker build --tag $DOCKER_TAG_CUSTOM --target server .
+           
+           docker build --no-cache -f scrapper/Dockerfile --tag $DOCKER_TAG_CUSTOM --target server .
       - name: Docker build celery
         run: |
-          cd scrapper
-          docker build --tag $DOCKER_TAG_CELERY --target celery .
+          
+          docker build --no-cache -f scrapper/Dockerfile --tag $DOCKER_TAG_CELERY --target celery .
 
       - name: Log in to GitHub container registry
         run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin

@@ -9,6 +9,9 @@ extractRequestData:
     source_base_id: ${incoming.body.source_base_id}
     agency_base_id: ${incoming.body.agency_base_id}
     source_run_report_base_id: ${incoming.body.source_run_report_base_id}
+    use_llm: ${incoming.body.use_llm}
+    use_llm_correction: ${incoming.body.use_llm_correction}
+    extract_images: ${incoming.body.extract_images}
 
 
 cleanData:
@@ -25,6 +28,9 @@ cleanData:
       source_base_id: ${source_base_id}
       agency_base_id: ${agency_base_id}
       source_run_report_base_id: ${source_run_report_base_id}
+      use_llm: ${use_llm}
+      use_llm_correction: ${use_llm_correction}
+      extract_images: ${extract_images}
   result: cleanedResult
 
 

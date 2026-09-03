@@ -27,9 +27,47 @@ getSource:
 
 assignPipelineTemplate:
   switch:
+    - condition: ${sourceToRun.response.body[0].type == "pre_selected_urls"}
+      next: getSourceFilesForUrlListRefresh
     - condition: ${sourceToRun.response.body[0].type == "api"}
       next: triggerApiPipelineForSource
   next: triggerScrapperPipelineForSource
+
+getSourceFilesForUrlListRefresh:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_files_to_scraping_by_source_base_id"
+    contentType: json
+    body:
+      source_base_id: ${sourceToRun.response.body[0].baseId}
+  result: sourceFilesToRun
+  next: checkSourceFilesFoundForUrlListRefresh
+
+checkSourceFilesFoundForUrlListRefresh:
+  switch:
+    - condition: ${sourceFilesToRun.response.body.length == 0}
+      next: returnNoFilesFound
+  next: setSourceRunningForUrlListRefresh
+
+setSourceRunningForUrlListRefresh:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/update_source_status"
+    body:
+      base_id: ${sourceToRun.response.body[0].baseId}
+      status: running
+  result: setSourceRunningResult
+  next: triggerSpecifiedPagesPipelineForSource
+
+triggerSpecifiedPagesPipelineForSource:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-specified-pages"
+  requestType: templates
+  body:
+    source_id: ${sourceFilesToRun.response.body[0].sourceBaseId}
+    agency_id: ${sourceFilesToRun.response.body[0].agencyBaseId}
+    source_files: ${sourceFilesToRun.response.body}
+  result: res
+  next: returnResult
 
 triggerApiPipelineForSource:
   template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-eesti-api-source"
@@ -47,8 +85,27 @@ triggerScrapperPipelineForSource:
     source_id: ${sourceToRun.response.body[0].baseId}
     agency_id: ${sourceToRun.response.body[0].agencyBaseId}
   result: res
+  next: triggerSitemapCollectForRefresh
+
+# Manual refresh also re-runs sitemap collection so that pages added to the
+# site since the last crawl get discovered and registered as new
+# source_files. Pages that already exist are skipped by the spider itself
+# (see SitemapCollectSpider), so this only ever adds new pages here.
+triggerSitemapCollectForRefresh:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-sitemap-collect"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+    url: ${sourceToRun.response.body[0].url}
+    is_initial_scrape: false
+  result: sitemapRes
   next: returnResult
 
 returnResult:
   return: "OK"
+  next: end
+
+returnNoFilesFound:
+  return: "No valid source files found to refresh"
   next: end

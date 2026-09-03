@@ -17,9 +17,6 @@ declaration:
       - field: sector
         type: string
         description: "Agency sector"
-      - field: external_id
-        type: string
-        description: "External identifier"
   response:
     fields:
       - field: id
@@ -32,7 +29,6 @@ SELECT copy_row_with_modifications(
     ARRAY[
         'name', '::TEXT', :name,
         'sector', '::TEXT', :sector,
-        'external_id', '::TEXT', :external_id,
         'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR
     ]::VARCHAR[]
 ) as id

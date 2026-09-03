@@ -35,7 +35,16 @@ declaration:
       - field: source_run_report_base_id
         type: string
         description: "source run report base id"
-
+      - field: use_llm
+        type: boolean
+        description: "whether to use LLM for cleaning (quality_control == basic/comprehensive)"
+      - field: use_llm_correction
+        type: boolean
+        description: "whether to use LLM correction for cleaning (quality_control == comprehensive)"
+      - field: extract_images
+        type: boolean
+        description: "whether to extract and store images from the source file"
+    
 
 cleanScrapedData:
   template: "[#CKB_PROJECT_LAYER]/pipeline/clean-file"
@@ -50,6 +59,9 @@ cleanScrapedData:
     source_base_id: ${incoming.body.source_base_id}
     agency_base_id: ${incoming.body.agency_base_id}
     source_run_report_base_id: ${incoming.body.source_run_report_base_id}
+    use_llm: ${incoming.body.use_llm}
+    use_llm_correction: ${incoming.body.use_llm_correction}
+    extract_images: ${incoming.body.extract_images}
   result: res
 
 

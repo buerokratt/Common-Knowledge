@@ -54,7 +54,12 @@ async function createSourceIndex(sourceId) {
               document_type: { type: "keyword" },
               page_title: { type: "text", analyzer: "standard" },
               file_name: { type: "text" },
-              url: { type: "keyword" },
+              url: {
+                type: "keyword",
+                fields: {
+                  text: { type: "text", analyzer: "standard" },
+                },
+              },
               subsector: { type: "keyword" },
               content: { type: "text", analyzer: "standard" },
               indexed_at: { type: "date" },
@@ -245,7 +250,7 @@ app.get("/search/:sourceId", async (req, res) => {
                       multi_match: {
                         query: q.trim(),
                         fields: [
-                          "url^5",
+                          "url.text^5",
                           "content^3",
                           "page_title^2",
                           "file_name^2",
@@ -313,7 +318,7 @@ app.get("/search/:sourceId", async (req, res) => {
                       multi_match: {
                         query: q.trim(),
                         fields: [
-                          "url^5",
+                          "url.text^5",
                           "content^3",
                           "page_title^2",
                           "file_name^2",
@@ -424,9 +429,13 @@ app.delete("/documents/:sourceId/:sourceFileId", async (req, res) => {
     // Check if index exists
     const exists = await opensearch.indices.exists({ index: indexName });
     if (!exists.body) {
-      return res.status(404).json({
-        error: "Index not found",
+      console.warn(`Index not found for source: ${sourceId}`);
+      return res.json({
+        success: true,
         source_id: sourceId,
+        source_file_id: sourceFileId,
+        deleted_count: 0,
+        status: "index_not_found",
       });
     }
 
@@ -463,6 +472,92 @@ app.delete("/documents/:sourceId/:sourceFileId", async (req, res) => {
     console.error("❌ Delete by source_file_id error:", error.message);
     res.status(500).json({
       error: "Failed to delete documents",
+      details: error.message,
+    });
+  }
+});
+
+// Bulk delete documents by multiple source_file_ids
+app.post("/documents/bulk-delete", async (req, res) => {
+  try {
+    // Support both array format and wrapped object format for Ruuter compatibility
+    const deleteRequests = Array.isArray(req.body) ? req.body : (req.body.deletes || []);
+
+    if (!Array.isArray(deleteRequests) || deleteRequests.length === 0) {
+      return res.status(400).json({
+        error: "Request body must be a non-empty array of delete requests",
+      });
+    }
+
+    console.log(`🗑️  Bulk deleting ${deleteRequests.length} source files from search index`);
+
+    const results = [];
+    let totalDeleted = 0;
+
+    // Group requests by source_id to minimize index lookups
+    const groupedBySource = deleteRequests.reduce((acc, req) => {
+      const { source_id, source_file_id } = req;
+      if (!acc[source_id]) {
+        acc[source_id] = [];
+      }
+      acc[source_id].push(source_file_id);
+      return acc;
+    }, {});
+
+    // Process each source
+    for (const [sourceId, sourceFileIds] of Object.entries(groupedBySource)) {
+      const indexName = `source_${sourceId}`;
+
+      // Check if index exists
+      const exists = await opensearch.indices.exists({ index: indexName });
+      if (!exists.body) {
+        console.warn(`⚠️  Index not found for source: ${sourceId}`);
+        results.push({
+          source_id: sourceId,
+          source_file_ids: sourceFileIds,
+          deleted_count: 0,
+          status: "index_not_found",
+        });
+        continue;
+      }
+
+      // Delete all documents for these source_file_ids
+      const deleteResponse = await opensearch.deleteByQuery({
+        index: indexName,
+        body: {
+          query: {
+            terms: {
+              source_file_id: sourceFileIds,
+            },
+          },
+        },
+      });
+
+      const deletedCount = deleteResponse.body.deleted;
+      totalDeleted += deletedCount;
+
+      console.log(
+        `✅ Deleted ${deletedCount} documents from source ${sourceId} (${sourceFileIds.length} files)`
+      );
+
+      results.push({
+        source_id: sourceId,
+        source_file_ids: sourceFileIds,
+        deleted_count: deletedCount,
+        status: "success",
+      });
+    }
+
+    res.json({
+      success: true,
+      total_deleted: totalDeleted,
+      total_files: deleteRequests.length,
+      results: results,
+    });
+  } catch (error) {
+    console.error("❌ Bulk delete error:", error.message);
+    res.status(500).json({
+      error: "Failed to bulk delete documents",
       details: error.message,
     });
   }

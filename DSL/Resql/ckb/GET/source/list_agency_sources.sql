@@ -61,20 +61,35 @@ declaration:
       - field: total
         type: integer
         description: "Total number of matching records"
+      - field: has_finished_files
+        type: boolean
+        description: "True if source has at least one finished file"
+      - field: is_stopping
+        type: boolean
+        description: "True if a stop was requested and is still being processed"
 */
 WITH latest_sources AS (
     SELECT DISTINCT ON (base_id)
-        id, base_id, agency_base_id, url, subsector, status, last_scraped_at, type, is_deleted, updated_at
+        id, base_id, agency_base_id, url, subsector, status, last_scraped_at, type, is_deleted, updated_at, is_stopping
     FROM data_collection.source
     WHERE agency_base_id = :agency_base_id::UUID
     ORDER BY base_id, updated_at DESC
 )
 SELECT
-    id, base_id, agency_base_id, url, subsector, status, last_scraped_at, type,
+    ls.id, ls.base_id, ls.agency_base_id, ls.url, ls.subsector, ls.status, ls.last_scraped_at, ls.type, ls.is_stopping,
     :page as page,
     CEIL(COUNT(*) OVER () / :page_size::DECIMAL) AS total_pages,
-    (COUNT(*) OVER ()) AS total
-FROM latest_sources
+    (COUNT(*) OVER ()) AS total,
+    EXISTS (
+        SELECT 1
+        FROM data_collection.source_file sf
+        WHERE sf.source_base_id = ls.base_id
+          AND sf.is_deleted = FALSE
+          AND sf.is_excluded = FALSE
+          AND (sf.type = 'scraped_file' OR sf.type = 'api_file')
+          AND sf.status = 'finished'::SOURCE_FILE_STATUS_TYPE
+    ) as has_finished_files
+FROM latest_sources ls
 WHERE is_deleted = FALSE
 ORDER BY
     CASE WHEN :sorting = 'url asc' THEN url END ASC,

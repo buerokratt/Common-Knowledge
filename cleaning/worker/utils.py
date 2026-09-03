@@ -1,49 +1,123 @@
 import contextlib
 import datetime
+import logging
+import re
+import shutil
+from collections.abc import Iterator
+
 import requests
+
 from api.config import settings
 from api.models import EntityToClean
-import logging
-import shutil
 
 logger = logging.getLogger(__name__)
 
+# Query/form params commonly used to pass credentials or tokens.
+_SENSITIVE_PARAM_NAMES = (
+    "token",
+    "api_key",
+    "apikey",
+    "password",
+    "passwd",
+    "pwd",
+    "secret",
+    "access_token",
+    "auth",
+    "session",
+    "sessionid",
+    "sid",
+)
+
+_USERINFO_RE = re.compile(r"://[^\s/@]+:[^\s/@]+@")
+_AUTH_HEADER_RE = re.compile(
+    r"(authorization[\"']?\s*[:=]\s*[\"']?(basic|bearer)\s+)\S+", re.IGNORECASE
+)
+_SENSITIVE_PARAM_RE = re.compile(
+    r"([?&](?:" + "|".join(_SENSITIVE_PARAM_NAMES) + r")=)[^&\s\"'<>]+",
+    re.IGNORECASE,
+)
+
+
+def sanitize_sensitive_text(text: str) -> str:
+    """Redact credentials/tokens from a URL or error message before it is
+    logged or sent to the backend (e.g. userinfo in a URL, Authorization
+    headers appearing in exception text, credential-style query params)."""
+    if not text:
+        return text
+
+    sanitized = _USERINFO_RE.sub("://[redacted]@", text)
+    sanitized = _AUTH_HEADER_RE.sub(r"\1[redacted]", sanitized)
+    sanitized = _SENSITIVE_PARAM_RE.sub(r"\1[redacted]", sanitized)
+    return sanitized
+
 
 def send_error(
-    url: str, error_type: str, error_message: str,
-    source_base_id: str, agency_base_id: str, source_run_report_base_id: str
-):
+    url: str,
+    error_type: str,
+    error_message: str,
+    source_base_id: str,
+    agency_base_id: str,
+    source_run_report_base_id: str,
+) -> None:
     scraped_at = datetime.datetime.now(datetime.UTC).isoformat()
-    requests.post(
-        f"{settings.ruuter_internal}/ckb/reports/logs/add", json={
-            'url': url,
-            'scraped_at': scraped_at,
-            'error_type': error_type,
-            'error_message': error_message,
-            'source_base_id': source_base_id,
-            'agency_base_id': agency_base_id,
-            'source_run_report_base_id': source_run_report_base_id,
-        })
+    try:
+        requests.post(
+            f"{settings.ruuter_internal}/ckb/reports/logs/add",
+            json={
+                "url": url,
+                "scraped_at": scraped_at,
+                "error_type": error_type,
+                "error_message": sanitize_sensitive_text(error_message),
+                "source_base_id": source_base_id,
+                "agency_base_id": agency_base_id,
+                "source_run_report_base_id": source_run_report_base_id,
+            },
+            timeout=10,
+        )
+    except requests.RequestException as e:
+        # Log locally — don't raise so the caller's cleanup still runs
+        logger.error(f"[cleaning] failed to send error report: {e}")
 
 
 @contextlib.contextmanager
-def catch_error(entity: EntityToClean):
+def catch_error(entity: EntityToClean) -> Iterator[None]:
+    """
+    Context manager that catches any exception from a cleaning task,
+    logs it, and reports it to Ruuter. Does NOT delete the working
+    directory on failure — files remain available for retry/inspection.
+    """
     try:
         yield
     except Exception as e:
-        # Log to file as well as database
-        logger.error(f"[cleaning] {entity.url}: {str(e)}")
-        
+        logger.error(f"[cleaning] {entity.url}: {e}")
         send_error(
-            entity.url, 'cleaning', str(e),
-            entity.source_base_id, entity.agency_base_id, entity.source_run_report_base_id
+            entity.url,
+            "cleaning",
+            str(e),
+            entity.source_base_id,
+            entity.agency_base_id,
+            entity.source_run_report_base_id,
         )
-    finally:
-        # Always clean up the directory, whether success or failure
-        try:
-            if entity.directory_path.exists():
-                shutil.rmtree(entity.directory_path)
-                logger.info(f'Cleaned up directory: {entity.directory_path}')
-        except Exception as cleanup_error:
-            logger.error(f'Failed to cleanup directory: {cleanup_error}')
+        raise
 
+
+def cleanup_directory(entity: EntityToClean) -> None:
+    """
+    Called explicitly by tasks.py only after all uploads are confirmed.
+    Keeping this separate from catch_error means a failed upload does NOT
+    delete the working directory — files remain available for retry.
+
+    Set SKIP_CLEANUP=true in the environment to disable deletion (used in tests
+    so that test assertions can read output files after the task completes).
+    """
+    import os
+
+    if os.environ.get("SKIP_CLEANUP", "").lower() in ("1", "true", "yes"):
+        logger.info(f"SKIP_CLEANUP set — keeping directory: {entity.directory_path}")
+        return
+    try:
+        if entity.directory_path.exists():
+            shutil.rmtree(entity.directory_path)
+            logger.info(f"Cleaned up directory: {entity.directory_path}")
+    except Exception as e:
+        logger.error(f"Failed to cleanup directory: {e}")

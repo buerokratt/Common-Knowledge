@@ -20,6 +20,14 @@ declaration:
       - field: type
         type: string
         description: "Type of the source"
+      - field: qualityControl
+        type: string
+        description: "Quality control method (basic, comprehensive, or null)"
+        required: false
+      - field: extractImages
+        type: boolean
+        description: "Whether to extract images during cleaning"
+        required: false
 
 extractRequestData:
   assign:
@@ -27,6 +35,19 @@ extractRequestData:
     url: "${incoming.body.url}"
     subsector: "${incoming.body.subsector}"
     type: "${incoming.body.type}"
+    quality_control: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
+    extract_images: "${incoming.body.extractImages == true}"
+
+validateUrl:
+  switch:
+    - condition: "${type == 'url_to_scrape' && !(url != null && (url.startsWith('http://') || url.startsWith('https://')))}"
+      next: returnInvalidUrl
+  next: createSource
+
+returnInvalidUrl:
+  return: "Invalid URL"
+  status: 400
+  next: end
 
 createSource:
   call: http.post
@@ -39,6 +60,8 @@ createSource:
       url: ${url}
       subsector: ${subsector}
       type: ${type}
+      quality_control: ${quality_control}
+      extract_images: ${extract_images}
   result: res
 
 
@@ -49,6 +72,7 @@ triggerPipeline:
     agency_id: ${agency_base_id}
     source_id: ${res.response.body[0].baseId}
     url: ${url}
+    is_initial_scrape: true
   result: triggerResult
 
 

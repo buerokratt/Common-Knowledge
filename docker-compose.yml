@@ -1,4 +1,89 @@
 services:
+
+  vault:
+    image: hashicorp/vault:1.21.3
+    container_name: vault
+    restart: unless-stopped
+    command: ["vault", "server", "-config=/vault/config/config.hcl"]
+    networks:
+      - bykstack
+    environment:
+      VAULT_ADDR: "http://0.0.0.0:8200"
+      VAULT_SKIP_VERIFY_CONFIG_PERMISSIONS: "true"
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - vault-data:/vault/file
+      - vault-logs:/vault/logs
+      - ./vault/config/config.hcl:/vault/config/config.hcl:ro
+    expose:
+      - "8200"
+    healthcheck:
+      test: ["CMD", "sh", "-c", "vault status -address=http://127.0.0.1:8200; test $? -le 2"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # ─────────────────────────────────────────────
+  # VAULT INIT — runs once, then exits
+  # ─────────────────────────────────────────────
+  vault-init:
+    image: hashicorp/vault:1.21.3
+    container_name: vault-init
+    user: "0"
+    networks:
+      - bykstack
+    volumes:
+      # vault-init-data is a SEPARATE volume from vault-data so that unseal
+      # keys and the init flag are not written into Vault's storage directory.
+      - vault-init-data:/vault/data
+      - vault-agent-creds:/agent/credentials
+      - vault-agent-token:/agent/out
+      - ./vault/init.sh:/vault/init.sh:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        apk add --no-cache curl jq >/dev/null 2>&1 &&
+        chmod -R 755 /agent/credentials &&
+        chmod -R 770 /agent/out &&
+        chown -R vault:vault /agent/credentials /agent/out /vault/data &&
+        su vault -s /bin/sh /vault/init.sh
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+
+  # ─────────────────────────────────────────────
+  # VAULT AGENT — proxy for cleaning-server
+  # ─────────────────────────────────────────────
+  vault-agent-cleaner:
+    image: hashicorp/vault:1.21.3
+    container_name: vault-agent-cleaner
+    restart: unless-stopped
+    networks:
+      - bykstack
+    volumes:
+      - vault-agent-creds:/agent/credentials:ro
+      - vault-agent-token:/agent/out
+      - ./vault/agents/cleaner/agent.hcl:/vault/agent-cleaner.hcl:ro
+    command: ["vault", "agent", "-config=/vault/agent-cleaner.hcl", "-log-level=info"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /agent/out/token && test -s /agent/out/token"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
   database:
     container_name: database
     image: postgres:14.1
@@ -16,8 +101,8 @@ services:
   file-processing-api:
     container_name: file-processing-api
     build:
-      context: ./file-processing
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: file-processing/Dockerfile
     ports:
       - 8888:8888
     environment:
@@ -182,9 +267,7 @@ services:
       NODE_ENV: development
       BASE_URL: http://localhost:8080/ckb
       REACT_APP_RUUTER_API_URL: http://localhost:8086/ckb
-      REACT_APP_CENTOPS_API_URL: https://ruuter.centops.test.buerokratt.ee
-      REACT_APP_CENTOPS_API_KEY: API_KEY
-      REACT_APP_CENTOPS_API_SECRET: API_SECRET
+      REACT_APP_RUUTER_PRIVATE_API_URL: http://localhost:8086/ckb
       REACT_APP_CUSTOMER_SERVICE_LOGIN: http://localhost:3004/et/dev-auth
       REACT_APP_CSP: "upgrade-insecure-requests; default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
       DEBUG_ENABLED: true
@@ -194,9 +277,10 @@ services:
       REACT_APP_SERVICE_ID: ckb
       REACT_APP_ENABLE_HIDDEN_FEATURES: true
       REACT_APP_VALIDATIONS_ENABLED: FALSE
-      # - REACT_APP_MENU_JSON=[{"id":"conversations","label":{"et":"Vestlused","en":"Conversations"},"path":"/chat","children":[{"label":{"et":"Vastamata","en":"Unanswered"},"path":"/unanswered"},{"label":{"et":"Aktiivsed","en":"Active"},"path":"/active"},{"label":{"et":"Ootel","en":"Pending"},"path":"/pending"},{"label":{"et":"Ajalugu","en":"History"},"path":"/history"},{"label":{"et":"Valideerimised","en":"Validations"},"path":"/validations"}]},{"id":"training","label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Teemad","en":"Themes"},"path":"/training/intents"},{"label":{"et":"Avalikud teemad","en":"Public themes"},"path":"/training/common-intents"},{"label":{"et":"Teemade järeltreenimine","en":"Post training themes"},"path":"/training/intents-followup-training"},{"label":{"et":"Vastused","en":"Answers"},"path":"/training/responses"},{"label":{"et":"Reeglid","en":"Rules"},"path":"/training/rules"},{"label":{"et":"Konfiguratsioon","en":"Configuration"},"path":"/training/configuration"},{"label":{"et":"Vormid","en":"Forms"},"path":"/training/forms"},{"label":{"et":"Mälukohad","en":"Slots"},"path":"/training/slots"},{"label":{"et":"Automatic Teenused","en":"Automatic Services"},"path":"/auto-services"}]},{"label":{"et":"Ajaloolised vestlused","en":"Historical conversations"},"path":"/history","children":[{"label":{"et":"Ajalugu","en":"History"},"path":"/history/history"},{"label":{"et":"Pöördumised","en":"Appeals"},"path":"/history/appeal"}]},{"label":{"et":"Mudelipank ja analüütika","en":"Modelbank and analytics"},"path":"/analytics","children":[{"label":{"et":"Teemade ülevaade","en":"Overview of topics"},"path":"/analytics/overview"},{"label":{"et":"Mudelite võrdlus","en":"Comparison of models"},"path":"/analytics/models"},{"label":{"et":"Testlood","en":"testTracks"},"path":"/analytics/testcases"}]},{"label":{"et":"Treeni uus mudel","en":"Train new model"},"path":"/train-new-model"}]},{"id":"analytics","label":{"et":"Analüütika","en":"Analytics"},"path":"/analytics","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Vestlused","en":"Chats"},"path":"/chats"},{"label":{"et":"Tagasiside","en":"Feedback"},"path":"/feedback"},{"label":{"et":"Nõustajad","en":"Advisors"},"path":"/advisors"},{"label":{"et":"Avaandmed","en":"Reports"},"path":"/reports"}]},{"id":"services","label":{"et":"Teenused","en":"Services"},"path":"/services","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Uus teenus","en":"New Service"},"path":"/newService"},{"label":{"et":"Automatic Teenused","en":"Automatic Services"},"path":"/auto-services"},{"label":{"et":"Probleemsed teenused","en":"Faulty Services"},"path":"/faultyServices"}]},{"id":"settings","label":{"et":"Haldus","en":"Administration"},"path":"/settings","children":[{"label":{"et":"Kasutajad","en":"Users"},"path":"/users"},{"label":{"et":"Vestlusbot","en":"Chatbot"},"path":"/chatbot","children":[{"label":{"et":"Seaded","en":"Settings"},"path":"/chatbot/settings"},{"label":{"et":"Tervitussõnum","en":"Welcome message"},"path":"/chatbot/welcome-message"},{"label":{"et":"Välimus ja käitumine","en":"Appearance and behavior"},"path":"/chatbot/appearance"},{"label":{"et":"Erakorralised teated","en":"Emergency notices"},"path":"/chatbot/emergency-notices"}]},{"label":{"et":"Asutuse tööaeg","en":"Office opening hours"},"path":"/working-time"},{"label":{"et":"Vestluse Kustutamine","en":"Delete Conversations"},"path":"/delete-conversations"},{"label":{"et":"Sessiooni pikkus","en":"Session length"},"path":"/session-length"},{"label":{"et":"SKMi konfiguratsioon","en":"SKM Configuration"},"path":"/skm-configuration"}]},{"id":"monitoring","label":{"et":"Seire","en":"Monitoring"},"path":"/monitoring","children":[{"label":{"et":"Aktiivaeg","en":"Working hours"},"path":"/uptime"}]}]
+      REACT_APP_ENABLE_MULTI_DOMAIN: FALSE
+      REACT_APP_MENU_JSON: '[{"id":"conversations","label":{"et":"Vestlused","en":"Conversations"},"path":"/chat","children":[{"label":{"et":"Vastamata","en":"Unanswered"},"path":"/unanswered"},{"label":{"et":"Aktiivsed","en":"Active"},"path":"/active"},{"label":{"et":"Ootel","en":"Pending"},"path":"/pending"},{"label":{"et":"Ajalugu","en":"History"},"path":"/history"},{"label":{"et":"Valideerimised","en":"Validations"},"path":"/validations"}]},{"id":"training","label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Teemad","en":"Themes"},"path":"/training/intents"},{"hidden":true,"label":{"et":"Avalikud teemad","en":"Public themes"},"path":"/training/common-intents"},{"label":{"et":"Teemade järeltreenimine","en":"Post training themes"},"path":"/training/intents-followup-training"},{"label":{"et":"Vastused","en":"Answers"},"path":"/training/responses"},{"label":{"et":"Reeglid","en":"Rules"},"path":"/training/rules"},{"hidden":true,"label":{"et":"Konfiguratsioon","en":"Configuration"},"path":"/training/configuration"},{"label":{"et":"Vormid","en":"Forms"},"path":"/training/forms"},{"label":{"et":"Mälukohad","en":"Slots"},"path":"/training/slots"}]},{"label":{"et":"Ajaloolised vestlused","en":"Historical conversations"},"path":"/history","children":[{"label":{"et":"Ajalugu","en":"History"},"path":"/history/history"},{"hidden":true,"label":{"et":"Pöördumised","en":"Appeals"},"path":"/history/appeal"}]},{"label":{"et":"Mudelipank ja analüütika","en":"Modelbank and analytics"},"path":"/analytics","children":[{"label":{"et":"Teemade ülevaade","en":"Overview of topics"},"path":"/analytics/overview"},{"label":{"et":"Mudelite võrdlus","en":"Comparison of models"},"path":"/analytics/models"},{"hidden":true,"label":{"et":"Testlood","en":"testTracks"},"path":"/analytics/testcases"}]},{"label":{"et":"Treeni uus mudel","en":"Train new model"},"path":"/train-new-model"}]},{"id":"analytics","label":{"et":"Analüütika","en":"Analytics"},"path":"/analytics","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Vestlused","en":"Chats"},"path":"/chats"},{"label":{"et":"Tagasiside","en":"Feedback"},"path":"/feedback"},{"label":{"et":"Avaandmed","en":"Reports"},"path":"/reports"}]},{"id":"services","hidden":true,"label":{"et":"Teenused","en":"Services"},"path":"/services","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Uus teenus","en":"New Service"},"path":"/newService"},{"label":{"et":"Probleemsed teenused","en":"Faulty Services"},"path":"/faultyServices"}]},{"id":"knowledge-center","label":{"et":"Teadmuskeskus","en":"Knowledge Center"},"path":"/knowledge-center","children":[{"id":"rag-search","label":{"et":"Mudelid ja seadistused","en":"Models management"},"path":"/rag-search","children":[{"label":{"et":"Mudelite ühendused","en":"LLM connections"},"path":"/rag-search/llm-connections"},{"label":{"et":"Viiba Seaded","en":"Prompt Configurations"},"path":"/rag-search/prompt-configurations"},{"label":{"et":"Testi mudelit","en":"Test LLM"},"path":"/rag-search/test-llm"}]},{"id":"ckb","label":{"et":"Teadmusbaas","en":"Knowledge Base"},"path":"/ckb","children":[{"label":{"et":"Agentuur","en":"Agency"},"path":"/agency"},{"label":{"et":"Aruanded","en":"Reports"},"path":"/reports"},{"label":{"et":"API Integratsioonid","en":"API Integrations"},"path":"/api"}]}]},{"id":"settings","label":{"et":"Haldus","en":"Administration"},"path":"/settings","children":[{"label":{"et":"Kasutajad","en":"Users"},"path":"/users"},{"label":{"et":"Vestlusbot","en":"Chatbot"},"path":"/chatbot","children":[{"label":{"et":"Seaded","en":"Settings"},"path":"/chatbot/settings"},{"label":{"et":"Tervitussõnum","en":"Welcome message"},"path":"/chatbot/welcome-message"},{"label":{"et":"Välimus ja käitumine","en":"Appearance and behavior"},"path":"/chatbot/appearance"},{"label":{"et":"Erakorralised teated","en":"Emergency notices"},"path":"/chatbot/emergency-notices"},{"label":{"et":"Tagasiside","en":"Feedback"},"path":"/chatbot/feedback"}]},{"label":{"et":"Vestluste analüüs","en":"Chat analysis"},"path":"/chat-analysis"},{"label":{"et":"Asutuse tööaeg","en":"Office opening hours"},"path":"/working-time"},{"label":{"et":"Vestluse Kustutamine","en":"Delete Conversations"},"path":"/delete-conversations"},{"label":{"et":"Sessiooni pikkus","en":"Session length"},"path":"/session-length"},{"label":{"et":"SKMi konfiguratsioon","en":"SKM Configuration"},"path":"/skm-configuration"},{"label":{"et":"Anonümiseerija","en":"Anonymizer"},"path":"/anonymizer"}]},{"id":"monitoring","hidden":true,"label":{"et":"Seire","en":"Monitoring"},"path":"/monitoring","children":[{"label":{"et":"Aktiivaeg","en":"Working hours"},"path":"/uptime"}]}]'
       # # for production use this one:
-      # - REACT_APP_MENU_JSON=[{"id":"conversations","label":{"et":"Vestlused","en":"Conversations"},"path":"/chat","children":[{"label":{"et":"Vastamata","en":"Unanswered"},"path":"/unanswered"},{"label":{"et":"Aktiivsed","en":"Active"},"path":"/active"},{"label":{"et":"Ootel","en":"Pending"},"path":"/pending"},{"label":{"et":"Ajalugu","en":"History"},"path":"/history"},{"label":{"et":"Valideerimised","en":"Validations"},"path":"/validations"}]},{"id":"training","label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Teemad","en":"Themes"},"path":"/training/intents"},{"hidden":true,"label":{"et":"Avalikud teemad","en":"Public themes"},"path":"/training/common-intents"},{"label":{"et":"Teemade järeltreenimine","en":"Post training themes"},"path":"/training/intents-followup-training"},{"label":{"et":"Vastused","en":"Answers"},"path":"/training/responses"},{"label":{"et":"Reeglid","en":"Rules"},"path":"/training/rules"},{"hidden":true,"label":{"et":"Konfiguratsioon","en":"Configuration"},"path":"/training/configuration"},{"label":{"et":"Vormid","en":"Forms"},"path":"/training/forms"},{"label":{"et":"Mälukohad","en":"Slots"},"path":"/training/slots"},{"hidden":true,"label":{"et":"Automatic Teenused","en":"Automatic Services"},"path":"/auto-services"}]},{"label":{"et":"Ajaloolised vestlused","en":"Historical conversations"},"path":"/history","children":[{"label":{"et":"Ajalugu","en":"History"},"path":"/history/history"},{"hidden":true,"label":{"et":"Pöördumised","en":"Appeals"},"path":"/history/appeal"}]},{"label":{"et":"Mudelipank ja analüütika","en":"Modelbank and analytics"},"path":"/analytics","children":[{"label":{"et":"Teemade ülevaade","en":"Overview of topics"},"path":"/analytics/overview"},{"label":{"et":"Mudelite võrdlus","en":"Comparison of models"},"path":"/analytics/models"},{"hidden":true,"label":{"et":"Testlood","en":"testTracks"},"path":"/analytics/testcases"}]},{"label":{"et":"Treeni uus mudel","en":"Train new model"},"path":"/train-new-model"}]},{"id":"analytics","label":{"et":"Analüütika","en":"Analytics"},"path":"/analytics","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Vestlused","en":"Chats"},"path":"/chats"},{"label":{"et":"Tagasiside","en":"Feedback"},"path":"/feedback"},{"label":{"et":"Nõustajad","en":"Advisors"},"path":"/advisors"},{"label":{"et":"Avaandmed","en":"Reports"},"path":"/reports"}]},{"id":"services","hidden":true,"label":{"et":"Teenused","en":"Services"},"path":"/services","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Uus teenus","en":"New Service"},"path":"/newService"},{"label":{"et":"Automatic Teenused","en":"Automatic Services"},"path":"/auto-services"},{"label":{"et":"Probleemsed teenused","en":"Faulty Services"},"path":"/faultyServices"}]},{"id":"settings","label":{"et":"Haldus","en":"Administration"},"path":"/settings","children":[{"label":{"et":"Kasutajad","en":"Users"},"path":"/users"},{"label":{"et":"Vestlusbot","en":"Chatbot"},"path":"/chatbot","children":[{"label":{"et":"Seaded","en":"Settings"},"path":"/chatbot/settings"},{"label":{"et":"Tervitussõnum","en":"Welcome message"},"path":"/chatbot/welcome-message"},{"label":{"et":"Välimus ja käitumine","en":"Appearance and behavior"},"path":"/chatbot/appearance"},{"label":{"et":"Erakorralised teated","en":"Emergency notices"},"path":"/chatbot/emergency-notices"}]},{"label":{"et":"Asutuse tööaeg","en":"Office opening hours"},"path":"/working-time"},{"label":{"et":"Sessiooni pikkus","en":"Session length"},"path":"/session-length"},{"label":{"et":"SKMi konfiguratsioon","en":"SKM Configuration"},"path":"/skm-configuration"}]},{"id":"monitoring","hidden":true,"label":{"et":"Seire","en":"Monitoring"},"path":"/monitoring","children":[{"label":{"et":"Aktiivaeg","en":"Working hours"},"path":"/uptime"}]}]
+      # REACT_APP_MENU_JSON: '[{"id":"conversations","label":{"et":"Vestlused","en":"Conversations"},"path":"/chat","children":[{"label":{"et":"Vastamata","en":"Unanswered"},"path":"/unanswered"},{"label":{"et":"Aktiivsed","en":"Active"},"path":"/active"},{"label":{"et":"Ootel","en":"Pending"},"path":"/pending"},{"label":{"et":"Ajalugu","en":"History"},"path":"/history"},{"label":{"et":"Valideerimised","en":"Validations"},"path":"/validations"}]},{"id":"training","label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Treening","en":"Training"},"path":"/training","children":[{"label":{"et":"Teemad","en":"Themes"},"path":"/training/intents"},{"hidden":true,"label":{"et":"Avalikud teemad","en":"Public themes"},"path":"/training/common-intents"},{"label":{"et":"Teemade järeltreenimine","en":"Post training themes"},"path":"/training/intents-followup-training"},{"label":{"et":"Vastused","en":"Answers"},"path":"/training/responses"},{"label":{"et":"Reeglid","en":"Rules"},"path":"/training/rules"},{"hidden":true,"label":{"et":"Konfiguratsioon","en":"Configuration"},"path":"/training/configuration"},{"label":{"et":"Vormid","en":"Forms"},"path":"/training/forms"},{"label":{"et":"Mälukohad","en":"Slots"},"path":"/training/slots"}]},{"label":{"et":"Ajaloolised vestlused","en":"Historical conversations"},"path":"/history","children":[{"label":{"et":"Ajalugu","en":"History"},"path":"/history/history"},{"hidden":true,"label":{"et":"Pöördumised","en":"Appeals"},"path":"/history/appeal"}]},{"label":{"et":"Mudelipank ja analüütika","en":"Modelbank and analytics"},"path":"/analytics","children":[{"label":{"et":"Teemade ülevaade","en":"Overview of topics"},"path":"/analytics/overview"},{"label":{"et":"Mudelite võrdlus","en":"Comparison of models"},"path":"/analytics/models"},{"hidden":true,"label":{"et":"Testlood","en":"testTracks"},"path":"/analytics/testcases"}]},{"label":{"et":"Treeni uus mudel","en":"Train new model"},"path":"/train-new-model"}]},{"id":"analytics","label":{"et":"Analüütika","en":"Analytics"},"path":"/analytics","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Vestlused","en":"Chats"},"path":"/chats"},{"label":{"et":"Tagasiside","en":"Feedback"},"path":"/feedback"},{"label":{"et":"Avaandmed","en":"Reports"},"path":"/reports"}]},{"id":"services","hidden":true,"label":{"et":"Teenused","en":"Services"},"path":"/services","children":[{"label":{"et":"Ülevaade","en":"Overview"},"path":"/overview"},{"label":{"et":"Uus teenus","en":"New Service"},"path":"/newService"},{"label":{"et":"Probleemsed teenused","en":"Faulty Services"},"path":"/faultyServices"}]},{"id":"knowledge-center","label":{"et":"Teadmuskeskus","en":"Knowledge Center"},"path":"/knowledge-center","children":[{"id":"rag-search","label":{"et":"Mudelid ja seadistused","en":"Models management"},"path":"/rag-search","children":[{"label":{"et":"Mudelite ühendused","en":"LLM connections"},"path":"/rag-search/llm-connections"},{"label":{"et":"Viiba Seaded","en":"Prompt Configurations"},"path":"/rag-search/prompt-configurations"},{"label":{"et":"Testi mudelit","en":"Test LLM"},"path":"/rag-search/test-llm"}]},{"id":"ckb","label":{"et":"Teadmusbaas","en":"Knowledge Base"},"path":"/ckb","children":[{"label":{"et":"Agentuur","en":"Agency"},"path":"/agency"},{"label":{"et":"Aruanded","en":"Reports"},"path":"/reports"},{"label":{"et":"API Integratsioonid","en":"API Integrations"},"path":"/api"}]}]},{"id":"settings","label":{"et":"Haldus","en":"Administration"},"path":"/settings","children":[{"label":{"et":"Kasutajad","en":"Users"},"path":"/users"},{"label":{"et":"Vestlusbot","en":"Chatbot"},"path":"/chatbot","children":[{"label":{"et":"Seaded","en":"Settings"},"path":"/chatbot/settings"},{"label":{"et":"Tervitussõnum","en":"Welcome message"},"path":"/chatbot/welcome-message"},{"label":{"et":"Välimus ja käitumine","en":"Appearance and behavior"},"path":"/chatbot/appearance"},{"label":{"et":"Erakorralised teated","en":"Emergency notices"},"path":"/chatbot/emergency-notices"},{"label":{"et":"Tagasiside","en":"Feedback"},"path":"/chatbot/feedback"}]},{"label":{"et":"Vestluste analüüs","en":"Chat analysis"},"path":"/chat-analysis"},{"label":{"et":"Asutuse tööaeg","en":"Office opening hours"},"path":"/working-time"},{"label":{"et":"Sessiooni pikkus","en":"Session length"},"path":"/session-length"},{"label":{"et":"SKMi konfiguratsioon","en":"SKM Configuration"},"path":"/skm-configuration"},{"label":{"et":"Anonümiseerija","en":"Anonymizer"},"path":"/anonymizer"}]},{"id":"monitoring","hidden":true,"label":{"et":"Seire","en":"Monitoring"},"path":"/monitoring","children":[{"label":{"et":"Aktiivaeg","en":"Working hours"},"path":"/uptime"}]}]'
     build:
       context: ./GUI
       dockerfile: Dockerfile.dev
@@ -336,20 +420,28 @@ services:
   cleaning-server:
     container_name: cleaning-server
     build:
-      context: ./cleaning
+      context: .
+      dockerfile: cleaning/Dockerfile
     ports:
       - 8123:8123
     volumes:
       - ./scrapped-data:/scrapped-data
-      - ./cleaning:/app
+      - vault-agent-token:/agent/out:ro
     environment:
       - RUUTER_INTERNAL=http://ruuter-internal:8089
+      - VAULT_ADDR=http://vault:8200
+      - VAULT_TOKEN_PATH=/agent/out/token
+      - VAULT_SECRET_PATH=llm/connections/azure_openai/cleaner
     networks:
       - bykstack
+    depends_on:
+      vault-agent-cleaner:
+        condition: service_healthy
 
   rabbit-scrapper:
     image: rabbitmq:4-management
     container_name: rabbit-scrapper
+    entrypoint: ["sh", "-c", "mkdir -p /etc/rabbitmq/conf.d && echo 'deprecated_features.permit.transient_nonexcl_queues = true' > /etc/rabbitmq/conf.d/10-deprecated.conf && exec docker-entrypoint.sh rabbitmq-server"]
     environment:
       - RABBITMQ_DEFAULT_USER=admin
       - RABBITMQ_DEFAULT_PASS=admin
@@ -363,7 +455,8 @@ services:
   scheduler:
     container_name: scheduler
     build:
-      context: ./scheduler
+      context: .
+      dockerfile: scheduler/Dockerfile
     ports:
       - "8124:8124"
     networks:
@@ -371,8 +464,15 @@ services:
 
 volumes:
   opensearch-data:
+  vault-data:
+  vault-init-data:      # separate from vault-data — stores unseal keys and init flag only
+  vault-logs:
+  vault-agent-creds:
+  vault-agent-token:
+  # vault-agent-cleaner-token removed — was unused (agent writes to vault-agent-token)
 
 networks:
+  # vault-network removed — was declared but never attached to any service
   bykstack:
     name: bykstack
     driver: bridge

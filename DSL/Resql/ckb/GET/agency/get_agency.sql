@@ -24,15 +24,12 @@ declaration:
       - field: sector
         type: string
         description: "sector"
-      - field: external_id
-        type: timestamp
-        description: "external id"
       - field: updated_at
         type: timestamp
         description: "when was updated last time"
 */
 SELECT
-    id, base_id, name, sector, external_id, updated_at
+    id, base_id, name, sector, updated_at
 FROM agency_management.agency 
 WHERE base_id = :base_id::UUID
   AND updated_at = (

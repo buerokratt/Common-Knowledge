@@ -38,9 +38,40 @@ checkIfSourceFound:
 assignPipelineTemplate:
   maxRecursions: 999
   switch:
+    - condition: ${sourceToRun.response.body[0].type == "pre_selected_urls"}
+      next: getSourceFilesForUrlListRefresh
     - condition: ${sourceToRun.response.body[0].type == "api"}
       next: triggerApiPipelineForSource
   next: triggerScrapperPipelineForSource
+
+getSourceFilesForUrlListRefresh:
+  maxRecursions: 999
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_files_to_scraping_by_source_base_id"
+    contentType: json
+    body:
+      source_base_id: ${sourceToRun.response.body[0].baseId}
+  result: sourceFilesToRun
+  next: checkSourceFilesFoundForUrlListRefresh
+
+checkSourceFilesFoundForUrlListRefresh:
+  maxRecursions: 999
+  switch:
+    - condition: ${sourceFilesToRun.response.body.length == 0}
+      next: getOneSourceToRun
+  next: triggerSpecifiedPagesPipelineForSource
+
+triggerSpecifiedPagesPipelineForSource:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-specified-pages"
+  requestType: templates
+  body:
+    source_id: ${sourceFilesToRun.response.body[0].sourceBaseId}
+    agency_id: ${sourceFilesToRun.response.body[0].agencyBaseId}
+    source_files: ${sourceFilesToRun.response.body}
+  result: res
+  next: getOneSourceToRun
 
 triggerApiPipelineForSource:
   maxRecursions: 999
@@ -60,6 +91,23 @@ triggerScrapperPipelineForSource:
     source_id: ${sourceToRun.response.body[0].baseId}
     agency_id: ${sourceToRun.response.body[0].agencyBaseId}
   result: res
+  next: triggerSitemapCollectForScheduledSource
+
+# Scheduled refresh also re-runs sitemap collection so that pages added to
+# the site since the last crawl get discovered and registered as new
+# source_files, matching manual refresh's behavior. Pages that already
+# exist are skipped by the spider itself (see SitemapCollectSpider), so
+# this only ever adds new pages here.
+triggerSitemapCollectForScheduledSource:
+  maxRecursions: 999
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-sitemap-collect"
+  requestType: templates
+  body:
+    source_id: ${sourceToRun.response.body[0].baseId}
+    agency_id: ${sourceToRun.response.body[0].agencyBaseId}
+    url: ${sourceToRun.response.body[0].url}
+    is_initial_scrape: false
+  result: sitemapRes
   next: getOneSourceToRun
 
 returnSuccess:

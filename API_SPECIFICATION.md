@@ -21,7 +21,7 @@ Each microservice exposes its own API with auto-generated documentation:
 |---------|------|----------|---------|
 | **File Processing** | 8888 | `http://localhost:8888/docs` | File operations and storage |
 | **Scrapper** | 8000 | `http://localhost:8000/docs` | Web scraping tasks |
-| **Cleaning** | 8001 | `http://localhost:8001/docs` | Content cleaning |
+| **Cleaning** | 8123 | `http://localhost:8123/docs` | Content cleaning |
 | **Scheduler** | 8003 | `http://localhost:8003/docs` | Task scheduling |
 | **Data Export** | 8002 | `http://localhost:8002/docs` | Data export operations |
 | **Search** | 3000 | - | Content search and indexing |
@@ -74,7 +74,6 @@ List all agencies.
     "base_id": "uuid", 
     "name": "Agency Name",
     "sector": "Healthcare",
-    "external_id": "ext_123",
     "created_at": "2025-01-01T00:00:00Z",
     "updated_at": "2025-01-01T00:00:00Z",
     "type": "client",
@@ -92,14 +91,19 @@ Get specific agency details.
 #### POST /ckb/agency/add
 Create new agency.
 
+> **Constraint**: CKB supports only **one agency per deployment**. This endpoint returns `409 Conflict` if an agency already exists. The Add Agency button in the GUI is hidden once an agency has been created.
+
 **Request Body:**
 ```json
 {
   "name": "string",
-  "sector": "string", 
-  "external_id": "string"
+  "sector": "string"
 }
 ```
+
+**Responses:**
+- `200 OK` — Agency created successfully.
+- `409 Conflict` — An agency already exists. Body: `"An agency already exists. CKB supports only one agency per deployment."`
 
 #### POST /ckb/agency/edit
 Update agency information.
@@ -114,14 +118,11 @@ Update agency information.
 ```
 
 #### POST /ckb/agency/remove
-Delete agency.
 
-**Request Body:**
-```json
-{
-  "base_id": "uuid"
-}
-```
+> **Blocked**: Agency deletion is not permitted. This endpoint always returns `405 Method Not Allowed`. An agency can only be updated via `POST /ckb/agency/edit`.
+
+**Response:**
+- `405 Method Not Allowed` — Body: `"Agency deletion is not permitted. An agency can only be updated."`
 
 ### Source Management
 
@@ -162,15 +163,57 @@ Get specific source details.
 #### POST /ckb/source/add
 Create new data source.
 
+**Behavior:** Triggers first-time scraping via sitemap collect (`is_initial_scrape: true`), then pauses before cleaning, sets source and source_files state to `in_review`, and waits for user action from Start Cleaning.
+
 **Request Body:**
 ```json
 {
-  "agency_base_id": "uuid",
+  "agencyBaseId": "uuid",
   "url": "https://example.com",
   "subsector": "string",
   "type": "url_to_scrape",
-  "update_automatically": true,
-  "cron_schedule": "0 */6 * * *"
+  "qualityControl": "basic",
+  "extractImages": true
+}
+```
+
+**`qualityControl` values:**
+- `"basic"` - enable LLM extraction checks
+- `"comprehensive"` - enable LLM extraction + correction
+- `null` or omitted - no LLM quality control
+
+**Narrowed scraping rule (single URL):** For single-URL narrowed scraping (for example via source-file refresh), scraping is limited to the given URL scope and its subdomains/subpages under it.
+
+
+#### POST /ckb/source/add-with-url-list
+Create a source from a pre-selected URL list and trigger scraping for the explicitly specified URLs.
+
+**Selected URL list scope rule:** Only the URLs provided in `urls` are scraped.
+
+**Request Body:**
+```json
+{
+  "agencyBaseId": "uuid",
+  "url": "https://example.com",
+  "subsector": "string",
+  "type": "specified",
+  "qualityControl": "basic",
+  "extractImages": true,
+  "urls": [
+    { "url": "https://page-1" },
+    { "url": "https://page-2" }
+  ]
+}
+```
+
+**Response:**
+```json
+{
+  "source": {
+    "baseId": "uuid"
+  },
+  "urls_count": 2,
+  "scraping_triggered": true
 }
 ```
 
@@ -180,8 +223,11 @@ Update scraping frequency.
 **Request Body:**
 ```json
 {
-  "base_id": "uuid",
-  "cron_schedule": "0 */12 * * *"
+  "baseId": "uuid",
+  "cronSchedule": "0 */12 * * *",
+  "updateAutomatically": true,
+  "qualityControl": "basic",
+  "extractImages": true
 }
 ```
 
@@ -205,6 +251,11 @@ Trigger source scraping.
   "base_id": "uuid"
 }
 ```
+
+**Behavior by source type:**
+- `pre_selected_urls` -> refreshes eligible source files and triggers specified-pages pipeline
+- `api` -> triggers API scraping pipeline
+- other web sources -> triggers entire-source pipeline
 
 #### POST /ckb/source/stop
 Stop source processing.
@@ -296,6 +347,61 @@ Add uploaded files to a source.
 ```
 
 **Note:** The `uploaded_by` field is automatically populated from the JWT cookie (user's `idCode`).
+
+#### POST /ckb/source-file/refresh
+Refresh (re-scrape) one source file by `baseId`.
+
+**Request Body:**
+```json
+{
+  "baseId": "uuid"
+}
+```
+
+#### POST /ckb/source-file/refresh-multiple
+Refresh (re-scrape) multiple source files in one request.
+
+**Request Body:**
+```json
+{
+  "baseIds": ["uuid1", "uuid2", "uuid3"]
+}
+```
+
+**Behavior:**
+- If files are API-backed, triggers the API specified-files pipeline
+- Otherwise, triggers specified-pages pipeline
+
+
+#### POST /ckb/source-file/bulk-exclude
+Bulk include/exclude source files.
+
+**Request Body:**
+```json
+{
+  "baseIds": ["uuid1", "uuid2"],
+  "excluded": true
+}
+```
+
+**Behavior:**
+- Updates exclusion status in DB
+- Moves corresponding files between include/exclude S3 paths
+
+#### POST /ckb/source-file/bulk-remove
+Bulk delete source files.
+
+**Request Body:**
+```json
+{
+  "baseIds": ["uuid1", "uuid2"]
+}
+```
+
+**Behavior:**
+- is_deleted value updates to true in DB as a new row.
+- Removes indexed documents from search in bulk
+- Triggers async S3 deletion task
 
 #### POST /ckb/source-file/get-upload-urls
 Get presigned upload URLs.
@@ -459,12 +565,13 @@ Generate download URL for a file.
 - `POST /uploaded-file` - Process uploaded files
 - `POST /generate-edited-metadata` - Generate file metadata
 
-### Cleaning API (Port 8001)
+### Cleaning API (Port 8123)
 
-**OpenAPI Docs**: `http://localhost:8001/docs`
+**OpenAPI Docs**: `http://localhost:8123/docs`
 
 #### Content Processing
-- `POST /clean_file` - Clean and extract text from files
+- `POST /clean_file` - Clean and extract text from a single file (synchronous, 10-minute timeout)
+- `POST /clean_source_async` - Clean a batch of files (asynchronous, returns immediately)
 
 ### Scheduler API (Port 8003)
 
@@ -522,7 +629,6 @@ Generate download URL for a file.
   "base_id": "uuid",
   "name": "string",
   "sector": "string",
-  "external_id": "string",
   "type": "client | api",
   "zip_dirty": "boolean",
   "is_zipping": "boolean",
@@ -725,7 +831,7 @@ open http://localhost:8888/docs
 open http://localhost:8000/docs
 
 # Cleaning API
-open http://localhost:8001/docs
+open http://localhost:8123/docs
 
 # Scheduler API
 open http://localhost:8003/docs

@@ -33,7 +33,6 @@ import Editor from './Editor';
 import FileUploader from './FileUploader/FileUploader';
 import NavigationSidebar from './NavigationSidebar';
 import CKBLayout from './CKBLayout';
-import Header from './CKBHeader';
 
 export {
   // Layout,
@@ -69,8 +68,8 @@ export {
   Editor,
   NavigationSidebar,
   CKBLayout,
-  Header,
 };
 
 // Export types that might be needed
 export type { FileItem } from './FileUploader/FileUploader';
+export type { MultiselectAction } from './DataTable';

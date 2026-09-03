@@ -1,0 +1,63 @@
+# Version control / IDE
+.git
+.gitignore
+.idea
+.vscode
+.github
+
+# Python local artifacts
+.venv
+.ruff_cache
+.mypy_cache
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+
+# Local data volumes (mounted at runtime, no need to copy)
+scrapped-data
+search-data
+exported-data
+data
+tim-db
+loba
+test-vault
+
+# Local secrets / env
+.env
+.env.*
+
+# Node.js artifacts (not used by python images)
+GUI
+node_modules
+**/package-lock.json
+
+# Docs / artifacts
+*.md
+*.pdf
+*.har
+
+# OS junk
+.DS_Store
+
+# Other Buerokratt-language services that ship from separate repos
+DSL
+TIM
+Authentication-Layer
+CronManager
+DataMapper
+Resql
+Ruuter
+charts
+search-service
+vault
+constants.ini
+docker-compose.yml
+docker-compose-test.yml
+migrate.sh
+.ckb-playwright
+
+# Tests run separately via pytest, not via Docker
+tests
+pytest.ini

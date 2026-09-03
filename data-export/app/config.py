@@ -1,11 +1,13 @@
+from pathlib import Path
+
+from pydantic import DirectoryPath, PostgresDsn
 from pydantic_settings import BaseSettings
-from pydantic import PostgresDsn, DirectoryPath
 
 
 class Settings(BaseSettings):
     db_uri: PostgresDsn
-    dsl_path: DirectoryPath = '/DSL'
-    export_path: DirectoryPath = '/exported-data'
+    dsl_path: DirectoryPath = Path("/DSL")
+    export_path: DirectoryPath = Path("/exported-data")
 
 
-settings = Settings()
+settings = Settings()  # type: ignore[call-arg]

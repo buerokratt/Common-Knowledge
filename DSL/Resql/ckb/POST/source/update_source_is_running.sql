@@ -13,6 +13,9 @@ declaration:
       - field: agency_base_id
         type: string
         description: "agency base id"
+      - field: url
+        type: string
+        description: "url of the source"
 */
 SELECT copy_row_with_modifications(
     'data_collection.source',
@@ -23,7 +26,7 @@ SELECT copy_row_with_modifications(
            'status', '::SOURCE_STATUS_TYPE', 'running',
            'updated_at', '::TIMESTAMP WITH TIME ZONE', NOW()::VARCHAR
        ]::VARCHAR[]
-), base_id, agency_base_id, type
+), base_id, agency_base_id, type, url
 FROM data_collection.source
 WHERE (base_id, updated_at) IN (
     SELECT base_id, max(updated_at) FROM data_collection.source
@@ -34,7 +37,7 @@ WHERE (base_id, updated_at) IN (
         status = 'new'
         OR (
             update_automatically = TRUE
-            AND status NOT IN ('running', 'failed')
+            AND status NOT IN ('running', 'failed', 'in_review')
             AND next_scrapping_at <= NOW()
         )
     )

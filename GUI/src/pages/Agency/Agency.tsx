@@ -1,13 +1,14 @@
 import { FC, useState, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   MdOutlineDeleteOutline,
   MdAccessTime,
   MdOutlineEdit,
   MdRefresh,
   MdOutlineStopCircle,
+  MdInfoOutline,
 } from 'react-icons/md';
 import {
   Button,
@@ -39,6 +40,7 @@ import {
   getSources,
   createSourceFile,
   createSourceUrl,
+  createSourceWithUrlList,
   updateSourceSubsector,
   deleteSource,
   stopSourceScraping,
@@ -46,6 +48,7 @@ import {
   Source,
   SourcesListParams,
   CreateSourceFileRequest,
+  CreateSourceWithUrlListRequest,
 } from 'services/sources';
 
 interface KnowledgeBaseFormData {
@@ -53,13 +56,38 @@ interface KnowledgeBaseFormData {
   files: FileItem[];
   apiUrl?: string;
   websiteUrl?: string;
+  qualityControlLevel: '' | 'basic' | 'comprehensive';
+  csvFile?: File | null;
+  urlList?: { url: string }[];
+  extractImages: boolean;
 }
+
+const getInitialFormData = (): KnowledgeBaseFormData => ({
+  subsector: '',
+  files: [],
+  apiUrl: '',
+  websiteUrl: '',
+  qualityControlLevel: '',
+  csvFile: null,
+  urlList: [],
+  extractImages: false,
+});
+
+const isValidUrl = (value: string): boolean => {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+};
 
 const Agency: FC = () => {
   const { t } = useTranslation();
   const toast = useToast();
   const queryClient = useQueryClient();
   const { id: agencyBaseId } = useParams<{ id: string }>();
+  const navigate = useNavigate();
   const [uploadProgress, setUploadProgress] = useState<UploadProgress>({
     isUploading: false,
     currentFile: 0,
@@ -69,6 +97,7 @@ const Agency: FC = () => {
 
   const [uploadModal, setUploadModal] = useState(false);
   const [addUrlModal, setAddUrlModal] = useState(false);
+  const [addUrlListModal, setAddUrlListModal] = useState(false);
   const [editModal, setEditModal] = useState<Source | null>(null);
   const [deleteModal, setDeleteModal] = useState<Source | null>(null);
 
@@ -80,10 +109,15 @@ const Agency: FC = () => {
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
 
-  const [formData, setFormData] = useState<KnowledgeBaseFormData>({
-    subsector: '',
-    files: [],
-  });
+  // Set right after clicking Refresh; cleared once that source's "running"
+  // status is actually observed in a fetch. Lets refetchInterval keep polling
+  // through the gap before the backend has marked anything running yet.
+  const [awaitingRefreshStart, setAwaitingRefreshStart] = useState(false);
+
+   const [formData, setFormData] = useState<KnowledgeBaseFormData>(
+    getInitialFormData()
+  );
+  const [urlError, setUrlError] = useState<string | null>(null);
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
@@ -132,6 +166,22 @@ const Agency: FC = () => {
     queryFn: () => getSources(queryParams),
     enabled: !!agencyBaseId,
     keepPreviousData: true,
+    // Keep polling every 2s as long as some source is in a transient state
+    // (running, or just refreshed and not yet reflected as running), so both
+    // the idle->running and running->finished transitions show up without a
+    // manual reload. Stops on its own once nothing is in flight.
+    refetchInterval: (data) => {
+      const sources = data?.data ?? [];
+      const hasRunningSource = sources.some(
+        (source: Source) => source.status === 'running'
+      );
+
+      if (hasRunningSource && awaitingRefreshStart) {
+        setAwaitingRefreshStart(false);
+      }
+
+      return hasRunningSource || awaitingRefreshStart ? 2000 : false;
+    },
   });
 
   // File upload mutation
@@ -209,7 +259,7 @@ const Agency: FC = () => {
       }));
 
       setUploadModal(false);
-      setFormData({ subsector: '', files: [] });
+      setFormData(getInitialFormData());
 
       toast.open({
         type: 'success',
@@ -250,21 +300,47 @@ const Agency: FC = () => {
   // URL addition mutation
   const addUrlMutation = useMutation({
     mutationFn: createSourceUrl,
-    onSuccess: () => {
+    onSuccess: (data: any) => {
+      const sourceId = data?.baseId;
       toast.open({
         type: 'success',
         title: t('global.notification'),
         message: t('knowledgeBase.urlSuccess'),
       });
       setAddUrlModal(false);
-      setFormData({ subsector: '', files: [] });
+      setFormData(getInitialFormData);
       queryClient.invalidateQueries(['sources']);
+      if (sourceId) {
+        navigate(`/source/${sourceId}/files`);
+      }
     },
     onError: (error: any) => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
         message: error.message || t('knowledgeBase.urlError'),
+      });
+    },
+  });
+
+  // URL list addition mutation
+  const addUrlListMutation = useMutation({
+    mutationFn: createSourceWithUrlList,
+    onSuccess: (data: any) => {
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: `Successfully created source with ${data.urls_count || formData.urlList?.length || 0} URLs`,
+      });
+      setAddUrlListModal(false);
+      setFormData(getInitialFormData);
+      queryClient.invalidateQueries(['sources']);
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || 'Failed to create source with URL list',
       });
     },
   });
@@ -280,7 +356,7 @@ const Agency: FC = () => {
         message: t('knowledgeBase.updateSuccess'),
       });
       setEditModal(null);
-      setFormData({ subsector: '', files: [] });
+      setFormData(getInitialFormData);
       queryClient.invalidateQueries(['sources']);
     },
     onError: (error: any) => {
@@ -362,7 +438,17 @@ const Agency: FC = () => {
         title: t('global.notification'),
         message: t('knowledgeBase.refreshSuccess'),
       });
+
+      // The backend flips the source's status to "running" asynchronously
+      // (Celery task -> subprocess -> Scrapy spider startup), so a single
+      // refetch right after this call often lands before that happens.
+      // Polling (see refetchInterval above) picks up the change once it
+      // lands, and continues through running->finished afterwards. The
+      // timeout below is just a safety net in case the backend never marks
+      // it running (e.g. the job fails before reaching that point).
       queryClient.invalidateQueries(['sources']);
+      setAwaitingRefreshStart(true);
+      setTimeout(() => setAwaitingRefreshStart(false), 15000);
     },
     onError: (error: any) => {
       toast.open({
@@ -396,11 +482,118 @@ const Agency: FC = () => {
       return;
     }
 
+    if (!isValidUrl(formData.websiteUrl)) {
+      setUrlError(t('knowledgeBase.invalidUrl'));
+      return;
+    }
+
+    setUrlError(null);
     addUrlMutation.mutate({
       agencyBaseId,
       url: formData.websiteUrl,
       subsector: formData.subsector,
       type: 'url',
+      qualityControlLevel: formData.qualityControlLevel,
+      extractImages: formData.extractImages,
+    });
+  };
+
+  const handleCsvFileChange = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    try {
+      const urls = await parseCSVFile(file);
+      setFormData((prev) => ({
+        ...prev,
+        csvFile: file,
+        urlList: urls,
+      }));
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: `Parsed ${urls.length} URLs from CSV`,
+      });
+    } catch (error: any) {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || 'Failed to parse CSV file',
+      });
+      event.target.value = '';
+    }
+  };
+
+  const parseCSVFile = (file: File): Promise<{ url: string }[]> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      
+      reader.onload = (e) => {
+        try {
+          const text = e.target?.result as string;
+          const lines = text.split('\n').map(line => line.trim()).filter(line => line);
+          
+          if (lines.length === 0) {
+            reject(new Error('CSV file is empty'));
+            return;
+          }
+          
+          // Check if first line is a header (contains 'url')
+          const hasHeader = lines[0].toLowerCase().includes('url');
+          const dataLines = hasHeader ? lines.slice(1) : lines;
+          
+          if (dataLines.length === 0) {
+            reject(new Error('No URLs found in CSV'));
+            return;
+          }
+          
+          const urls = dataLines.map(line => {
+            // Handle CSV with commas - take first column
+            const url = line.split(',')[0].trim();
+            return { url };
+          }).filter(item => {
+            // Validate URL format
+            return item.url && (item.url.startsWith('http://') || item.url.startsWith('https://'));
+          });
+          
+          if (urls.length === 0) {
+            reject(new Error('No valid URLs found in CSV. URLs must start with http:// or https://'));
+            return;
+          }
+          
+          resolve(urls);
+        } catch (error) {
+          reject(new Error('Failed to parse CSV file'));
+        }
+      };
+      
+      reader.onerror = () => {
+        reject(new Error('Failed to read CSV file'));
+      };
+      
+      reader.readAsText(file);
+    });
+  };
+
+  const handleAddUrlList = () => {
+    if (!agencyBaseId || !formData.websiteUrl || !formData.subsector || !formData.urlList || formData.urlList.length === 0) {
+      return;
+    }
+
+    if (!isValidUrl(formData.websiteUrl)) {
+      setUrlError(t('knowledgeBase.invalidUrl'));
+      return;
+    }
+
+    setUrlError(null);
+    addUrlListMutation.mutate({
+      agencyBaseId,
+      url: formData.websiteUrl,
+      subsector: formData.subsector,
+      type: 'specified',
+      urls: formData.urlList,
+      qualityControlLevel: formData.qualityControlLevel,
+      extractImages: formData.extractImages,
     });
   };
 
@@ -421,8 +614,7 @@ const Agency: FC = () => {
   const handleEdit = (item: Source) => {
     setEditModal(item);
     setFormData({
-      subsector: item.subsector,
-      files: [],
+      ...getInitialFormData(),
     });
   };
 
@@ -512,9 +704,16 @@ const Agency: FC = () => {
         <span
           className={`agencies__status-cell`}
           style={{
-            color: row.original.status === 'running' ? '#005AA3' : '#266B42',
-            borderColor:
-              row.original.status === 'running' ? '#005AA3' : '#266B42',
+            color: row.original.status === 'running'
+              ? '#005AA3'
+              : row.original.status === 'in_review'
+              ? '#BA830D'
+              : '#266B42',
+            borderColor: row.original.status === 'running'
+              ? '#005AA3'
+              : row.original.status === 'in_review'
+              ? '#BA830D'
+              : '#266B42',
           }}
         >
           {t(`knowledgeBase.${row.original.status}`)}
@@ -533,7 +732,11 @@ const Agency: FC = () => {
               appearance="text"
               size="s"
               onClick={() => handleStopScraping(row.original.baseId)}
-              disabled={stopScrapingMutation.isLoading}
+              disabled={
+                (stopScrapingMutation.isLoading &&
+                  stopScrapingMutation.variables === row.original.baseId) ||
+                row.original.isStopping
+              }
             >
               <Icon
                 icon={<MdOutlineStopCircle fontSize={20} />}
@@ -548,7 +751,9 @@ const Agency: FC = () => {
               size="s"
               onClick={() => handleRefreshSource(row.original.baseId)}
               disabled={
-                refreshMutation.isLoading || row.original.type === 'file'
+                refreshMutation.isLoading || 
+                row.original.type === 'file' ||
+                (row.original.status === 'in_review' && !row.original.hasFinishedFiles)
               }
             >
               <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
@@ -627,6 +832,15 @@ const Agency: FC = () => {
               <Button appearance="primary" onClick={() => setAddUrlModal(true)}>
                 {t('knowledgeBase.addUrl')}
               </Button>
+              <Button 
+                appearance="primary"
+                style={{
+                  backgroundColor: '#005AA3',
+                }}
+                onClick={() => setAddUrlListModal(true)}
+              >
+                {t('knowledgeBase.addUrlList')}
+              </Button>
             </Track>
           </Track>
         }
@@ -657,12 +871,19 @@ const Agency: FC = () => {
       {uploadModal && (
         <Dialog
           title={t('knowledgeBase.uploadFiles')}
-          onClose={() => !uploadProgress.isUploading && setUploadModal(false)}
+          onClose={() => {
+            if (uploadProgress.isUploading) return;
+            setUploadModal(false);
+            setFormData(getInitialFormData());
+          }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
-                onClick={() => setUploadModal(false)}
+                onClick={() => {
+                  setUploadModal(false);
+                  setFormData(getInitialFormData());
+                }}
                 disabled={uploadProgress.isUploading}
               >
                 {t('global.cancel')}
@@ -701,7 +922,7 @@ const Agency: FC = () => {
               onFilesChange={handleFilesChange}
               onFileDelete={handleFileDelete}
               maxFileSize={30 * 1024 * 1024} // 30MB
-              acceptedTypes=".pdf,.doc,.docx,.html,.htm"
+              acceptedTypes=".pdf,.doc,.docx,.html,.htm,.md,.txt,.pptx"
               multiple={true}
               uploadProgress={uploadProgress} // Pass upload progress to FileUploader
             />
@@ -713,12 +934,24 @@ const Agency: FC = () => {
       {addUrlModal && (
         <Dialog
           title={t('knowledgeBase.addUrl')}
-          onClose={() => setAddUrlModal(false)}
+          onClose={() => {
+            {
+            setAddUrlModal(false);
+            setFormData(getInitialFormData());
+          };
+            setUrlError(null);
+          }}
           footer={
             <Track gap={16} justify="end">
               <Button
                 appearance="secondary"
-                onClick={() => setAddUrlModal(false)}
+                onClick={() => {
+                  {
+                  setAddUrlModal(false);
+                  setFormData(getInitialFormData());
+                };
+                  setUrlError(null);
+                }}
               >
                 {t('global.cancel')}
               </Button>
@@ -754,11 +987,356 @@ const Agency: FC = () => {
               label={t('knowledgeBase.url')}
               name="websiteUrl"
               value={formData.websiteUrl || ''}
+              onChange={(e) => {
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }));
+                if (urlError) setUrlError(null);
+              }}
+              required
+            />
+            {urlError && (
+              <span style={{ color: '#AC3232', fontSize: '13px' }}>
+                {urlError}
+              </span>
+            )}
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
+                {t('knowledgeBase.imageExtraction')}
+              </span>
+              <div className="quality-control-options__row">
+                <label className="quality-control-options__item">
+                  <input
+                    type="checkbox"
+                    name="extractImages"
+                    checked={formData.extractImages}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        extractImages: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>{t('knowledgeBase.extractImages')}</span>
+                </label>
+                <Tooltip content={t('knowledgeBase.extractImagesTooltip') as string}>
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.extractImagesTooltip') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
+                    />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
+                {t('knowledgeBase.contentExtractionQualityControlOptions')}
+              </span>
+              <div className="quality-control-options__row">
+                <label className="quality-control-options__item">
+                  <input
+                    type="radio"
+                    name="qualityControlLevel"
+                    checked={formData.qualityControlLevel === 'basic'}
+                    onClick={() =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        qualityControlLevel:
+                          prev.qualityControlLevel === 'basic' ? '' : 'basic',
+                      }))
+                    }
+                    onChange={() => {}}
+                  />
+                  <span>{t('knowledgeBase.basicQualityControl')}</span>
+                </label>
+                <Tooltip content="Tooltip to be implemented">
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
+                    />
+                  </button>
+                </Tooltip>
+              </div>
+              <div className="quality-control-options__row">
+                <label className="quality-control-options__item">
+                  <input
+                    type="radio"
+                    name="qualityControlLevel"
+                    checked={formData.qualityControlLevel === 'comprehensive'}
+                    onClick={() =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        qualityControlLevel:
+                          prev.qualityControlLevel === 'comprehensive'
+                            ? ''
+                            : 'comprehensive',
+                      }))
+                    }
+                    onChange={() => {}}
+                  />
+                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
+                </label>
+                <Tooltip content="Tooltip to be implemented">
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
+                    />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+          </Track>
+        </Dialog>
+      )}
+
+      {/* Add URL List Modal */}
+      {addUrlListModal && (
+        <Dialog
+          title={t('knowledgeBase.addUrlList')}
+          onClose={() => {
+            {
+            setAddUrlListModal(false);
+            setFormData(getInitialFormData());
+          };
+            setUrlError(null);
+          }}
+          footer={
+            <Track gap={16} justify="end">
+              <Button
+                appearance="secondary"
+                onClick={() => {
+                  {
+                  setAddUrlListModal(false);
+                  setFormData(getInitialFormData());
+                };
+                  setUrlError(null);
+                }}
+              >
+                {t('global.cancel')}
+              </Button>
+              <Button
+                appearance="primary"
+                onClick={handleAddUrlList}
+                disabled={
+                  addUrlListMutation.isLoading ||
+                  !formData.subsector ||
+                  !formData.websiteUrl ||
+                  !formData.urlList ||
+                  formData.urlList.length === 0
+                }
+              >
+                {addUrlListMutation.isLoading
+                  ? t('global.adding')
+                  : t('global.add')}
+              </Button>
+            </Track>
+          }
+        >
+          <Track direction="vertical" gap={16}>
+            <FormInput
+              className="url-input"
+              label={t('knowledgeBase.subsector')}
+              name="subsector"
+              value={formData.subsector}
               onChange={(e) =>
-                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }))
+                setFormData((prev) => ({ ...prev, subsector: e.target.value }))
               }
               required
             />
+            <FormInput
+              className="url-input"
+              label={t('knowledgeBase.mainSourceUrl')}
+              name="websiteUrl"
+              value={formData.websiteUrl || ''}
+              onChange={(e) => {
+                setFormData((prev) => ({ ...prev, websiteUrl: e.target.value }));
+                if (urlError) setUrlError(null);
+              }}
+              required
+            />
+            {urlError && (
+              <span style={{ color: '#AC3232', fontSize: '13px' }}>
+                {urlError}
+              </span>
+            )}
+
+            <div style={{ marginTop: '16px', width: '100%', textAlign: 'left', alignSelf: 'flex-start' }}>
+              <label style={{ display: 'block', marginBottom: '8px', fontWeight: 500 }}>
+                {t('knowledgeBase.uploadCsvWithUrls')}
+              </label>
+              <input
+                type="file"
+                accept=".csv"
+                onChange={handleCsvFileChange}
+                style={{
+                  display: 'block',
+                  width: '100%',
+                  padding: '8px',
+                  border: '1px solid #ccc',
+                  borderRadius: '4px',
+                }}
+              />
+              <small style={{ display: 'block', marginTop: '4px', color: '#666', fontSize: '12px', lineHeight: 1.3 }}>
+                {t('knowledgeBase.csvUrlHelp')}
+              </small>
+            </div>
+
+            {formData.urlList && formData.urlList.length > 0 && (
+              <div style={{ 
+                marginTop: '16px', 
+                width: '100%',
+                textAlign: 'left',
+                alignSelf: 'flex-start',
+                padding: '12px', 
+                backgroundColor: '#f5f5f5', 
+                borderRadius: '4px',
+                maxHeight: '200px',
+                overflowY: 'auto'
+              }}>
+                <strong>{formData.urlList.length} URLs loaded:</strong>
+                <ul style={{ 
+                  marginTop: '8px', 
+                  paddingLeft: '20px',
+                  fontSize: '14px',
+                  listStyle: 'disc'
+                }}>
+                  {formData.urlList.slice(0, 10).map((item, index) => (
+                    <li key={index} style={{ marginBottom: '4px' }}>
+                      {item.url}
+                    </li>
+                  ))}
+                  {formData.urlList.length > 10 && (
+                    <li style={{ fontStyle: 'italic', color: '#666' }}>
+                      ... and {formData.urlList.length - 10} more
+                    </li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
+                {t('knowledgeBase.imageExtraction')}
+              </span>
+              <div className="quality-control-options__row">
+                <label className="quality-control-options__item">
+                  <input
+                    type="checkbox"
+                    name="extractImages"
+                    checked={formData.extractImages}
+                    onChange={(e) =>
+                      setFormData((prev) => ({
+                        ...prev,
+                        extractImages: e.target.checked,
+                      }))
+                    }
+                  />
+                  <span>{t('knowledgeBase.extractImages')}</span>
+                </label>
+                <Tooltip content={t('knowledgeBase.extractImagesTooltip') as string}>
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.extractImagesTooltip') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
+                    />
+                  </button>
+                </Tooltip>
+              </div>
+            </div>
+            <div className="quality-control-options">
+              <span className="quality-control-options__title">
+                {t('knowledgeBase.contentExtractionQualityControlOptions')}
+              </span>
+              <div
+                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', width: '100%' }}
+              >
+                <div className="quality-control-options__row">
+                  <label className="quality-control-options__item">
+                    <input
+                      type="radio"
+                      name="qualityControlLevelUrlList"
+                      checked={formData.qualityControlLevel === 'basic'}
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          qualityControlLevel:
+                            prev.qualityControlLevel === 'basic' ? '' : 'basic',
+                        }))
+                      }
+                      onChange={() => {}}
+                    />
+                    <span>{t('knowledgeBase.basicQualityControl')}</span>
+                  </label>
+                  <Tooltip content="Tooltip to be implemented">
+                    <button
+                      type="button"
+                      className="quality-control-options__info-btn"
+                      aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
+                    >
+                      <Icon
+                        className="quality-control-options__info"
+                        icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                        size="medium"
+                      />
+                    </button>
+                  </Tooltip>
+                </div>
+                <div className="quality-control-options__row">
+                  <label className="quality-control-options__item">
+                    <input
+                      type="radio"
+                      name="qualityControlLevelUrlList"
+                      checked={formData.qualityControlLevel === 'comprehensive'}
+                      onClick={() =>
+                        setFormData((prev) => ({
+                          ...prev,
+                          qualityControlLevel:
+                            prev.qualityControlLevel === 'comprehensive'
+                              ? ''
+                              : 'comprehensive',
+                        }))
+                      }
+                      onChange={() => {}}
+                    />
+                    <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
+                  </label>
+                  <Tooltip content="Tooltip to be implemented">
+                    <button
+                      type="button"
+                      className="quality-control-options__info-btn"
+                      aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
+                    >
+                      <Icon
+                        className="quality-control-options__info"
+                        icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                        size="medium"
+                      />
+                    </button>
+                  </Tooltip>
+                </div>
+              </div>
+            </div>
           </Track>
         </Dialog>
       )}

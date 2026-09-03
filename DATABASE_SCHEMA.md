@@ -15,7 +15,6 @@ erDiagram
         UUID base_id UK "Business key identifier"
         TEXT name "Agency name"
         TEXT sector "Government sector"
-        TEXT external_id "External system ID"
         TIMESTAMP created_at "Creation timestamp"
         TIMESTAMP updated_at "Last update timestamp"
         BOOLEAN is_deleted "Soft delete flag"
@@ -40,8 +39,10 @@ erDiagram
         BOOLEAN is_deleted "Soft delete flag"
         BOOLEAN is_stopping "Stop processing flag"
         TEXT created_by "Creator identifier"
-        source_type type "url_to_scrape, file, or api"
-        source_status_type status "new, running, finished, failed"
+        source_type type "url_to_scrape, file, api, pre_selected_urls"
+        source_status_type status "new, running, in_review, finished, failed"
+        quality_control_type quality_control "basic, comprehensive, or NULL"
+        BOOLEAN extract_images "Extract images during cleaning (default: false)"
         BOOLEAN update_automatically "Auto-update enabled"
         TEXT cron_schedule "Scheduling expression"
     }
@@ -64,7 +65,7 @@ erDiagram
         TIMESTAMP updated_at "Last update timestamp"
         TIMESTAMP last_scraped_at "Last scraping time"
         TIMESTAMP originally_scraped "First scraping time"
-        source_file_status_type status "Processing status"
+        source_file_status_type status "scraping, in_review, cleaning, finished, not_found, failed"
         source_file_type type "scraped_file, uploaded_file, api_file"
         TEXT file_name "Original filename"
         TEXT external_id "External system ID"
@@ -160,10 +161,11 @@ erDiagram
 
 ### Status Enums
 - **agency_type**: 'client' | 'api'
-- **source_type**: 'url_to_scrape' | 'file' | 'api'
-- **source_status_type**: 'new' | 'running' | 'finished' | 'failed'
-- **source_file_status_type**: 'scraping' | 'cleaning' | 'finished' | 'not_found' | 'failed'
+- **source_type**: 'url_to_scrape' | 'file' | 'api' | 'pre_selected_urls'
+- **source_status_type**: 'new' | 'running' | 'in_review' | 'finished' | 'failed'
+- **source_file_status_type**: 'scraping' | 'in_review' | 'cleaning' | 'finished' | 'not_found' | 'failed'
 - **source_file_type**: 'scraped_file' | 'uploaded_file' | 'api_file'
+- **quality_control_type**: 'basic' | 'comprehensive' (nullable on `source.quality_control`)
 
 ## Relationships
 
@@ -184,10 +186,12 @@ All tables reference `agency_base_id` for data partitioning and access control:
 ```mermaid
 stateDiagram-v2
     [*] --> scraping: File discovered
-    scraping --> cleaning: Content extracted
+    scraping --> in_review: Await manual cleaning trigger
+    in_review --> cleaning: Start Cleaning triggered
     cleaning --> finished: Text processed
     scraping --> not_found: URL inaccessible
     scraping --> failed: Processing error
+    in_review --> failed: Processing error
     cleaning --> failed: Cleaning error
     finished --> [*]: Ready for use
     not_found --> [*]: Marked as unavailable
@@ -199,7 +203,9 @@ stateDiagram-v2
 stateDiagram-v2
     [*] --> new: Source created
     new --> running: Processing started
-    running --> finished: All files processed
+    running --> in_review: Scraping complete, waiting for cleaning
+    in_review --> cleaning: Start Cleaning triggered
+    cleaning --> finished: All files processed
     running --> failed: Processing error
     finished --> running: Scheduled update
     failed --> running: Retry processing

@@ -1,0 +1,84 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Create a new source with pre-selected URLs from list"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source
+  allowlist:
+    body:
+      - field: agencyBaseId
+        type: string
+        description: "Base ID of the agency"
+      - field: url
+        type: string
+        description: "Main source URL"
+      - field: subsector
+        type: string
+        description: "Subsector of the source"
+      - field: type
+        type: string
+        description: "Type of the source"
+      - field: qualityControl
+        type: string
+        description: "Quality control method (basic, comprehensive, or null)"
+        required: false
+      - field: extractImages
+        type: boolean
+        description: "Whether to extract images during cleaning"
+        required: false
+      - field: urls
+        type: array
+        description: "Array of URL objects to scrape"
+
+extractRequestData:
+  assign:
+    agency_base_id: "${incoming.body.agencyBaseId}"
+    url: "${incoming.body.url}"
+    subsector: "${incoming.body.subsector}"
+    type: "pre_selected_urls"
+    quality_control: "${incoming.body.qualityControl != null && incoming.body.qualityControl != '' ? incoming.body.qualityControl : ''}"
+    extract_images: "${incoming.body.extractImages == true}"
+    urls: "${incoming.body.urls}"
+    urls_json: "${JSON.stringify(incoming.body.urls)}"
+
+createSource:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source/create_source"
+    headers:
+      type: json
+    body:
+      agency_base_id: ${agency_base_id}
+      url: ${url}
+      subsector: ${subsector}
+      type: ${type}
+      quality_control: ${quality_control}
+      extract_images: ${extract_images}
+  result: createSourceResult
+
+createSourceFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/create_multiple_source_files"
+    headers:
+      type: json
+    body:
+      source_base_id: ${createSourceResult.response.body[0].baseId}
+      agency_base_id: ${agency_base_id}
+      urls: ${urls_json}
+  result: sourceFilesResult
+
+triggerScraping:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/trigger-scrapper-specified-pages"
+  requestType: templates
+  body:
+    agency_id: ${agency_base_id}
+    source_id: ${createSourceResult.response.body[0].baseId}
+    source_files: ${sourceFilesResult.response.body}
+  result: triggerResult
+
+returnSuccess:
+  return: "{\"source\": ${JSON.stringify(createSourceResult.response.body[0])}, \"urls_count\": ${urls.length}, \"scraping_triggered\": true}"
+  next: end

@@ -1,4 +1,4 @@
-import React, { CSSProperties, FC, ReactNode, useId } from 'react';
+import React, { CSSProperties, FC, ReactNode, useId, useState } from 'react';
 import {
   ColumnDef,
   useReactTable,
@@ -16,6 +16,7 @@ import {
   RowData,
   ColumnFiltersState,
   ColumnPinningState,
+  RowSelectionState,
 } from '@tanstack/react-table';
 import { RankingInfo, rankItem } from '@tanstack/match-sorter-utils';
 import {
@@ -29,9 +30,16 @@ import clsx from 'clsx';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
-import { Icon, Track } from 'components';
+import { Icon, Track, Button } from 'components';
 import Filter from './Filter';
 import './DataTable.scss';
+
+export type MultiselectAction = {
+  label: string;
+  onClick: (selectedRows: Row<any>[]) => void;
+  icon?: ReactNode;
+  variant?: 'primary' | 'secondary' | 'danger' | 'bulk_action';
+};
 
 type DataTableProps = {
   data: any;
@@ -55,6 +63,10 @@ type DataTableProps = {
   pagesCount?: number;
   meta?: TableMeta<any>;
   selectedRow?: (row: Row<any>) => boolean;
+  multiselectActions?: MultiselectAction[];
+  enableRowSelection?: boolean;
+  rowSelection?: RowSelectionState;
+  setRowSelection?: (state: RowSelectionState) => void;
 };
 
 type ColumnMeta = {
@@ -115,10 +127,20 @@ const DataTable: FC<DataTableProps> = ({
   pagesCount,
   meta,
   selectedRow,
+  multiselectActions,
+  enableRowSelection = false,
+  rowSelection: externalRowSelection,
+  setRowSelection: externalSetRowSelection,
 }) => {
   const id = useId();
   const { t } = useTranslation();
   const [searchParams, setSearchParams] = useSearchParams();
+  const [internalRowSelection, setInternalRowSelection] = useState<RowSelectionState>({});
+  
+  // Use external rowSelection if provided, otherwise use internal
+  const rowSelection = externalRowSelection ?? internalRowSelection;
+  const setRowSelection = externalSetRowSelection ?? setInternalRowSelection;
+  
   const table = useReactTable({
     data,
     columns,
@@ -133,10 +155,13 @@ const DataTable: FC<DataTableProps> = ({
         right: [],
       },
       columnVisibility,
+      rowSelection,
       ...{ pagination },
       ...{ columnFilters },
     },
     enableColumnPinning: columnPinning != undefined ? true : false,
+    enableRowSelection: enableRowSelection,
+    onRowSelectionChange: setRowSelection,
     meta,
     onColumnFiltersChange: (updater) => {
       if (typeof updater !== 'function') return;
@@ -184,8 +209,32 @@ const DataTable: FC<DataTableProps> = ({
   const searchParamsWithoutPage = new URLSearchParams(searchParams);
   searchParamsWithoutPage.delete('page');
 
+  const selectedRows = table.getSelectedRowModel().rows;
+  const selectedCount = selectedRows.length;
+
   return (
     <>
+      {enableRowSelection && selectedCount > 0 && multiselectActions && (
+        <div className="data-table__selection-bar">
+          <div className="data-table__selection-info">
+            <span className="data-table__selection-count">
+              {selectedCount} {selectedCount === 1 ? t('global.rowSelected') || 'row selected' : t('global.rowsSelected') || 'rows selected'}
+            </span>
+          </div>
+          <div className="data-table__selection-actions">
+            {multiselectActions.map((action, index) => (
+              <Button
+                key={index}
+                appearance={action.variant as any || 'primary'}
+                onClick={() => action.onClick(selectedRows)}
+              >
+                {action.icon && <span className="data-table__action-icon">{action.icon}</span>}
+                {action.label}
+              </Button>
+            ))}
+          </div>
+        </div>
+      )}
       <div className="data-table__scrollWrapper">
         <table className="data-table">
           {!disableHead && (
@@ -197,9 +246,8 @@ const DataTable: FC<DataTableProps> = ({
                       key={header.id}
                       style={{
                         width: header.column.columnDef.meta?.size,
-                        position: header.column.columnDef.meta?.sticky
-                          ? 'sticky'
-                          : undefined,
+                        position: 'sticky',
+                        top: 0,
                         left:
                           header.column.columnDef.meta?.sticky === 'left'
                             ? `${header.column.getAfter('left') * 0.675}px`
@@ -209,7 +257,7 @@ const DataTable: FC<DataTableProps> = ({
                             ? `${header.column.getAfter('right') * 0.675}px`
                             : undefined,
                         backgroundColor: 'white',
-                        zIndex: header.column.columnDef.meta?.sticky ? 1 : 0,
+                        zIndex: header.column.columnDef.meta?.sticky ? 3 : 2,
                       }}
                     >
                       {header.isPlaceholder ? null : (

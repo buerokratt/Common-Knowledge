@@ -1,4 +1,4 @@
-import { FC, useState, useMemo } from 'react';
+import { FC, useState, useMemo, useRef, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useParams, Link } from 'react-router-dom';
@@ -8,6 +8,9 @@ import {
   MdOutlineTableChart,
   MdGridView,
   MdOutlineDeleteOutline,
+  MdWarning,
+  MdArrowForward,
+  MdPowerSettingsNew,
 } from 'react-icons/md';
 import {
   Button,
@@ -20,20 +23,29 @@ import {
   SwitchBox,
   Editor,
   Tooltip,
+  MultiselectAction,
 } from 'components';
 import {
   ColumnDef,
   PaginationState,
   SortingState,
   ColumnFiltersState,
+  Row,
+  CellContext,
+  HeaderContext,
 } from '@tanstack/react-table';
 import { useToast } from 'hooks/useToast';
+import { START_CLEANING_NOTIFICATION } from 'utils/constants';
 import 'pages/Agency/AgencyList.scss';
+import 'pages/ScrapedFiles/ScrapedFiles.scss';
 import {
   getScrapedFiles,
   updateFileExclusion,
+  bulkUpdateFileExclusion,
   refreshScrapedFile,
+  bulkRefreshFiles,
   deleteFile,
+  bulkDeleteFiles,
   downloadFile,
   fetchFileData,
   updateFileEditedContentWithUpload,
@@ -41,7 +53,7 @@ import {
   ScrapedFilesListParams,
   EditorState,
 } from 'services/files';
-import { getSource } from 'services/sources';
+import { getSource, startCleaning } from 'services/sources';
 
 interface FormData {
   search: string;
@@ -58,6 +70,13 @@ const ScrapedFiles: FC = () => {
   const [formData, setFormData] = useState<FormData>({
     search: '',
   });
+  const [rowSelection, setRowSelection] = useState({});
+  
+  // Bulk action confirmation dialogs
+  const [bulkDeleteConfirm, setBulkDeleteConfirm] = useState<Row<ScrapedFile>[] | null>(null);
+  const [bulkRefreshConfirm, setBulkRefreshConfirm] = useState<Row<ScrapedFile>[] | null>(null);
+  const [bulkIncludeConfirm, setBulkIncludeConfirm] = useState<Row<ScrapedFile>[] | null>(null);
+  const [bulkExcludeConfirm, setBulkExcludeConfirm] = useState<Row<ScrapedFile>[] | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
 
   // Table state for server-side pagination and sorting
@@ -74,7 +93,7 @@ const ScrapedFiles: FC = () => {
   // Handle search button click
   const handleSearchSubmit = () => {
     setSearchQuery(formData.search);
-    setPagination((prev) => ({ ...prev, pageIndex: 0 }));
+    setPagination((prev: PaginationState) => ({ ...prev, pageIndex: 0 }));
   };
 
   // Handle Enter key in search input
@@ -89,9 +108,33 @@ const ScrapedFiles: FC = () => {
     queryKey: ['source', sourceId],
     queryFn: () => getSource(sourceId!),
     enabled: !!sourceId,
+    refetchInterval: (data: any) => data?.status === 'running' ? 5000 : false,
   });
+
   const [sorting, setSorting] = useState<SortingState>([]);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
+
+  // Start cleaning API call
+  const handleStartCleaning = async () => {
+    if (!sourceId) return;
+    try {
+      await startCleaning(sourceId);
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('knowledgeBase.cleaningStarted'),
+      });
+      // Optionally refetch source and files
+      queryClient.invalidateQueries(['scrapedFiles']);
+      queryClient.invalidateQueries(['source', sourceId]);
+    } catch (error: any) {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.cleaningStartError'),
+      });
+    }
+  };
 
   // Convert sorting state to API format
   const getSortingParam = (sorting: SortingState): string => {
@@ -135,7 +178,13 @@ const ScrapedFiles: FC = () => {
     queryFn: () => getScrapedFiles(queryParams),
     enabled: !!sourceId,
     keepPreviousData: true,
+    refetchInterval: (data: any) => (sourceData?.status === 'running' || (sourceData?.status === 'in_review' && (data?.total === 0 || data == null))) ? 5000 : false,
   });
+
+  // Clear row selection when data changes (including page/page-size changes)
+  useEffect(() => {
+    setRowSelection({});
+  }, [scrapedFilesData?.total, pagination.pageIndex, pagination.pageSize]);
 
   // Refresh file mutation
   const refreshMutation = useMutation({
@@ -153,6 +202,43 @@ const ScrapedFiles: FC = () => {
         type: 'error',
         title: t('global.notificationError'),
         message: error.message || t('knowledgeBase.refreshError'),
+      });
+    },
+  });
+
+  // Bulk refresh files mutation
+  const bulkRefreshMutation = useMutation({
+    mutationFn: (fileIds: string[]) => bulkRefreshFiles(fileIds),
+    onSuccess: async (_: void, fileIds: string[]) => {
+      const count = fileIds.length;
+      setBulkRefreshConfirm(null);
+
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('global.bulkRefreshSuccess', {
+          count: count,
+          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+        }),
+      });
+
+      // Use refetch to force a fresh data fetch
+      const result = await refetch();
+      
+      // Clear selections after refetch completes and new data is available
+      if (result.isSuccess) {
+        setRowSelection({});
+      }
+    },
+    onError: (error: any, fileIds: string[]) => {
+      const count = fileIds.length;
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('global.bulkRefreshError', {
+          count: count,
+          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+        }),
       });
     },
   });
@@ -194,6 +280,95 @@ const ScrapedFiles: FC = () => {
         type: 'error',
         title: t('global.notificationError'),
         message: error.message || t('knowledgeBase.deleteError'),
+      });
+    },
+  });
+
+  // Bulk delete files mutation
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (fileIds: string[]) => bulkDeleteFiles(fileIds),
+    onSuccess: async (_: void, fileIds: string[]) => {
+      setBulkDeleteConfirm(null);
+
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: t('global.bulkDeleteSuccess', {
+          count: fileIds.length,
+        }),
+      });
+
+      // Use refetch to force a fresh data fetch
+      const result = await refetch();
+      
+      // Clear selections after refetch completes and new data is available
+      if (result.isSuccess) {
+        setRowSelection({});
+      }
+
+      // Check if current page is now out of bounds
+      const newTotal = (result.data?.total || 0);
+      const maxPages = Math.ceil(newTotal / pagination.pageSize);
+
+      // Reset to last valid page if current page is out of bounds
+      if (pagination.pageIndex >= maxPages && maxPages > 0) {
+        setPagination({
+          ...pagination,
+          pageIndex: maxPages - 1,
+        });
+      } else if (maxPages === 0) {
+        // If no data left, reset to page 0
+        setPagination({
+          ...pagination,
+          pageIndex: 0,
+        });
+      }
+    },
+    onError: (error: any) => {
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('global.bulkDeleteError'),
+      });
+    },
+  });
+
+  // Bulk update exclusion mutation
+  const bulkExclusionMutation = useMutation({
+    mutationFn: ({
+      fileIds,
+      isExcluded,
+    }: {
+      fileIds: string[];
+      isExcluded: boolean;
+    }) => bulkUpdateFileExclusion(fileIds, isExcluded),
+    onSuccess: async (_: void, variables) => {
+      setBulkExcludeConfirm(null);
+      setBulkIncludeConfirm(null);
+      
+      toast.open({
+        type: 'success',
+        title: t('global.notification'),
+        message: variables.isExcluded 
+          ? t('knowledgeBase.bulkExcludeSuccess', { count: variables.fileIds.length })
+          : t('knowledgeBase.bulkIncludeSuccess', { count: variables.fileIds.length }),
+      });
+
+      // Use refetch to force a fresh data fetch
+      const result = await refetch();
+      
+      // Clear selections after refetch completes
+      if (result.isSuccess) {
+        setRowSelection({});
+      }
+    },
+    onError: (error: any) => {
+      setBulkExcludeConfirm(null);
+      setBulkIncludeConfirm(null);
+      toast.open({
+        type: 'error',
+        title: t('global.notificationError'),
+        message: error.message || t('knowledgeBase.bulkExcludeError'),
       });
     },
   });
@@ -385,12 +560,113 @@ const ScrapedFiles: FC = () => {
     setSorting(newSorting);
   };
 
+  // Multiselect action handlers
+  const handleBulkDelete = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkDeleteConfirm(selectedRows);
+  };
+
+  const confirmBulkDelete = () => {
+    if (!bulkDeleteConfirm) return;
+    const selectedIds = bulkDeleteConfirm.map(row => row.original.baseId);
+    bulkDeleteMutation.mutate(selectedIds);
+  };
+
+  const handleBulkRefresh = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkRefreshConfirm(selectedRows);
+  };
+
+  const confirmBulkRefresh = () => {
+    if (!bulkRefreshConfirm) return;
+    const selectedIds = bulkRefreshConfirm.map(row => row.original.baseId);
+    bulkRefreshMutation.mutate(selectedIds);
+  };
+
+  const handleBulkInclude = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkIncludeConfirm(selectedRows);
+  };
+
+  const confirmBulkInclude = () => {
+    if (!bulkIncludeConfirm) return;
+    // Only include files that are currently excluded
+    const filesToInclude = bulkIncludeConfirm.filter(row => row.original.isExcluded);
+    if (filesToInclude.length === 0) {
+      toast.open({
+        type: 'info',
+        title: t('global.notification'),
+        message: t('knowledgeBase.allFilesAlreadyIncluded'),
+      });
+      setBulkIncludeConfirm(null);
+      return;
+    }
+    const selectedIds = filesToInclude.map(row => row.original.baseId);
+    bulkExclusionMutation.mutate({
+      fileIds: selectedIds,
+      isExcluded: false,
+    });
+  };
+
+  const handleBulkExclude = (selectedRows: Row<ScrapedFile>[]) => {
+    setBulkExcludeConfirm(selectedRows);
+  };
+
+  const confirmBulkExclude = () => {
+    if (!bulkExcludeConfirm) return;
+    // Only exclude files that are currently included
+    const filesToExclude = bulkExcludeConfirm.filter(row => !row.original.isExcluded);
+    if (filesToExclude.length === 0) {
+      toast.open({
+        type: 'info',
+        title: t('global.notification'),
+        message: t('knowledgeBase.allFilesAlreadyExcluded'),
+      });
+      setBulkExcludeConfirm(null);
+      return;
+    }
+    const selectedIds = filesToExclude.map(row => row.original.baseId);
+    bulkExclusionMutation.mutate({
+      fileIds: selectedIds,
+      isExcluded: true,
+    });
+  };
+
   const columns: ColumnDef<ScrapedFile>[] = [
+    {
+      id: 'select',
+      header: ({ table }: HeaderContext<ScrapedFile, any>) => {
+        const checkboxRef = useRef<HTMLInputElement>(null);
+        
+        useEffect(() => {
+          if (checkboxRef.current) {
+            checkboxRef.current.indeterminate = table.getIsSomeRowsSelected() && !table.getIsAllRowsSelected();
+          }
+        }, [table.getIsSomeRowsSelected(), table.getIsAllRowsSelected()]);
+
+        return (
+          <input
+            ref={checkboxRef}
+            type="checkbox"
+            checked={table.getIsAllRowsSelected()}
+            onChange={table.getToggleAllRowsSelectedHandler()}
+          />
+        );
+      },
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
+        <input
+          type="checkbox"
+          checked={row.getIsSelected()}
+          disabled={!row.getCanSelect()}
+          onChange={row.getToggleSelectedHandler()}
+        />
+      ),
+      meta: {
+        size: 10,
+      },
+    },
     {
       accessorKey: 'url',
       header: t('knowledgeBase.url'),
       enableColumnFilter: false,
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <a
           href={row.original.url}
           target="_blank"
@@ -417,7 +693,7 @@ const ScrapedFiles: FC = () => {
       header: t('knowledgeBase.pageTitle'),
       enableColumnFilter: false,
 
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <Tooltip content={row.original.pageTitle}>
           <div
             style={{
@@ -435,10 +711,10 @@ const ScrapedFiles: FC = () => {
     {
       id: 'actions',
       header: '',
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <Track
           justify="end"
-          align="flex-start"
+          align="stretch"
           gap={32}
           style={{ width: 'max-content' }}
         >
@@ -450,6 +726,7 @@ const ScrapedFiles: FC = () => {
             className="agencies__action-btn"
             size="s"
             onClick={() => handleRefresh(row.original)}
+            disabled={row.original.status !== 'finished'}
           >
             <Icon icon={<MdRefresh fontSize={20} />} size="medium" />
             {t('knowledgeBase.refresh')}
@@ -509,7 +786,7 @@ const ScrapedFiles: FC = () => {
       id: 'excluded',
       enableColumnFilter: false,
       header: t('knowledgeBase.excluded'),
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <SwitchBox
           label=""
           checked={row.original.isExcluded}
@@ -526,12 +803,14 @@ const ScrapedFiles: FC = () => {
     {
       accessorKey: 'status',
       header: t('global.status'),
-      cell: ({ row }) => {
+      cell: ({ row }: CellContext<ScrapedFile, any>) => {
         const color =
           row.original.status === 'finished'
             ? '#266B42'
             : row.original.status === 'cleaning'
             ? '#94690D'
+            : row.original.status === 'in_review'
+            ? '#BA830D'
             : '#AC3232';
         return (
           <span
@@ -551,7 +830,7 @@ const ScrapedFiles: FC = () => {
       accessorKey: 'lastScrapedAt',
       header: t('knowledgeBase.scraped'),
       enableColumnFilter: false,
-      cell: ({ row }) => (
+      cell: ({ row }: CellContext<ScrapedFile, any>) => (
         <span>
           {new Date(row.original.lastScrapedAt).toLocaleString('et-EE', {
             day: '2-digit',
@@ -563,6 +842,34 @@ const ScrapedFiles: FC = () => {
         </span>
       ),
     },
+  ];
+
+  // Define multiselect actions
+  const multiselectActions: MultiselectAction[] = [
+    {
+      label: t('global.exclude'),
+      icon: <MdPowerSettingsNew />,
+      variant: 'bulk_action',
+      onClick: handleBulkExclude,
+    },
+    {
+      label: t('global.include'),
+      icon: <MdArrowForward />,
+      variant: 'bulk_action',
+      onClick: handleBulkInclude,
+    },
+    {
+      label: t('knowledgeBase.refresh'),
+      icon: <MdRefresh />,
+      variant: 'bulk_action',
+      onClick: handleBulkRefresh,
+    },
+    {
+      label: t('global.delete'),
+      icon: <MdOutlineDeleteOutline />,
+      variant: 'danger',
+      onClick: handleBulkDelete,
+    }
   ];
 
   if (isLoading) {
@@ -607,7 +914,6 @@ const ScrapedFiles: FC = () => {
                 label={t('knowledgeBase.searchWithinListedSources')}
                 name="search"
                 value={formData.search}
-                handleSearchChange
                 onChange={handleSearchChange}
                 onKeyPress={handleSearchKeyPress}
               />
@@ -620,7 +926,28 @@ const ScrapedFiles: FC = () => {
               </Button>
             </Track>
           }
-        >
+        >          {/* Show inline notification and Start cleaning button when source is in_review */}
+          {sourceData?.status === 'in_review' && (
+            <div className="start-cleaning-notice" style={{ marginBottom: 16 }}>
+              <div className="start-cleaning-notice__inner">
+                <div className="start-cleaning-notice__body">
+                  <div className="start-cleaning-notice__header">
+                    <div className="start-cleaning-notice__icon">
+                      <MdWarning size={24} />
+                    </div>
+                    <div className="start-cleaning-notice__title">Scraping is finished!</div>
+                  </div>
+                  <div className="start-cleaning-notice__text">{t('knowledgeBase.startCleaningNotification')}</div>
+                </div>
+                <div className="start-cleaning-notice__action">
+                  <Button appearance="primary" onClick={() => handleStartCleaning()}>
+                    Start cleaning
+                  </Button>
+                </div>
+              </div>
+            </div>
+          )}
+
           <DataTable
             data={scrapedFilesData?.data ?? []}
             columns={columns}
@@ -634,6 +961,10 @@ const ScrapedFiles: FC = () => {
             filterable
             pagesCount={scrapedFilesData?.totalPages ?? 0}
             isClientSide={false}
+            enableRowSelection={true}
+            rowSelection={rowSelection}
+            setRowSelection={setRowSelection}
+            multiselectActions={multiselectActions}
           />
 
           <div className="agencies__footer">
@@ -674,6 +1005,130 @@ const ScrapedFiles: FC = () => {
                 url: deleteModal.url,
               })}
             </p>
+          </Dialog>
+        )}
+
+        {/* Bulk Delete Confirmation Modal */}
+        {bulkDeleteConfirm && (
+          <Dialog
+            title={t('global.delete')}
+            onClose={() => setBulkDeleteConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkDeleteConfirm(null)}
+                  disabled={bulkDeleteMutation.isLoading}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="error"
+                  onClick={confirmBulkDelete}
+                  disabled={bulkDeleteMutation.isLoading}
+                >
+                  {bulkDeleteMutation.isLoading
+                    ? t('global.deleting')
+                    : t('global.delete')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkDelete', {
+              count: bulkDeleteConfirm.length,
+              unit: bulkDeleteConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
+            })}
+          </Dialog>
+        )}
+
+        {/* Bulk Refresh Confirmation Modal */}
+        {bulkRefreshConfirm && (
+          <Dialog
+            title={t('knowledgeBase.refresh')}
+            onClose={() => setBulkRefreshConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkRefreshConfirm(null)}
+                  disabled={bulkRefreshMutation.isLoading}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={confirmBulkRefresh}
+                  disabled={bulkRefreshMutation.isLoading}
+                >
+                  {bulkRefreshMutation.isLoading
+                    ? t('global.refreshing')
+                    : t('global.refresh')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkRefresh', {
+              count: bulkRefreshConfirm.length,
+              unit: bulkRefreshConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
+            })}
+          </Dialog>
+        )}
+
+        {/* Bulk Include Confirmation Modal */}
+        {bulkIncludeConfirm && (
+          <Dialog
+            title={t('global.includeFiles')}
+            onClose={() => setBulkIncludeConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkIncludeConfirm(null)}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={confirmBulkInclude}
+                >
+                  {t('global.include')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkInclude', {
+              count: bulkIncludeConfirm.length,
+              unit: bulkIncludeConfirm.length === 1 ? t('file') : t('files')
+            })}
+          </Dialog>
+        )}
+
+        {/* Bulk Exclude Confirmation Modal */}
+        {bulkExcludeConfirm && (
+          <Dialog
+            title={t('global.excludeFiles')}
+            onClose={() => setBulkExcludeConfirm(null)}
+            footer={(
+              <Track gap={16} justify="end">
+                <Button
+                  appearance="secondary"
+                  onClick={() => setBulkExcludeConfirm(null)}
+                >
+                  {t('global.cancel')}
+                </Button>
+                <Button
+                  appearance="primary"
+                  onClick={confirmBulkExclude}
+                >
+                  {t('global.exclude')}
+                </Button>
+              </Track>
+            )}
+          >
+            {t('global.confirmBulkExclude', {
+              count: bulkExcludeConfirm.length,
+              unit: bulkExcludeConfirm.length === 1 ? t('file') : t('files')
+            })}
           </Dialog>
         )}
       </div>

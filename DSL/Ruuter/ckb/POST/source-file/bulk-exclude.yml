@@ -1,0 +1,104 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Exclude or include multiple source files by base IDs"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source_file
+  allowlist:
+    body:
+      - field: baseIds
+        type: array
+        description: "Array of base IDs of the source files to exclude or include"
+      - field: excluded
+        type: boolean
+        description: "Excluded property for all source files"
+
+extractRequestData:
+  assign:
+    base_ids: "${incoming.body.baseIds}"
+    excluded: "${incoming.body.excluded}"
+
+excludeSourceFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/source_file/update_source_files_exclude_batch"
+    headers:
+      type: json
+    body:
+      base_ids: ${base_ids}
+      excluded: ${excluded}
+  result: res
+
+validateDatabaseUpdate:
+  switch:
+    - condition: "${res.response.length == 0 || res.response.statusCodeValue >= 400}"
+      next: databaseUpdateError
+  next: checkExcluded
+
+checkExcluded:
+  switch:
+    - condition: ${excluded}
+      next: transformToExcludePaths
+  next: transformToIncludePaths
+
+transformToExcludePaths:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/transform_source_files_to_exclude_paths"
+    headers:
+      type: json
+    body:
+      files: ${res.response.body}
+  result: transformedPaths
+  next: moveFilesS3
+
+transformToIncludePaths:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER_HBS]/transform_source_files_to_include_paths"
+    headers:
+      type: json
+    body:
+      files: ${res.response.body}
+  result: transformedPaths
+  next: moveFilesS3
+
+moveFilesS3:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/move-files-async"
+    headers:
+      type: json
+    body:
+      files: ${transformedPaths.response.body.files}
+  result: moveFilesS3Result
+
+zipFiles:
+  call: http.post
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/update-zip-dirty"
+    headers:
+      type: json
+    body:
+      agencyId: "${res.response.body[0].agencyBaseId}"
+  result: zipFilesResult
+
+assignSuccessResponse:
+  assign:
+    response:
+      message: "Source files exclusion status updated successfully"
+      updated_count: ${res.response.body.length}
+      excluded: ${excluded}
+      updated_files: ${res.response.body}
+
+returnSuccess:
+  return: ${response}
+  status: 200
+  next: end
+
+databaseUpdateError:
+  return: "No source files found or they have been updated by another process"
+  status: 404
+  next: end

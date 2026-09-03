@@ -20,6 +20,11 @@ export interface Source {
   updatedAt: string;
   cronSchedule?: string;
   updateAutomatically?: boolean;
+  hasFinishedFiles?: boolean;
+  type?: string;
+  qualityControl?: 'basic' | 'comprehensive' | null;
+  extractImages?: boolean;
+  isStopping?: boolean;
 }
 
 // API Integration interface - extends Source but with specific properties
@@ -93,6 +98,18 @@ export interface CreateSourceRequest {
   type: 'file' | 'url' | 'api';
   files?: File[];
   apiUrl?: string;
+  qualityControlLevel?: '' | 'basic' | 'comprehensive';
+  extractImages?: boolean;
+}
+
+export interface CreateSourceWithUrlListRequest {
+  agencyBaseId: string;
+  url: string;
+  subsector: string;
+  type: 'specified';
+  urls: { url: string }[];
+  qualityControlLevel?: '' | 'basic' | 'comprehensive';
+  extractImages?: boolean;
 }
 
 export interface UpdateSourceSubsectorRequest {
@@ -133,6 +150,15 @@ export interface ApiSourceFilesListParams {
   search?: string;
   type: 'api_file';
 }
+
+/**
+ * Start cleaning for a source
+ */
+export const startCleaning = async (sourceId: string): Promise<void> => {
+  await apiDev.post('/source/start-cleaning', {
+    source_id: sourceId,
+  });
+};
 
 // Re-export types that might be needed by consumers
 export type { FileProgressCallback } from './s3';
@@ -340,10 +366,32 @@ export const createSourceUrl = async (
     url: data.url,
     subsector: data.subsector,
     type: 'url_to_scrape',
+    qualityControl: data.qualityControlLevel || null,
+    extractImages: data.extractImages ?? false,
   });
 
   const apiResponse: ApiResponse = response.data;
   return apiResponse.response?.[0] || apiResponse.response;
+};
+
+/**
+ * Create a new source with pre-selected URL list
+ */
+export const createSourceWithUrlList = async (
+  data: CreateSourceWithUrlListRequest
+): Promise<Source> => {
+  const response = await apiDev.post('/source/add-with-url-list', {
+    agencyBaseId: data.agencyBaseId,
+    url: data.url,
+    subsector: data.subsector,
+    type: 'specified',
+    qualityControl: data.qualityControlLevel || null,
+    urls: data.urls,
+    extractImages: data.extractImages ?? false,
+  });
+
+  const apiResponse: ApiResponse = response.data;
+  return apiResponse.response?.source || apiResponse.response;
 };
 
 /**
@@ -460,12 +508,16 @@ export const getApiSourceFiles = async (
 export const updateSourceScrapeInterval = async (
   sourceId: string,
   cronSchedule: string,
-  updateAutomatically: boolean
+  updateAutomatically: boolean,
+  qualityControl?: 'basic' | 'comprehensive' | null,
+  extractImages?: boolean
 ): Promise<Source> => {
   const response = await apiDev.post('/source/edit-scrape-interval', {
     baseId: sourceId,
     cronSchedule: cronSchedule,
     updateAutomatically: updateAutomatically,
+    qualityControl: qualityControl,
+    extractImages: extractImages ?? false,
   });
 
   const apiResponse: ApiResponse = response.data;

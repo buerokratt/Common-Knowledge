@@ -12,13 +12,11 @@ import {
   UpdateAgencyRequest,
   Agency,
 } from 'services/agencies';
-import { getCentopsOptions, CentopsOption } from 'services/centops';
 import './SaveAgency.scss';
 
 interface AgencyFormData {
   name: string;
   sector: string;
-  externalId: string;
 }
 
 const SaveAgency: FC = () => {
@@ -34,30 +32,9 @@ const SaveAgency: FC = () => {
   const [formData, setFormData] = useState<AgencyFormData>({
     name: '',
     sector: '',
-    externalId: '',
   });
 
   const [formErrors, setFormErrors] = useState<Partial<AgencyFormData>>({});
-
-  // Fetch Centops options
-  const {
-    data: centopsOptions = [],
-    isLoading: isLoadingCentops,
-    error: centopsError,
-  } = useQuery({
-    queryKey: ['centops-options'],
-    queryFn: getCentopsOptions,
-    staleTime: 5 * 60 * 1000, // Cache for 5 minutes
-    retry: 3,
-    onError: (error: any) => {
-      console.error('Failed to load Centops options:', error);
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.centopsLoadError'),
-      });
-    },
-  });
 
   // Fetch existing agency data if in edit mode
   const {
@@ -73,7 +50,6 @@ const SaveAgency: FC = () => {
       setFormData({
         name: agency.name,
         sector: agency.sector,
-        externalId: agency.externalId || '',
       });
     },
     onError: (error: any) => {
@@ -104,7 +80,9 @@ const SaveAgency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.agencyCreateError'),
+        message: error.response?.status === 409
+          ? t('knowledgeBase.agencyAlreadyExists')
+          : error.message || t('knowledgeBase.agencyCreateError'),
       });
     },
   });
@@ -161,7 +139,6 @@ const SaveAgency: FC = () => {
     const requestData = {
       name: formData.name.trim(),
       sector: formData.sector.trim(),
-      externalId: formData.externalId,
     };
 
     if (isEditMode) {
@@ -194,8 +171,7 @@ const SaveAgency: FC = () => {
 
     return (
       formData.name !== existingAgency.name ||
-      formData.sector !== existingAgency.sector ||
-      formData.externalId !== (existingAgency.externalId || '')
+      formData.sector !== existingAgency.sector
     );
   }, [formData, existingAgency, isEditMode]);
 
@@ -279,59 +255,6 @@ const SaveAgency: FC = () => {
             required
           />
 
-          <Track
-            gap={16}
-            style={{ width: '100%' }}
-            justify="end"
-            align="center"
-          >
-            <label>{t('knowledgeBase.centops')}</label>
-            <FormSelect
-              label={t('knowledgeBase.centops')}
-              name="externalId"
-              hideLabel
-              placeholder={
-                isLoadingCentops
-                  ? t('global.loading')
-                  : centopsError
-                  ? t('knowledgeBase.centopsLoadError')
-                  : t('global.selectOption')
-              }
-              style={{ maxWidth: 808 }}
-              options={centopsOptions}
-              value={formData.externalId}
-              defaultValue={formData.externalId}
-              onSelectionChange={(option) =>
-                handleInputChange('externalId', option?.value ?? '')
-              }
-              error={formErrors.externalId}
-              disabled={isLoadingCentops || !!centopsError}
-            />
-          </Track>
-
-          {/* Show loading indicator for Centops data */}
-          {isLoadingCentops && (
-            <div style={{ textAlign: 'center', color: '#666' }}>
-              {t('knowledgeBase.loadingCentopsOptions')}
-            </div>
-          )}
-
-          {/* Show error state for Centops data */}
-          {centopsError && (
-            <div style={{ textAlign: 'center', color: '#d32f2f' }}>
-              {t('knowledgeBase.centopsLoadError')}
-              <Button
-                appearance="text"
-                size="s"
-                onClick={() =>
-                  queryClient.invalidateQueries(['centops-options'])
-                }
-                style={{ marginLeft: 8 }}
-              >
-                {t('global.retry')}
-              </Button>
-            </div>
-          )}
         </Track>
       </Card>
     </div>
