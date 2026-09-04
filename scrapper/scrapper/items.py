@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Optional
 
 
@@ -24,7 +24,13 @@ class MetadataItem:
     page_title: str
     external_id: Optional[str] = ""
     version: str = "1.0"
-    created_at: str = field(default_factory=lambda: str(datetime.now()))
+    # Must be UTC, not naive local time -- this value is sent to Postgres as
+    # `last_scraped_at` (TIMESTAMP WITH TIME ZONE). A naive local timestamp
+    # gets misinterpreted as already-UTC, silently shifting it by the host's
+    # UTC offset -- which can permanently satisfy claim queries like
+    # `last_scraped_at < :reference_time` (itself always computed in UTC),
+    # causing a file to be re-claimed for scraping indefinitely.
+    created_at: str = field(default_factory=lambda: str(datetime.now(UTC)))
     edited_at: str | None = None
     language: Optional[str] = None
 

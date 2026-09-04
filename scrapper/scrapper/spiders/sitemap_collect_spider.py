@@ -123,6 +123,10 @@ class SitemapCollectSpider(BaseSpider):
             # pages' content is entire_source_spider's job (it does the
             # hash comparison against the stored version); creating a
             # source_file for it again here would duplicate it.
+            # This check also counts explicitly deleted files as "existing"
+            # (see get_source_file_exists_by_url.sql), so a URL a user
+            # removed on purpose stays excluded on future refreshes instead
+            # of silently reappearing as a new record.
             already_exists = requests.get(
                 f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/get-source-file-exists-by-url",
                 params={"source_id": self.task.source_id, "url": response.url},

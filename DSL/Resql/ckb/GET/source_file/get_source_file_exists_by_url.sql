@@ -1,7 +1,7 @@
 /*
 declaration:
   version: 0.1
-  description: "Check if a non-deleted source_file already exists for a source by URL"
+  description: "Check if a source_file already exists (or has ever existed, including deleted) for a source by URL -- used by sitemap discovery to decide whether a URL is genuinely new. A deleted file must still count as \"exists\" here, otherwise a page a user explicitly removed gets silently re-created as a brand-new record the next time the source is discovered/refreshed."
   method: get
   namespace: source_file
   returns: json
@@ -17,7 +17,7 @@ declaration:
     fields:
       - field: exists
         type: boolean
-        description: "Whether a matching source_file exists"
+        description: "Whether a matching source_file exists (deleted or not)"
 */
 SELECT count(*) > 0 AS exists
 FROM data_collection.source_file
@@ -27,5 +27,4 @@ WHERE (base_id, updated_at) IN (
     WHERE source_base_id = :source_base_id::UUID
     GROUP BY base_id
 ) AND source_base_id = :source_base_id::UUID
-    AND is_deleted = FALSE
     AND url = :url;
