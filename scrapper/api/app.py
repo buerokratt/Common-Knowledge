@@ -1,6 +1,6 @@
 import json
 import os
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 from scrapper import settings
 
@@ -79,7 +79,7 @@ def trigger_specified_api_files_scrapper_task(
 def generate_edited_metadata(task: EditedMetadataTask) -> str:
     response = requests.get(task.download_url)
     metadata = response.json()
-    metadata["edited_at"] = str(datetime.now())
+    metadata["edited_at"] = str(datetime.now(UTC))
     metadata["metadata"]["edited"] = True
 
     path = Path(task.source_file_path)

@@ -59,6 +59,14 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
     def urls_iter_impl(self) -> Iterator[str]:
         scrapped_before = datetime.datetime.now(datetime.UTC).isoformat()
+        # get-one-source-file-to-scrape claims any file currently `finished`
+        # and last scraped before `scrapped_before`. This guard is a
+        # defense-in-depth backstop against re-processing the same file
+        # twice within one run (e.g. if the claim query's timing window
+        # ever overlaps) -- it does not address the root cause of a file
+        # being reported as eligible again, which was a naive (non-UTC)
+        # timestamp bug in item construction, fixed separately in items.py.
+        already_claimed_ids: set[str] = set()
 
         while True:
             result = requests.get(
@@ -72,6 +80,10 @@ class EntireSourceSpider(SpecifiedPagesSpider):
                 return
 
             link = LinkToScrape(**result.json()["response"][0])
+
+            if link.id in already_claimed_ids:
+                return
+            already_claimed_ids.add(link.id)
 
             self.urls.append(link)
 
