@@ -26,47 +26,149 @@ The CKB serves as a critical data pipeline for the Bürokratt AI assistant, ensu
 
 ## Quick Start
 
+This is the complete, ordered walkthrough to bring the whole system up locally from a fresh
+clone. Do the steps in order — several will fail if run out of sequence (e.g. the migration
+scripts need the Docker network that `docker-compose up` creates).
+
 ### Prerequisites
 
-- Docker and Docker Compose
-- PostgreSQL database
-- S3-compatible storage (AWS S3, MinIO, etc.)
+- Docker, with **Docker Compose v2** (`docker compose ...`) 
+- Git, and network access to `github.com/buerokratt` to clone the sibling platform repos.
+- (Optional) S3-compatible storage (AWS S3, MinIO, …) for real file uploads. Local dev works
+  with placeholder S3 config (step 4) for everything except actual upload/download/zip.
 
-### Local Development
+> **Note:** PostgreSQL, OpenSearch, RabbitMQ and HashiCorp Vault all run as containers from
+> `docker-compose.yml` — you do **not** need to install them on the host.
+
+### Step 1 — Clone this repository
 
 ```bash
-# Clone the repository
 git clone https://github.com/buerokratt/Common-Knowledge.git
 cd Common-Knowledge
-
-# Start all services
-docker-compose up -d
-
-# Access the web interface
-open http://localhost:3000
-
-# API available at
-curl http://localhost:8080/ckb/agency/all
 ```
 
-### Environment Setup
+### Step 2 — Build the dependency service images
 
-Create `.env` file with required configuration:
+`docker-compose.yml` builds the CKB-owned services (GUI, scrapper, cleaning, file-processing,
+scheduler, data-export, search-service) from this repo, but it expects several **Bürokratt
+platform images to already exist locally** — it references them by bare tag (`image: ruuter`,
+`image: resql`, …) with no build context, so `docker-compose up` fails with a "pull
+access denied / no such image" error if they are missing.
+
+These images are **not published to a registry**; you build them yourself from sibling
+Bürokratt repos. Clone each one **outside** this repo (e.g. one directory up) and build the
+listed tag. Use the `dev` branch for all of them:
+
+```bash
+cd ..   # build the sibling repos next to Common-Knowledge, not inside it
+
+# 1. Ruuter — request orchestration engine (external + internal APIs)
+git clone -b dev https://github.com/buerokratt/Ruuter.git
+docker build -t ruuter ./Ruuter
+
+# 2. Resql — named-SQL query engine
+git clone -b dev https://github.com/buerokratt/Resql.git
+docker build -t resql ./Resql
+
+# 3. DataMapper — Handlebars/JSON response transforms
+git clone -b dev https://github.com/buerokratt/DataMapper.git
+docker build -t data-mapper ./DataMapper
+
+# 4. TIM — authentication/token service
+git clone -b dev https://github.com/buerokratt/TIM.git
+docker build -t tim ./TIM
+
+# 5. Authentication Layer — builds from Dockerfile.dev (note the -f flag)
+git clone -b dev https://github.com/buerokratt/Authentication-Layer.git
+docker build -f ./Authentication-Layer/Dockerfile.dev -t authentication-layer ./Authentication-Layer
+
+# 6. CronManager — scheduled-job runner. Build the Python-enabled image (Dockerfile.python)
+#    so jobs that shell out to Python work; the plain Dockerfile is Java-only.
+git clone -b dev https://github.com/buerokratt/CronManager.git
+docker build -f ./CronManager/Dockerfile.python -t cron-manager ./CronManager
+
+cd Common-Knowledge   # back to this repo for the remaining steps
+```
+
+Verify all six tags exist before continuing:
+
+```bash
+docker images | grep -E "ruuter|resql|data-mapper|tim|authentication-layer|cron-manager"
+```
+
+
+### Step 3 — Create the root `.env`
+
+`docker-compose` auto-loads a **root `.env` file** (git-ignored, so it is not in a fresh
+clone — you must create it). It is **required**: the file-processing service instantiates its
+S3 client at import time and **crashes on startup with `ValueError: Invalid endpoint:` if
+`S3_ENDPOINT_URL` is empty or unset**. Create `.env` in the repo root:
 
 ```env
-# Database
-DATABASE_URL=postgresql://user:password@localhost:5432/ckb
+# S3 / blob storage — REQUIRED (file-processing crashes without a valid, non-empty endpoint).
+# For local development without a real bucket, placeholders let the stack boot; actual
+# upload/download/zip operations will fail until you point these at a real S3 or local MinIO.
+AWS_ACCESS_KEY_ID=local-dev-placeholder
+AWS_SECRET_ACCESS_KEY=local-dev-placeholder
+AWS_REGION=us-east-1
+S3_BUCKET_NAME=ckb-local
+S3_ENDPOINT_URL=http://localhost:9000
 
-# Storage
-AWS_ACCESS_KEY_ID=your_access_key
-AWS_SECRET_ACCESS_KEY=your_secret_key
-S3_ENDPOINT_URL=your_s3_url
-S3_BUCKET_NAME=ckb-storage
-
-# Services
-RUUTER_INTERNAL=http://ruuter-internal:8089
-RUUTER_EXTERNAL=http://ruuter:8080
+# Optional file-processing tunables (compose supplies these defaults if omitted):
+# AUTO_CLEANUP_COMPLETED_TASKS=true
+# COMPLETED_TASK_CLEANUP_DELAY_MINUTES=5
+# PERIODIC_CLEANUP_INTERVAL_MINUTES=60
+# MAX_TASK_AGE_HOURS=24
 ```
+
+Database connection and inter-service URLs are already wired in `docker-compose.yml` and
+`constants.ini` — you do not set `DATABASE_URL` or the Ruuter URLs by hand for the local stack.
+
+### Step 4 — Start the stack
+
+```bash
+docker-compose up -d          # builds CKB-owned images, starts everything (incl. the step-2 images)
+docker-compose ps             # watch until services are Up / healthy
+```
+
+This also creates the `bykstack` Docker network that the migration scripts in step 5 rely on.
+
+### Step 5 — Run database migrations
+
+Schema is managed by **Liquibase** (not ORM migrations), applied through a helper script that
+runs a Liquibase container on the `bykstack` network against the `database` container:
+
+```bash
+./migrate.sh
+```
+
+### Step 6 — Load test data (optional, but needed for the sample login below)
+
+```bash
+./load-test-data.sh
+```
+
+### Step 7 — Verify it works
+
+```bash
+# GUI (dev container) — published on port 3001
+open http://localhost:3001
+
+# External API (Ruuter external) is on port 8086. Endpoints are behind an auth guard, so an
+# unauthenticated call returns {"response":"unauthorized"} (HTTP 403) — that alone confirms
+# the external API + auth chain are up.
+curl http://localhost:8086/ckb/agency/all
+
+# Full end-to-end check: log in. With test data loaded (step 6) this returns HTTP 200 and a
+# JWT, exercising Ruuter → Authentication-Layer → TIM → Resql → PostgreSQL.
+curl -X POST -H "Content-Type: application/json" \
+  -d '{"login":"EE30303039914","password":"OK"}' \
+  http://localhost:8086/ckb/auth/login
+```
+
+> **Ports:** the GUI dev container is published on **3001** and the external Ruuter API on
+> **8086** (internal Ruuter on 8089). Earlier revisions of these docs mentioned 3000/8080 —
+> the actual published host ports in `docker-compose.yml` are 3001 and 8086.
 
 ## System Architecture
 
@@ -97,17 +199,19 @@ For detailed architecture information, see [ARCHITECTURE.md](./ARCHITECTURE.md).
 
 ### Core Services
 
+Ports below are the **published host ports** in `docker-compose.yml`.
+
 | Service             | Purpose                                   | Technology          | Port |
 | ------------------- | ----------------------------------------- | ------------------- | ---- |
-| **GUI**             | Web interface for CKB management          | React/TypeScript    | 3000 |
-| **Ruuter External** | Public API with authentication            | Ruuter YAML configs | 8080 |
+| **GUI**             | Web interface for CKB management          | React/TypeScript    | 3001 |
+| **Ruuter External** | Public API with authentication            | Ruuter YAML configs | 8086 |
 | **Ruuter Internal** | Internal service communication            | Ruuter YAML configs | 8089 |
 | **Resql**           | SQL query engine and database abstraction | SQL with metadata   | -    |
-| **Scrapper**        | Web scraping and content extraction       | Python/Scrapy       | 8000 |
+| **Scrapper**        | Web scraping and content extraction       | Python/Scrapy       | 8080 |
 | **Cleaning**        | Content cleaning and text extraction      | Python/FastAPI      | 8123 |
 | **File Processing** | File upload and storage management        | Python/FastAPI      | 8888 |
-| **Scheduler**       | Task scheduling and automation            | Python/FastAPI      | 8003 |
-| **Data Export**     | Database export and archival              | Python/FastAPI      | 8002 |
+| **Scheduler**       | Task scheduling and automation            | Python/FastAPI      | 8124 |
+| **Data Export**     | Database export and archival              | Python/FastAPI      | 8889 |
 
 ### Supporting Components
 
@@ -211,52 +315,27 @@ Database schema is managed through Liquibase:
 
 ### Local Setup
 
-1. **Prerequisites**
+The full, ordered setup walkthrough — clone, build the dependency images, create `.env`,
+start the stack, migrate, load test data, verify — lives in
+[**Quick Start**](#quick-start) above. Once the stack is up, useful day-to-day commands:
 
-   ```bash
-   # Install Docker and Docker Compose
-   # Ensure PostgreSQL is available
-   # Configure AWS/S3 access
-   ```
-
-2. **Environment Configuration**
-
-   ```bash
-   # Copy example configuration
-   cp .env.example .env
-
-   # Edit configuration file
-   vim .env
-   ```
-
-3. **Database Setup**
-
-   ```bash
-   # Run database migrations
-   ./migrate.sh
-
-   # Load test data (optional)
-   ./load-test-data.sh
-   ```
-
-4. **Start Services**
-
-   ```bash
-   # Start all services
-   docker-compose up -d
-
-   # Or start individual services
-   docker-compose up gui scrapper cleaning
-   ```
+```bash
+docker-compose up -d                        # start everything
+docker-compose up -d gui scrapper-server    # start a subset
+docker-compose ps                           # health
+docker-compose logs -f <service>            # follow logs
+docker-compose down                         # stop the stack (keeps volumes/data)
+./migrate.sh                                # apply new Liquibase migrations
+```
 
 ### Testing
 
 ```bash
 # Run API tests
-curl http://localhost:8080/ckb/agency/all
+curl http://localhost:8086/ckb/agency/all
 
-# Test scraping functionality
-curl -X POST http://localhost:8000/specified-pages-scrapper-task \
+# Test scraping functionality (scrapper service is published on port 8080)
+curl -X POST http://localhost:8080/specified-pages-scrapper-task \
   -H "Content-Type: application/json" \
   -d '{"agency_id": "test", "source_id": "test", "urls": []}'
 
@@ -472,26 +551,26 @@ curl -X POST -H "Content-Type: application/json" -d '{
 
 # Use token in subsequent requests
 curl -H "Authorization: Bearer <token>" \
-  http://localhost:8080/ckb/agency/all
+  http://localhost:8086/ckb/agency/all
 ```
 
 ### Common Operations
 
 ```bash
 # List all agencies
-curl http://localhost:8080/ckb/agency/all
+curl http://localhost:8086/ckb/agency/all
 
 # Create new source
-curl -X POST http://localhost:8080/ckb/source/add \
+curl -X POST http://localhost:8086/ckb/source/add \
   -H "Content-Type: application/json" \
   -d '{"agency_id": "agency1", "name": "Source Name", "url": "https://example.com"}'
 
 # Trigger scraping
-curl -X POST http://localhost:8080/ckb/source/refresh \
+curl -X POST http://localhost:8086/ckb/source/refresh \
   -d '{"source_id": "source1"}'
 
 # Check processing status
-curl http://localhost:8080/ckb/reports/all
+curl http://localhost:8086/ckb/reports/all
 ```
 
 ## Contributing
