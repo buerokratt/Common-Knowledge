@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 
 from exporter.api.app import app, get_settings
 from exporter.api.config import ConfigurationError, Settings
+from exporter.services.agency_guard import MultipleAgenciesError
 from exporter.services.run_state import LAST_RUN_FILENAME, RunStateStore
 
 HEALTH_KEYS = {
@@ -26,11 +27,21 @@ HEALTH_KEYS = {
 
 @pytest.fixture
 def work_dir_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
-    """The lifespan really does mkdir and a write probe, so point it at a
-    temp dir — the configured /var/lib/content-external is not creatable on a
-    CI runner or a developer machine."""
+    """The lifespan really does mkdir and a lock probe, so point it at a temp
+    dir — the configured /var/lib/content-external is not creatable on a CI
+    runner or a developer machine.
+
+    It also stubs A17's agency count. The lifespan calls Resql to assert N=1,
+    and while that check is boot-tolerant — an unreachable Resql warns and
+    serves — letting every test here attempt a real connection would make the
+    suite depend on DNS behaviour and pay a timeout for it. The two tests that
+    care about the check drive it explicitly.
+    """
     for name in Settings.model_fields:
         monkeypatch.delenv(name.upper(), raising=False)
+    monkeypatch.setattr(
+        "exporter.api.app.check_single_agency_at_startup", lambda _settings: 1
+    )
     work_dir = tmp_path / "work"
     monkeypatch.setenv("CONTENT_WORK_DIR", work_dir.as_posix())
     return work_dir
@@ -182,6 +193,36 @@ def test_startup_fails_when_work_dir_is_unwritable(
 
     with pytest.raises(ConfigurationError), TestClient(app):
         pass
+
+
+def test_startup_refuses_when_more_than_one_agency_exists(
+    work_dir_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A17 at the ASGI layer: the app does not come up, rather than coming up
+    and silently exporting only whichever agency wins the lock each hour."""
+
+    def two_agencies(_settings: Settings) -> int:
+        raise MultipleAgenciesError("2 agencies exist")
+
+    monkeypatch.setattr("exporter.api.app.check_single_agency_at_startup", two_agencies)
+
+    with pytest.raises(ConfigurationError) as excinfo, TestClient(app):
+        pass
+    assert "2 agencies" in str(excinfo.value)
+
+
+def test_startup_survives_an_unreachable_resql(
+    work_dir_env: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other half of A17's asymmetry: the agency check is the only startup
+    check that tolerates its own failure, because Resql may still be starting
+    and this service has no depends_on for it."""
+    monkeypatch.setattr(
+        "exporter.api.app.check_single_agency_at_startup", lambda _settings: None
+    )
+
+    with TestClient(app) as client:
+        assert client.get("/health").status_code == 200
 
 
 def test_health_uses_injected_settings(work_dir_env: Path) -> None:

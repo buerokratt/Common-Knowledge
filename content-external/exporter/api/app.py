@@ -18,6 +18,7 @@ from typing import Annotated
 from fastapi import Depends, FastAPI, Request
 
 from exporter.api.config import (
+    ConfigurationError,
     Settings,
     assert_memory_budget,
     assert_work_dir_usable,
@@ -25,6 +26,10 @@ from exporter.api.config import (
     log_redacted_config,
 )
 from exporter.api.models import HealthResponse, LastRunSummary
+from exporter.services.agency_guard import (
+    MultipleAgenciesError,
+    check_single_agency_at_startup,
+)
 from exporter.services.run_state import RunStateStore
 
 logger = logging.getLogger(__name__)
@@ -57,6 +62,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log_redacted_config(settings)
     work_dir = assert_work_dir_usable(settings)  # A14's exclusive-flock self-test
     assert_memory_budget(settings)  # A16
+
+    # A17, last: the only check here that makes a network call, and the only
+    # one that tolerates its own failure. MultipleAgenciesError is translated
+    # rather than raised directly, so every startup refusal this service can
+    # produce is a ConfigurationError.
+    try:
+        check_single_agency_at_startup(settings)
+    except MultipleAgenciesError as exc:
+        raise ConfigurationError(str(exc)) from exc
 
     app.state.settings = settings
     # Built on the RESOLVED path, not settings.content_work_dir: A14 already

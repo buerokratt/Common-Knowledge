@@ -231,6 +231,43 @@ crashed container rather than a concurrency bug found months later.
 In compose, the work directory is a local-driver named volume. Do not run
 `docker compose up --scale content-external=N`.
 
+## One agency per deployment, and why it is asserted
+
+CKB enforces one agency per deployment already — agency creation is
+existence-checked and returns `409 Conflict`. This service **asserts it
+anyway**, because it is the one place where "one agency is N=1, not a special
+case" is not true.
+
+The scheduled trigger fans out from `list_agencies` and POSTs one export per
+agency, and the export takes a **single whole-run lock**. With two agencies,
+the second POST finds the lock held, reports `busy` and **exits 0** — every
+hour, forever, with nothing logged as an error, because a concurrent run is by
+design not a failure. The second agency would simply never be exported, and
+nothing would say so.
+
+The check runs in two places, deliberately asymmetric:
+
+| | More than one agency | Resql unreachable |
+|---|---|---|
+| **At startup** | **refuses to start**, naming the count | **warns and serves** |
+| **At the start of each export** | fails the run, loudly | fails the run |
+
+Startup tolerates an unreachable Resql because a hard assert there would
+couple this container's boot to Resql being up — which neither compose (this
+service has no `depends_on`) nor Kubernetes guarantees — so a transient Resql
+restart would become a `CrashLoopBackOff` here. A service that boots and warns
+beats one that will not boot. At the start of a run the answer is
+load-bearing and the run needs the agency list regardless, so nothing is
+tolerated there.
+
+> **If CKB ever supports more than one agency**, the fix is not to relax this
+> assertion but to adopt the drain-and-recurse shape
+> `DSL/Ruuter.internal/ckb/GET/pipeline/zip.yml` already uses — claim one
+> agency at a time rather than fanning out against a shared lock. Note that
+> its termination guarantee is a claimed flag on the `agency` row, and **rules
+> 3–5 forbid this service writing any `agency` column**, so it would need a
+> claim store of its own.
+
 ## Which sink is this deployment running?
 
 Check `CONTENT_SINK` in this deployment's environment, or `GET /health`,
