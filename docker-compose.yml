@@ -514,6 +514,14 @@ volumes:
   # content-external's durable work dir: the run lock (F2) and the
   # deferred-deletion journal. Must survive a restart, and must never be a
   # bind mount into the scraped tree (rule 1).
+  #
+  # A14: a local-driver named volume, so the run lock is an flock on one
+  # kernel and therefore sound. Do not move this to an NFS/CIFS volume driver
+  # and do not scale the service (`--scale content-external=N`): flock is
+  # advisory across nodes and would let two exports run concurrently with no
+  # error at all. The chart's counterparts are replicas: 1, strategy:
+  # Recreate, and a ReadWriteOnce PVC; the service itself refuses to start if
+  # it cannot take an exclusive lock here.
   content-external-work:
   opensearch-data:
   vault-data:

@@ -110,6 +110,37 @@ The switch is whether `MANIFEST_STORE_BACKEND` is set.
 Full validation rules are in `exporter/api/config.py`; the `@model_validator`
 methods on `Settings` are the matrix, one per row.
 
+## Deployment constraints — never scale this service
+
+The export takes **one whole-run lock** on `CONTENT_WORK_DIR`, and
+`drain_deletions` takes the same one. That lock is the only thing preventing a
+drain from deleting a key an export has just re-published, and it is an
+`flock` — **sound only within one kernel**.
+
+Three facts follow, asserted in three places because one is easy to bypass:
+
+| Fact | Where it is asserted |
+|---|---|
+| `replicas: 1` | `charts/ckb/templates/content-external-deployment.yaml` |
+| `strategy: Recreate` — never `RollingUpdate`, whose whole behaviour is to run two pods at once | same file |
+| PVC is `ReadWriteOnce`, on a block or local-backed StorageClass | `values.yaml`, guarded by `ckb.contentExternal.accessMode` in `_helpers.tpl`, which **fails the render** on anything else |
+
+And at startup the service **refuses to start** if it cannot take an exclusive
+lock on `CONTENT_WORK_DIR` — so a volume that does not support locking is a
+crashed container rather than a concurrency bug found months later.
+
+> **Why `ReadWriteMany` is refused rather than warned about.** On NFS, EFS or
+> CephFS, `flock` is advisory and routinely not honoured across nodes: two pods
+> would both "acquire" the lock and run concurrent exports **with no error at
+> all**. On `ReadWriteOnce` the second pod simply cannot mount — a broken
+> deploy rather than corrupted state. RWO is the safe failure; RWX is the
+> silent one. The service warns at startup if it detects its work directory on
+> a network filesystem, but it cannot reliably detect this, which is why the
+> chart guard exists.
+
+In compose, the work directory is a local-driver named volume. Do not run
+`docker compose up --scale content-external=N`.
+
 ## Which sink is this deployment running?
 
 Check `CONTENT_SINK` in this deployment's environment, or `GET /health`,

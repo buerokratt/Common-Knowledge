@@ -43,6 +43,7 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from exporter.core.redaction import sanitize_sensitive_text
+from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
 
 logger = logging.getLogger(__name__)
 
@@ -472,8 +473,12 @@ def assert_work_dir_usable(settings: Settings) -> Path:
     1 violated, and only the realpath can tell the difference. Running the
     identical predicate in both places is what makes the check hard to bypass.
 
-    A14 extends this function with the exclusive-flock self-test, replacing
-    the write probe below rather than adding a second, weaker check beside it.
+    A14 replaced the original write probe with an exclusive-flock self-test
+    rather than adding a second, weaker check beside it. The lock probe
+    subsumes the write probe — creating the lock file proves the directory is
+    writable — and additionally proves the mechanism F2's whole-run lock
+    depends on actually works on this volume. A volume that cannot lock turns
+    into a refusal to start instead of a concurrency bug found months later.
     """
     path = settings.work_dir_path
     try:
@@ -491,14 +496,20 @@ def assert_work_dir_usable(settings: Settings) -> Path:
     except ValueError as exc:
         raise ConfigurationError(str(exc)) from exc
 
-    probe = real / ".content-external-write-probe"
+    # Emitted before the probe, not after: if the probe then fails, the
+    # filesystem type is the most useful thing in the log.
+    warn_if_locking_is_unreliable(real)
+
     try:
-        probe.write_text("", encoding="utf-8")
-        probe.unlink()
+        probe_lockable(real)
     except OSError as exc:
         raise ConfigurationError(
-            f"CONTENT_WORK_DIR={settings.content_work_dir} is not writable: "
-            f"{exc}. It holds the run lock and the deletion journal."
+            f"CONTENT_WORK_DIR={settings.content_work_dir} is not usable as a "
+            f"lock directory: {exc} It holds the run lock and the deferred-"
+            "deletion journal, and that lock is the only thing preventing an "
+            "export and a drain from overlapping — a drain deleting a key an "
+            "export just re-published. Point it at a writable, block or "
+            "local-backed volume."
         ) from exc
     return real
 

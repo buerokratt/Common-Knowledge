@@ -465,11 +465,14 @@ def test_realpath_check_rejects_a_symlink_into_a_scrapped_data_tree(
 
 
 def test_work_dir_is_created_and_probed(tmp_path: Path) -> None:
+    """A14 replaced the write probe with the exclusive-lock probe, so the
+    filename moved with it. Left asserting "no probe file remains" because a
+    probe that litters the volume it is validating is its own small bug."""
     target = tmp_path / "new" / "work"
     resolved = assert_work_dir_usable(_settings(target.as_posix()))
 
     assert resolved.is_dir()
-    assert not list(resolved.glob(".content-external-write-probe"))
+    assert not list(resolved.glob(".startup-lock-probe"))
 
 
 def test_work_dir_pointing_at_a_file_is_refused(tmp_path: Path) -> None:

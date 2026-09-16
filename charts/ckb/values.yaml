@@ -647,6 +647,17 @@ contentExternal:
       value: "object_store"
   persistence:
     size: 1Gi
+    # A14. MUST be ReadWriteOnce, and ckb.contentExternal.accessMode in
+    # templates/_helpers.tpl fails the render on anything else. F2's run lock
+    # is an flock, which is only sound within one kernel: on a ReadWriteMany
+    # volume (NFS/EFS/CephFS) it is advisory and routinely not honoured
+    # across nodes, so an export and a drain would run concurrently with no
+    # error at all. The StorageClass backing this must be block or local.
+    #
+    # The other two A14 facts live in content-external-deployment.yaml:
+    # replicas: 1, and strategy: Recreate (never RollingUpdate, whose whole
+    # behaviour is to run two pods at once).
+    accessMode: ReadWriteOnce
 
 # --- RabbitMQ (scrapper) -------------------------------------------------------
 rabbitmq:
