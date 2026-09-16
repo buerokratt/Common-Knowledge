@@ -608,6 +608,7 @@ cleaningServer:
   extraVolumes: []
   extraVolumeMounts: []
 
+# --- Content External ----------------------------------------------------------
 contentExternal:
   enabled: true
   nameOverride: content-external
@@ -622,9 +623,28 @@ contentExternal:
   # inside a scrapped-data tree aborts the render (rule 1).
   workDir: /var/lib/content-external
   # CONTENT_WORK_DIR is NOT listed here — the deployment templates it from
-  # workDir above so the env var and the volume mount cannot drift. This list
-  # is for the sink/manifest-store block that A12 adds.
-  env: []
+  # workDir above so the env var and the volume mount cannot drift.
+  #
+  # The destination is a DEPLOYMENT choice, set explicitly rather than left to
+  # the code default so `helm template` answers "which sink is this running?"
+  # without anyone reading Python. Every invalid combination below is refused
+  # at startup by name, never at first commit.
+  #
+  # MANIFEST_STORE_* is deliberately absent for object_store: an empty
+  # MANIFEST_STORE_BACKEND means the manifest lives in the sink's own store,
+  # bucket AND prefix, inherited wholesale, so this deployment shape gains no
+  # configuration at all. An llm_module deployment MUST set it — an HTTP API
+  # has nowhere to hold a manifest — along with LLM_MODULE_BASE_URL (https://
+  # only; the body is Estonian government document text) and
+  # LLM_MODULE_VAULT_SECRET_PATH.
+  #
+  # MANIFEST_STORE_BACKEND=local is development only and additionally needs
+  # MANIFEST_STORE_ALLOW_LOCAL=true. Never set it in a chart values file: a
+  # re-provisioned PVC would read as a first run, republishing the corpus and
+  # permanently orphaning every document CKB deleted while it was gone.
+  env:
+    - name: CONTENT_SINK
+      value: "object_store"
   persistence:
     size: 1Gi
 

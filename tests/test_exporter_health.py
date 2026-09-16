@@ -53,8 +53,21 @@ def test_health_reports_the_configured_sink(
     work_dir_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """content-external/README.md tells an operator to check GET /health for
-    which sink this deployment runs. That promise, made executable."""
+    which sink this deployment runs. That promise, made executable.
+
+    The four extra variables are not noise: A12's matrix refuses
+    CONTENT_SINK=llm_module without a manifest store and without a base URL
+    and credential path, so this is the minimum viable llm_module deployment.
+    Asserting the whole set here means a future relaxation of the matrix shows
+    up as this test passing with fewer of them, rather than silently.
+    """
     monkeypatch.setenv("CONTENT_SINK", "llm_module")
+    monkeypatch.setenv("MANIFEST_STORE_BACKEND", "s3")
+    monkeypatch.setenv("MANIFEST_STORE_ENDPOINT_URL", "https://store.example")
+    monkeypatch.setenv("MANIFEST_STORE_BUCKET", "content-manifests")
+    monkeypatch.setenv("LLM_MODULE_BASE_URL", "https://llm.example/ingest")
+    monkeypatch.setenv("LLM_MODULE_VAULT_SECRET_PATH", "llm/connections/ingest")
+
     with TestClient(app) as client:
         body = client.get("/health").json()
     assert body["sink"] == "llm_module"

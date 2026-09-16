@@ -458,6 +458,31 @@ services:
       # deployment that forgot this write the run lock and the deletion
       # journal somewhere other than the volume above, unnoticed.
       - CONTENT_WORK_DIR=/var/lib/content-external
+      # The destination is a DEPLOYMENT choice, set explicitly rather than
+      # left to the code default so `docker compose config` answers "which
+      # sink is this running?" without anyone reading Python.
+      - CONTENT_SINK=object_store
+      # MANIFEST_STORE_* is deliberately unset. On the object_store sink an
+      # empty MANIFEST_STORE_BACKEND means the manifest lives in the sink's
+      # own store, bucket and prefix — endpoint, bucket AND prefix inherited
+      # wholesale. Setting any of them is what an llm_module deployment does,
+      # and that deployment MUST, because an HTTP API has nowhere to hold a
+      # manifest. Startup refuses every invalid combination by name.
+      #
+      # For an llm_module deployment, uncomment and fill all five:
+      # - CONTENT_SINK=llm_module
+      # - MANIFEST_STORE_BACKEND=s3
+      # - MANIFEST_STORE_ENDPOINT_URL=
+      # - MANIFEST_STORE_BUCKET=
+      # - MANIFEST_STORE_PREFIX=content-manifests
+      # - LLM_MODULE_BASE_URL=            # https:// only — the body is
+      #                                   # Estonian government document text
+      # - LLM_MODULE_VAULT_SECRET_PATH=   # fetched per task, never cached
+      #
+      # MANIFEST_STORE_BACKEND=local is development only and additionally
+      # requires MANIFEST_STORE_ALLOW_LOCAL=true. Do not set it here: a
+      # re-provisioned volume would read as a first run, republishing the
+      # corpus and permanently orphaning everything CKB deleted meanwhile.
     networks:
       - bykstack
 

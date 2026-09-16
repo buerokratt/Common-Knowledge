@@ -8,12 +8,29 @@ or exporter/core/ may import a settings object. That is the cross-cutting
 Config rule: "injected as constructor arguments, never a module-global
 singleton reached into from a service."
 
-Scope note (A10). Every variable in the design's env block is declared here
-with its documented default, but only CONTENT_WORK_DIR is required and only
-per-field validation is applied. The cross-field validation matrix for
-CONTENT_SINK / MANIFEST_STORE_* / LLM_MODULE_* is A12's deliverable and lands
-as @model_validator methods on this class — a pure addition, no field here
-changes.
+Scope note (A10, closed by A12). Every variable in the design's env block is
+declared here with its documented default. CONTENT_WORK_DIR is the only
+unconditionally required one; everything else is required *conditionally*, and
+those conditions are the @model_validator methods at the bottom of Settings —
+the four-row startup validation matrix from
+content-external-pipeline.md#config-and-secrets.
+
+MANIFEST-STORE RESOLUTION IS ALL-OR-NOTHING (A12, D17). The switch is whether
+MANIFEST_STORE_BACKEND is set. When it is empty the manifest store IS the
+object-store sink's own store — endpoint, bucket AND prefix all inherited —
+and MANIFEST_STORE_* is ignored in its entirety, including
+MANIFEST_STORE_PREFIX's non-empty default.
+
+That last clause is the non-obvious one, so it is spelled out. The design's env
+block documents `MANIFEST_STORE_PREFIX=content-manifests`, which reads like a
+default that always applies. If resolution merged field-by-field, an
+object-store deployment that set nothing would write its manifest under
+`content-manifests/...` instead of under CONTENT_EXTERNAL_PREFIX — and
+verification 20 requires that such a deployment write to the pre-change key
+*byte-identically*, gaining no configuration at all. So `content-manifests` is
+the recommended value for an llm_module deployment (which must set the backend
+explicitly anyway), never a default that silently relocates an object-store
+deployment's manifest.
 """
 
 import logging
@@ -22,7 +39,7 @@ import posixpath
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from exporter.core.redaction import sanitize_sensitive_text
@@ -153,10 +170,25 @@ class Settings(BaseSettings):
     sink_failure_abort_threshold: Annotated[int, Field(ge=1)] = 25
 
     # --- where the manifest lives — never the destination ------------------
-    manifest_store_backend: str = ""
+    # Blank is the load-bearing value, not merely the absence of one: it means
+    # "inherit the object-store sink's store, bucket and prefix wholesale"
+    # (D17), which is what makes the two-sink change additive for an
+    # object-store deployment. See the module docstring.
+    #
+    # Literal rather than str so a typo (`MANIFEST_STORE_BACKEND=S3`) is a
+    # startup refusal rather than a backend that resolves to nothing at first
+    # commit — the failure this whole matrix exists to pull forward.
+    manifest_store_backend: Literal["", "s3", "azure_blob", "local"] = ""
     manifest_store_endpoint_url: str = ""
     manifest_store_bucket: str = ""
     manifest_store_prefix: str = "content-manifests"
+    # D19's dev flag. `local` puts the manifest on CONTENT_WORK_DIR, and a
+    # re-provisioned volume then reads as `first_run`: the corpus is
+    # republished AND every document CKB deleted while the manifest was gone
+    # is permanently orphaned, because it is absent from the rows and absent
+    # from the manifest, so it can never classify `deleted`. That state must
+    # be reachable only by a deliberate act, never by a routine volume event.
+    manifest_store_allow_local: bool = False
 
     # --- llm-module sink (Stage L) -----------------------------------------
     llm_module_base_url: str = ""
@@ -227,10 +259,186 @@ class Settings(BaseSettings):
         assert_not_under_scrapped_data(normalised, variable="CONTENT_WORK_DIR")
         return normalised
 
+    # ----------------------------------------------------------------------
+    # A12 — the startup validation matrix.
+    #
+    # Four combinations must fail HERE rather than at first commit. The reason
+    # is specific and not general tidiness: a run that discovers a missing
+    # manifest store after pushing 2,000 documents has published them with no
+    # record of having done so, which is indistinguishable from never having
+    # run. Every message names the variable to set, because the person reading
+    # it is looking at a crashed container and not at the design document.
+    #
+    # mode="after" runs in definition order on the constructed model. Nothing
+    # here mutates, which is what makes it compatible with frozen=True.
+    # ----------------------------------------------------------------------
+
+    @model_validator(mode="after")
+    def _check_manifest_store_for_llm_module(self) -> "Settings":
+        """Matrix row 2: `llm_module` with no manifest store refuses to start.
+
+        The llm-module is an HTTP API with nowhere to PUT a manifest, and the
+        manifest cannot be delegated to it: it would make a failed push
+        indistinguishable from a successful one, which is the single property
+        this design's correctness rests on.
+        """
+        if self.content_sink == "llm_module" and not self.manifest_store_backend:
+            raise ValueError(
+                "CONTENT_SINK=llm_module requires MANIFEST_STORE_BACKEND to be "
+                "set (s3 or azure_blob). That sink is an HTTP API and has "
+                "nowhere to hold manifest.json, so the manifest store cannot "
+                "be inherited from it the way an object-store deployment "
+                "inherits its own store. Set MANIFEST_STORE_BACKEND plus "
+                "MANIFEST_STORE_BUCKET (and MANIFEST_STORE_ENDPOINT_URL for "
+                "s3) — a dedicated bucket or prefix on the S3-compatible "
+                "endpoint CKB already runs is the obvious choice."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_manifest_store_is_complete(self) -> "Settings":
+        """An explicitly-set manifest store must be usable.
+
+        Not a row of the documented matrix, but implied by it: without this,
+        `MANIFEST_STORE_BACKEND=s3` alone satisfies row 2 while naming a store
+        that cannot be addressed, and the refusal lands at first commit after
+        all — exactly what the matrix exists to prevent.
+
+        `local` needs nothing: it resolves to CONTENT_WORK_DIR, which is
+        already required and already asserted.
+        """
+        if not self.manifest_store_backend or self.manifest_store_backend == "local":
+            return self
+        missing = []
+        if not self.manifest_store_bucket:
+            missing.append("MANIFEST_STORE_BUCKET")
+        if self.manifest_store_backend == "s3" and not self.manifest_store_endpoint_url:
+            missing.append("MANIFEST_STORE_ENDPOINT_URL")
+        if missing:
+            raise ValueError(
+                f"MANIFEST_STORE_BACKEND={self.manifest_store_backend} is set "
+                f"but {' and '.join(missing)} "
+                f"{'are' if len(missing) > 1 else 'is'} empty. A manifest "
+                "store that cannot be addressed is worse than none: the run "
+                "would publish documents and then fail to record that it had."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_local_manifest_store_is_dev_only(self) -> "Settings":
+        """Matrix row 4: `local` is refused without the explicit dev flag.
+
+        D19. A filesystem manifest is fine for local work and dangerous in a
+        deployment, and the danger is not that it is lost — it is what being
+        lost *looks like*.
+        """
+        if (
+            self.manifest_store_backend == "local"
+            and not self.manifest_store_allow_local
+        ):
+            raise ValueError(
+                "MANIFEST_STORE_BACKEND=local is development only and "
+                "requires MANIFEST_STORE_ALLOW_LOCAL=true. A filesystem "
+                "manifest on CONTENT_WORK_DIR means a re-provisioned volume "
+                "reads as a first run: the entire corpus is republished, and "
+                "every document CKB deleted while the manifest was gone is "
+                "permanently orphaned — absent from the rows and absent from "
+                "the manifest, it can never classify as deleted. That must be "
+                "reachable by a deliberate act, never by a routine volume "
+                "event. For any real deployment set an object store instead."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_llm_module_endpoint_and_credential(self) -> "Settings":
+        """Matrix row 3: `llm_module` needs a base URL and a credential path.
+
+        TLS is required and certificate verification is never disabled, so an
+        `http://` base URL is refused here rather than discovered when the
+        first document leaves the cluster — the push body IS Estonian
+        government document text (L14).
+        """
+        if self.content_sink != "llm_module":
+            return self
+        missing = []
+        if not self.llm_module_base_url:
+            missing.append("LLM_MODULE_BASE_URL")
+        if not self.llm_module_vault_secret_path:
+            missing.append("LLM_MODULE_VAULT_SECRET_PATH")
+        if missing:
+            raise ValueError(
+                "CONTENT_SINK=llm_module requires "
+                f"{' and '.join(missing)} to be set. Without "
+                "a base URL there is nowhere to push; without a Vault secret "
+                "path there is no credential, and the run would report "
+                "`failed` every hour with the reason only in stdout."
+            )
+        if not self.llm_module_base_url.startswith("https://"):
+            raise ValueError(
+                "LLM_MODULE_BASE_URL must use https://, got "
+                f"{sanitize_sensitive_text(self.llm_module_base_url)!r}. The "
+                "request body carries Estonian government document text and "
+                "the llm-module is outside bykstack, so TLS is required and "
+                "certificate verification is never disabled."
+            )
+        return self
+
     @property
     def work_dir_path(self) -> Path:
         """The work dir as a real Path, for the components that do I/O."""
         return Path(self.content_work_dir)
+
+    # ----------------------------------------------------------------------
+    # A12 — manifest-store resolution (D16, D17).
+    #
+    # Read these, never the raw MANIFEST_STORE_* fields, anywhere that builds
+    # the manifest store. Inheritance is all-or-nothing and the module
+    # docstring says why; splitting it field-by-field would silently relocate
+    # an object-store deployment's manifest and break verification 20.
+    # ----------------------------------------------------------------------
+
+    @property
+    def manifest_store_is_inherited(self) -> bool:
+        """True when the manifest store IS the object-store sink's own store.
+
+        Only reachable on the object-store sink: an empty backend is refused
+        for `llm_module` by _check_manifest_store_for_llm_module, so this
+        needs no sink branch of its own.
+        """
+        return not self.manifest_store_backend
+
+    @property
+    def resolved_manifest_store_backend(self) -> str:
+        if self.manifest_store_is_inherited:
+            return self.content_external_store_backend
+        return self.manifest_store_backend
+
+    @property
+    def resolved_manifest_store_endpoint_url(self) -> str:
+        if self.manifest_store_is_inherited:
+            return self.external_s3_endpoint_url
+        return self.manifest_store_endpoint_url
+
+    @property
+    def resolved_manifest_store_bucket(self) -> str:
+        """The bucket (s3) or container (azure_blob) holding manifest.json."""
+        if not self.manifest_store_is_inherited:
+            return self.manifest_store_bucket
+        if self.content_external_store_backend == "azure_blob":
+            return self.azure_storage_container
+        return self.external_s3_bucket_name
+
+    @property
+    def resolved_manifest_store_prefix(self) -> str:
+        """CONTENT_EXTERNAL_PREFIX when inherited — NOT MANIFEST_STORE_PREFIX.
+
+        This is the clause verification 20 turns on. See the module docstring:
+        `content-manifests` is a recommendation for an llm_module deployment,
+        not a default that may relocate an object-store deployment's manifest.
+        """
+        if self.manifest_store_is_inherited:
+            return self.content_external_prefix
+        return self.manifest_store_prefix
 
 
 def load_settings() -> Settings:

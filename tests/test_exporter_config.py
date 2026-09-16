@@ -99,8 +99,236 @@ def test_env_var_overrides_the_default(
 
 def test_nothing_but_the_work_dir_is_required(clean_env: None) -> None:
     """The staged-strictness decision, encoded so tightening it is a
-    conversation rather than a silent change. A12 adds the sink matrix."""
+    conversation rather than a silent change.
+
+    Still true after A12: the matrix makes things required *conditionally*,
+    and the default deployment shape (object_store, manifest store inherited)
+    is row 1 of it — explicitly OK with zero configuration.
+    """
     assert _settings().content_sink == "object_store"
+
+
+# --------------------------------------------------------------------------
+# A12 — the startup validation matrix
+#
+# The four rows of content-external-pipeline.md#config-and-secrets, plus the
+# completeness check the matrix implies. Each test asserts the message NAMES
+# the variable to set, because that is the actual deliverable: the person
+# reading it is looking at a crashed container.
+# --------------------------------------------------------------------------
+
+
+def _llm_module_settings(**overrides: object) -> Settings:
+    """The minimum viable llm_module deployment, so each test can break
+    exactly one thing about it."""
+    kwargs: dict[str, object] = {
+        "content_sink": "llm_module",
+        "manifest_store_backend": "s3",
+        "manifest_store_endpoint_url": "https://store.example",
+        "manifest_store_bucket": "content-manifests",
+        "llm_module_base_url": "https://llm.example/ingest",
+        "llm_module_vault_secret_path": "llm/connections/ingest",
+    }
+    kwargs.update(overrides)
+    return _settings(**kwargs)
+
+
+def test_matrix_row_1_object_store_needs_no_manifest_store_config(
+    clean_env: None,
+) -> None:
+    """Row 1: the whole reason the two-sink change is additive rather than a
+    revision. An object-store deployment gains NO configuration."""
+    settings = _settings()
+    assert settings.manifest_store_is_inherited is True
+    assert settings.resolved_manifest_store_backend == "s3"
+
+
+def test_matrix_row_2_llm_module_without_a_manifest_store_is_refused() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        _settings(content_sink="llm_module")
+    message = str(excinfo.value)
+    assert "MANIFEST_STORE_BACKEND" in message
+    # The reason, not just the refusal: that sink has nowhere to PUT one.
+    assert "nowhere to hold manifest.json" in message
+
+
+@pytest.mark.parametrize(
+    ("dropped", "expected"),
+    [
+        ("llm_module_base_url", "LLM_MODULE_BASE_URL"),
+        ("llm_module_vault_secret_path", "LLM_MODULE_VAULT_SECRET_PATH"),
+    ],
+)
+def test_matrix_row_3_llm_module_needs_a_url_and_a_credential(
+    dropped: str, expected: str
+) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(**{dropped: ""})
+    assert expected in str(excinfo.value)
+
+
+def test_matrix_row_3_names_both_when_both_are_missing() -> None:
+    """One restart per missing variable is a bad way to configure a service."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_base_url="", llm_module_vault_secret_path="")
+    message = str(excinfo.value)
+    assert "LLM_MODULE_BASE_URL" in message
+    assert "LLM_MODULE_VAULT_SECRET_PATH" in message
+
+
+def test_matrix_row_4_local_manifest_store_needs_the_dev_flag() -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        _settings(manifest_store_backend="local")
+    message = str(excinfo.value)
+    assert "MANIFEST_STORE_ALLOW_LOCAL" in message
+    # D19's reasoning has to travel with the refusal, because "just set the
+    # flag" is the obvious and wrong response to reading only the first line.
+    assert "permanently orphaned" in message
+
+
+def test_local_manifest_store_is_allowed_with_the_dev_flag() -> None:
+    settings = _settings(
+        manifest_store_backend="local", manifest_store_allow_local=True
+    )
+    assert settings.resolved_manifest_store_backend == "local"
+
+
+def test_llm_module_base_url_must_be_https() -> None:
+    """The push body IS Estonian government document text (L14), so plaintext
+    is refused here rather than discovered on the wire."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_base_url="http://llm.example/ingest")
+    assert "https://" in str(excinfo.value)
+
+
+def test_llm_module_base_url_error_does_not_echo_a_credential() -> None:
+    """The refusal quotes the offending URL, and a URL can carry userinfo."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_base_url="http://svc:hunter2@llm.example")
+    assert "hunter2" not in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "expected"),
+    [
+        ({"manifest_store_backend": "s3", "manifest_store_bucket": ""}, "BUCKET"),
+        (
+            {"manifest_store_backend": "s3", "manifest_store_endpoint_url": ""},
+            "ENDPOINT_URL",
+        ),
+        (
+            {"manifest_store_backend": "azure_blob", "manifest_store_bucket": ""},
+            "BUCKET",
+        ),
+    ],
+)
+def test_an_explicitly_set_manifest_store_must_be_complete(
+    overrides: dict[str, object], expected: str
+) -> None:
+    """Not a documented row, but implied by row 2: without this, a bare
+    MANIFEST_STORE_BACKEND=s3 satisfies row 2 while naming a store that cannot
+    be addressed, and the refusal lands at first commit after all."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(**overrides)
+    assert expected in str(excinfo.value)
+
+
+def test_azure_manifest_store_does_not_require_an_endpoint_url() -> None:
+    """Azure Blob addresses its container through the account, not an
+    endpoint URL, so requiring one would be a refusal with no remedy."""
+    settings = _llm_module_settings(
+        manifest_store_backend="azure_blob",
+        manifest_store_endpoint_url="",
+        manifest_store_bucket="content-manifests",
+    )
+    assert settings.resolved_manifest_store_bucket == "content-manifests"
+
+
+def test_local_manifest_store_needs_no_bucket() -> None:
+    """It resolves to CONTENT_WORK_DIR, which is already required and already
+    asserted."""
+    assert (
+        _settings(
+            manifest_store_backend="local", manifest_store_allow_local=True
+        ).manifest_store_bucket
+        == ""
+    )
+
+
+@pytest.mark.parametrize("value", ["S3", "minio", "gcs", "azure", "filesystem"])
+def test_manifest_store_backend_is_an_enum(value: str) -> None:
+    """A typo must be a startup refusal, not a backend that resolves to
+    nothing at first commit."""
+    with pytest.raises(ValidationError):
+        _settings(manifest_store_backend=value)
+
+
+# --------------------------------------------------------------------------
+# A12 — manifest-store resolution (D16, D17)
+# --------------------------------------------------------------------------
+
+
+def test_inherited_resolution_takes_endpoint_bucket_and_prefix_from_the_sink(
+    clean_env: None,
+) -> None:
+    """Verification 20: an object-store deployment with no MANIFEST_STORE_*
+    writes to the pre-change key. Inheritance is all-or-nothing."""
+    settings = _settings(
+        content_external_prefix="content",
+        external_s3_endpoint_url="https://store.example",
+        external_s3_bucket_name="agency-content",
+    )
+
+    assert settings.resolved_manifest_store_backend == "s3"
+    assert settings.resolved_manifest_store_endpoint_url == "https://store.example"
+    assert settings.resolved_manifest_store_bucket == "agency-content"
+    assert settings.resolved_manifest_store_prefix == "content"
+
+
+def test_inherited_prefix_ignores_the_manifest_store_prefix_default(
+    clean_env: None,
+) -> None:
+    """The clause verification 20 actually turns on.
+
+    MANIFEST_STORE_PREFIX defaults to a non-empty "content-manifests", which
+    reads like a default that always applies. If it did, an object-store
+    deployment that set nothing would silently relocate its manifest and stop
+    being byte-identical to the pre-change design.
+    """
+    settings = _settings(content_external_prefix="content")
+
+    assert settings.manifest_store_prefix == "content-manifests"
+    assert settings.resolved_manifest_store_prefix == "content"
+
+
+def test_inherited_bucket_follows_the_store_backend(clean_env: None) -> None:
+    """On azure_blob the sink's own "bucket" is its container."""
+    settings = _settings(
+        content_external_store_backend="azure_blob",
+        azure_storage_container="agency-content",
+        external_s3_bucket_name="should-not-be-used",
+    )
+    assert settings.resolved_manifest_store_bucket == "agency-content"
+
+
+def test_an_explicit_manifest_store_overrides_every_inherited_field() -> None:
+    settings = _llm_module_settings(manifest_store_prefix="content-manifests")
+
+    assert settings.manifest_store_is_inherited is False
+    assert settings.resolved_manifest_store_backend == "s3"
+    assert settings.resolved_manifest_store_endpoint_url == "https://store.example"
+    assert settings.resolved_manifest_store_bucket == "content-manifests"
+    assert settings.resolved_manifest_store_prefix == "content-manifests"
+
+
+def test_setting_only_a_manifest_prefix_does_not_count_as_configured(
+    clean_env: None,
+) -> None:
+    """MANIFEST_STORE_BACKEND is the switch, deliberately — a prefix alone
+    names no store, and treating it as one would half-apply inheritance."""
+    settings = _settings(manifest_store_prefix="somewhere-else")
+    assert settings.manifest_store_is_inherited is True
+    assert settings.resolved_manifest_store_prefix == "content"
 
 
 # --------------------------------------------------------------------------

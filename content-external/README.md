@@ -58,11 +58,57 @@ it — see the note in the table below.
 | `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | no | Vault Agent sidecar, credentials fetched per task. `VAULT_SECRET_PATH` has no default — the Stage-H Azure value is `blob/connections/azure_blob/content` |
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
-| `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise |
-| `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. Not used by the `object_store` sink |
+| `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit |
+| `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
+| `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
 
-Full validation rules for these are in `exporter/api/config.py` — invalid
-combinations fail at startup with a message naming the missing variable.
+### The startup validation matrix
+
+Four combinations fail **at startup**, with a message naming the variable to
+set. Not at first commit: a run that discovers a missing manifest store after
+publishing 2,000 documents has published them with no record of having done
+so, which is indistinguishable from never having run.
+
+| Configuration | Result |
+|---|---|
+| `object_store`, no `MANIFEST_STORE_*` | **OK** — inherits the sink's own store, bucket and prefix. Zero new configuration for this deployment |
+| `llm_module`, no manifest store | **refuses to start** — names `MANIFEST_STORE_BACKEND` |
+| `llm_module`, no `LLM_MODULE_BASE_URL` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
+| `MANIFEST_STORE_BACKEND=local` without `MANIFEST_STORE_ALLOW_LOCAL=true` | **refuses to start** |
+
+A fifth check is implied by the second: an explicitly-set manifest store must
+be **complete** (`s3` needs a bucket and an endpoint URL, `azure_blob` needs a
+container), or `MANIFEST_STORE_BACKEND=s3` on its own would satisfy the matrix
+while naming a store that cannot be addressed.
+
+### Manifest-store inheritance is all-or-nothing
+
+The switch is whether `MANIFEST_STORE_BACKEND` is set.
+
+- **Blank** → the manifest store *is* the object-store sink's own store, and
+  the endpoint, bucket **and prefix** are all inherited. The rest of
+  `MANIFEST_STORE_*` is ignored in its entirety.
+- **Set** → every field comes from `MANIFEST_STORE_*`, and it must be complete.
+
+> **`MANIFEST_STORE_PREFIX=content-manifests` is a recommendation, not an
+> always-applied default.** It is the sensible value for an `llm_module`
+> deployment, which has to set the backend explicitly anyway. It is *not*
+> applied when the store is inherited — if it were, an `object_store`
+> deployment that configured nothing would silently relocate its manifest out
+> from under `CONTENT_EXTERNAL_PREFIX` and stop being byte-identical to a
+> deployment predating the two-sink split.
+
+> **⚠️ `MANIFEST_STORE_BACKEND=local` is for local development only.** The
+> danger is not that a filesystem manifest can be lost — it is what being lost
+> *looks like*. A re-provisioned volume reads as a **first run**: the entire
+> corpus is republished, and every document CKB deleted while the manifest was
+> gone is **permanently orphaned**, because it is absent from the database rows
+> *and* absent from the manifest, so it can never classify as `deleted`. That
+> state must be reachable only by a deliberate act, never by a routine volume
+> event — which is why it takes a second flag.
+
+Full validation rules are in `exporter/api/config.py`; the `@model_validator`
+methods on `Settings` are the matrix, one per row.
 
 ## Which sink is this deployment running?
 
