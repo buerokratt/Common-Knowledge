@@ -110,6 +110,96 @@ The switch is whether `MANIFEST_STORE_BACKEND` is set.
 Full validation rules are in `exporter/api/config.py`; the `@model_validator`
 methods on `Settings` are the matrix, one per row.
 
+## Observability — how to tell this is working
+
+This is an **hourly job**, and *"the next tick is the retry"* is symmetric: a
+wrong base URL, a rotated-away credential or a query past its timeout produce
+`failed` every hour, indefinitely, exactly as a transient network blip
+produces it once. Two things make the difference visible.
+
+**1. `GET /health` reports the last run.**
+
+```bash
+curl -s localhost:8125/health | jq
+```
+
+```json
+{
+  "status": "ok",
+  "sink": "object_store",
+  "store_backend": "s3",
+  "chunk_profile": "azure_native",
+  "work_dir": "/var/lib/content-external",
+  "last_run": {
+    "outcome": "failed",
+    "run_id": "r-2026-09-16T17",
+    "agency_id": "…",
+    "finished_at": "2026-09-16T17:04:11Z",
+    "duration_seconds": 251.4,
+    "consecutive_failures": 3,
+    "consecutive_busy": 0
+  }
+}
+```
+
+`last_run` is `null` until a run completes — an hourly job that has never run
+is not the same as one that ran and succeeded.
+
+> **`/health` stays 200 even after a failed run, deliberately.** Both probes
+> point at it, so a 503 would restart the pod — which fixes neither a wrong
+> base URL nor a rotated credential, and the resulting `CrashLoopBackOff`
+> would hide the one log line that says why. **Read `last_run.outcome`, not
+> the status code.** A startup refusal (bad config, the A14 lock self-test,
+> the A16 memory budget) leaves no listener at all, which the probes *do*
+> surface.
+
+The record lives in `{CONTENT_WORK_DIR}/last_run.json` rather than in memory,
+because an export runs in a forked process and the CLI is a different process
+again — an in-memory value would read `null` forever in production. It is one
+record, overwritten; **history outliving the container is deferred work**, not
+this.
+
+**2. One greppable line per terminal outcome.**
+
+```bash
+docker logs content-external | grep 'content-external run'
+```
+
+```
+content-external run agency_id=… deletions_recorded=0 docs_content_changed=4 \
+  docs_deleted=1 docs_metadata_changed=0 docs_new=12 docs_skipped=3 \
+  docs_unchanged=340 duration_seconds=251.400 outcome=success \
+  run_id=r-2026-09-16T17 sink=object_store
+```
+
+Stable prefix, sorted `key=value` fields, every bucket present even at zero —
+so an alert rule is a log query and not a code change, and two runs diff
+line-for-line. `failed` lands at `ERROR` and everything else at `INFO`,
+including `busy`, which is by design not an error. The startup config echo
+follows the same convention under `content-external config`.
+
+Counts never carry document text: ids, hex hash prefixes, counts and
+durations only. On the llm-module sink the body of a failed request *is*
+Estonian government document text, so this is a data-protection rule and not
+a tidiness one.
+
+### The alert thresholds to agree with ops
+
+| Signal | Threshold |
+|---|---|
+| `last_run.consecutive_failures` | **≥ 2** — one failure is the design working as intended |
+| Time since the last `success` or `unchanged` | **> 6 hours** |
+| `last_run.consecutive_busy` rising | The export is taking longer than the cron interval. **Lengthen the interval** — nothing in the design depends on its value |
+
+`consecutive_busy` matters because `busy` is correctly not an error: if runs
+start exceeding the hourly interval, every tick reports `busy`, detection
+latency stops being bounded by the interval, and genuine contention (a drain
+colliding with an export) becomes indistinguishable from normal operation.
+
+> A `busy` outcome deliberately **does not** clear the failure streak. A run
+> that did not happen is no evidence that whatever was failing has stopped, so
+> a drain colliding with an export cannot mask a real failure streak.
+
 ## Deployment constraints — never scale this service
 
 The export takes **one whole-run lock** on `CONTENT_WORK_DIR`, and

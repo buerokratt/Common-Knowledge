@@ -15,12 +15,20 @@ from pydantic import BaseModel
 
 
 class LastRunSummary(BaseModel):
-    """The last terminal run this process saw.
+    """The last terminal run, as recorded on CONTENT_WORK_DIR.
 
-    Written by A15; None until a run completes, which is honest rather than
-    optimistic — an hourly job that has never run is not the same as one that
-    ran and succeeded. Defined now, while it is always None, so A15's diff to
-    this file is zero and the OpenAPI schema published on day one is final.
+    None until a run completes, which is honest rather than optimistic — an
+    hourly job that has never run is not the same as one that ran and
+    succeeded.
+
+    The five original fields are unchanged from the shape declared before A15,
+    which is what the contract rule above bought. A15 added the two counters,
+    both optional with defaults.
+
+    The source of truth is exporter/services/run_state.py's LastRun, a plain
+    dataclass; this is its rendering at the API boundary. The outcome Literal
+    is duplicated between the two on purpose — pydantic belongs at the edge
+    and services/ must not import api/ — and a test asserts they agree.
     """
 
     outcome: Literal["success", "unchanged", "busy", "failed"]
@@ -28,6 +36,16 @@ class LastRunSummary(BaseModel):
     agency_id: str
     finished_at: str
     duration_seconds: float
+    # A15. Here rather than computed by a monitoring surface because the
+    # agreed alert threshold is "two consecutive failed, or no success in 6
+    # hours" — one failure is the design working — and because G9 requires
+    # consecutive `busy` outcomes to be counted rather than discarded. A run
+    # that reports `busy` every tick means the export is taking longer than
+    # the cron interval, at which point detection latency is no longer bounded
+    # by that interval and genuine lock contention is indistinguishable from
+    # normal operation.
+    consecutive_failures: int = 0
+    consecutive_busy: int = 0
 
 
 class HealthResponse(BaseModel):
