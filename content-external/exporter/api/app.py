@@ -18,6 +18,7 @@ from fastapi import Depends, FastAPI, Request
 
 from exporter.api.config import (
     Settings,
+    assert_memory_budget,
     assert_work_dir_usable,
     load_settings,
     log_redacted_config,
@@ -47,9 +48,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         handlers=[logging.StreamHandler(sys.stdout)],
     )
 
-    settings = load_settings()
+    # Order matters: cheapest and most certain first, so a misconfiguration is
+    # reported by the check that can name it rather than by a later one that
+    # merely trips over it.
+    settings = load_settings()  # A12's sink/manifest-store matrix
     log_redacted_config(settings)
-    assert_work_dir_usable(settings)  # A14 adds the exclusive-flock self-test
+    assert_work_dir_usable(settings)  # A14's exclusive-flock self-test
+    assert_memory_budget(settings)  # A16
 
     app.state.settings = settings
     yield

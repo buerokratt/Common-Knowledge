@@ -36,6 +36,7 @@ deployment's manifest.
 import logging
 import os
 import posixpath
+from collections.abc import Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
@@ -56,6 +57,29 @@ CONFIG_LOG_PREFIX = "content-external config"
 # and uploads/scrapped-data/ in S3. Both end in the same path component, so
 # the component is what we forbid — that one predicate covers both shapes.
 SCRAPPED_DATA_COMPONENT = "scrapped-data"
+
+# A16. Peak memory is EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × ~3, and both
+# factors are documented separately (F16 and E9) with their product nowhere.
+# They compose: ~240 MB at the defaults, ~1 GB at F16's documented cap of 16,
+# before JSON encoding inflates an llm-module request body.
+#
+# The factor is ~3 because a document is held as bytes, as a decoded and
+# NFC-normalised string, and as its chunks, all live at once — the chunker
+# needs the whole string in memory, since a recursive splitter cannot stream.
+MEMORY_PER_DOCUMENT_FACTOR = 3
+
+# Interpreter, FastAPI, boto3 and the import graph, measured generously. Not a
+# per-document cost, so it is added once rather than multiplied.
+MEMORY_BASE_OVERHEAD_BYTES = 192 * 1024 * 1024
+
+# cgroup v2 first, then v1. v2 writes the literal "max" when unlimited; v1
+# writes a huge sentinel (PAGE_COUNTER_MAX) that varies with kernel and page
+# size, so it is compared against a threshold rather than an exact value.
+_CGROUP_MEMORY_LIMIT_PATHS = (
+    Path("/sys/fs/cgroup/memory.max"),
+    Path("/sys/fs/cgroup/memory/memory.limit_in_bytes"),
+)
+_MEMORY_UNLIMITED_THRESHOLD = 1 << 62
 
 _SET = "[set]"
 _UNSET = "[unset]"
@@ -512,6 +536,111 @@ def assert_work_dir_usable(settings: Settings) -> Path:
             "local-backed volume."
         ) from exc
     return real
+
+
+def _as_mib(value: int) -> str:
+    """Bytes as whole MiB, for messages a human has to act on."""
+    return f"{value / (1024 * 1024):.0f} MiB"
+
+
+def read_container_memory_limit_bytes(
+    candidates: Sequence[Path] | None = None,
+) -> int | None:
+    """This container's memory limit, or None when there isn't one to read.
+
+    None means "could not determine", which is deliberately not the same as
+    "unlimited" at the call site: both skip the assertion, but only one of
+    them is worth a log line.
+
+    `candidates` exists so the tests can point at temp files. Nothing in the
+    service passes it.
+    """
+    for path in candidates if candidates is not None else _CGROUP_MEMORY_LIMIT_PATHS:
+        try:
+            raw = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        # cgroup v2's unlimited value.
+        if raw == "max":
+            return None
+        try:
+            limit = int(raw)
+        except ValueError:
+            continue
+        # cgroup v1's unlimited sentinel, and a guard against a nonsense 0.
+        if limit <= 0 or limit >= _MEMORY_UNLIMITED_THRESHOLD:
+            return None
+        return limit
+    return None
+
+
+def memory_budget_bytes(settings: Settings) -> int:
+    """Worst-case peak memory for a run at this configuration.
+
+    The product the plan documents in two places and multiplies in none.
+    """
+    return (
+        settings.export_concurrency
+        * settings.max_document_bytes
+        * MEMORY_PER_DOCUMENT_FACTOR
+        + MEMORY_BASE_OVERHEAD_BYTES
+    )
+
+
+def assert_memory_budget(
+    settings: Settings, candidates: Sequence[Path] | None = None
+) -> None:
+    """Refuse to start when the configured concurrency cannot fit the limit.
+
+    A refusal to start beats an hourly OOM, and the reason is specific: an
+    OOMKill on an INCREMENTAL run never converges. Checkpointing is
+    first-run-only by design (F15), so the run dies at the same document every
+    hour, committing nothing, forever — and F19's systemic-failure abort does
+    not catch it, because an OOMKill is not a sink failure.
+
+    An unreadable limit is a warning, never a refusal. Running outside a
+    container, or on a host whose cgroup layout this does not recognise, is
+    normal for a developer and must not be fatal.
+    """
+    budget = memory_budget_bytes(settings)
+    limit = read_container_memory_limit_bytes(candidates)
+
+    if limit is None:
+        logger.warning(
+            "%s could not read this container's memory limit, so the "
+            "EXPORT_CONCURRENCY x MAX_DOCUMENT_BYTES budget (%s) is "
+            "unverified. Size resources.limits.memory from it plus headroom.",
+            CONFIG_LOG_PREFIX,
+            _as_mib(budget),
+        )
+        return
+
+    if budget <= limit:
+        logger.info(
+            "%s memory budget %s within container limit %s "
+            "(EXPORT_CONCURRENCY=%d x MAX_DOCUMENT_BYTES=%d x %d + overhead)",
+            CONFIG_LOG_PREFIX,
+            _as_mib(budget),
+            _as_mib(limit),
+            settings.export_concurrency,
+            settings.max_document_bytes,
+            MEMORY_PER_DOCUMENT_FACTOR,
+        )
+        return
+
+    raise ConfigurationError(
+        f"EXPORT_CONCURRENCY={settings.export_concurrency} x "
+        f"MAX_DOCUMENT_BYTES={settings.max_document_bytes} x "
+        f"{MEMORY_PER_DOCUMENT_FACTOR} + {_as_mib(MEMORY_BASE_OVERHEAD_BYTES)} "
+        f"overhead = {_as_mib(budget)}, which exceeds this container's memory "
+        f"limit of {_as_mib(limit)}. Either lower EXPORT_CONCURRENCY or raise "
+        "resources.limits.memory. Refusing to start is deliberate: an OOMKill "
+        "on an incremental run never converges, because manifest "
+        "checkpointing is first-run-only by design — the run would die at the "
+        "same document every hour, committing nothing, and the systemic-"
+        "failure abort would not catch it because an OOMKill is not a sink "
+        "failure."
+    )
 
 
 def _is_secret_field(name: str, annotation: object) -> bool:
