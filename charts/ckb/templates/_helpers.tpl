@@ -32,3 +32,35 @@ directory and is allowed; /uploads/scrapped-data/x is not.
 {{- end -}}
 {{- $cleaned -}}
 {{- end -}}
+
+{{/*
+A14, chart side. Returns contentExternal.persistence.accessMode, or aborts.
+
+The third of A14's three deployment facts, and the one that had no mechanism.
+`replicas: 1` and `strategy: Recreate` are asserted by being written in the
+deployment template, where deleting them is a visible act. The access mode was
+only a comment, and a comment does not survive someone switching to an RWX
+storage class to make a rollout work.
+
+Why RWX is refused rather than warned about. F2's flock is the entire defence
+against an export and a drain overlapping (flagged risk 8), and flock is sound
+only within one kernel. On NFS/EFS/CephFS it is advisory and routinely not
+honoured across nodes, so two pods both "acquire" it and run concurrent
+exports WITH NO ERROR. On RWO the second pod simply cannot mount, which is a
+broken deploy rather than corrupted state — so RWO is the safe failure and RWX
+is the silent one.
+
+Same shape as ckb.contentExternal.workDir: a helper that RETURNS the value, so
+the PVC cannot be rendered without going through the guard. A standalone
+guard block can be deleted and everything still renders.
+*/}}
+{{- define "ckb.contentExternal.accessMode" -}}
+{{- $mode := .Values.contentExternal.persistence.accessMode | default "" -}}
+{{- if not $mode -}}
+{{- fail "contentExternal.persistence.accessMode must be set — it must be ReadWriteOnce, because F2's run lock depends on flock, which is only sound within one kernel" -}}
+{{- end -}}
+{{- if ne $mode "ReadWriteOnce" -}}
+{{- fail (printf "A14: contentExternal.persistence.accessMode must be ReadWriteOnce, got %q. The run lock is an flock and is only sound within one kernel. On a ReadWriteMany volume (NFS/EFS/CephFS) flock is advisory and routinely not honoured across nodes, so an export and a drain would run concurrently with no error at all — a drain deleting a key an export just re-published. Use a block or local-backed StorageClass." $mode) -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}

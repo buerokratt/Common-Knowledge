@@ -13,7 +13,11 @@ metadata:
   name: "{{ .Values.contentExternal.nameOverride }}-work-pvc"
 spec:
   accessModes:
-    - ReadWriteOnce
+    # Obtained through ckb.contentExternal.accessMode, which fails the render
+    # on anything but ReadWriteOnce. Templated rather than hardcoded so the
+    # requirement is a guard an operator cannot silently override from a
+    # values file, rather than a comment they can read past.
+    - {{ include "ckb.contentExternal.accessMode" . }}
   resources:
     requests:
       storage: {{ .Values.contentExternal.persistence.size }}

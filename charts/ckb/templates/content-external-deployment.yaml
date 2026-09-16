@@ -41,6 +41,15 @@ spec:
             {{- end }}
           ports:
             - containerPort: {{ .Values.contentExternal.service.port }}
+          # A16: limits.memory is sized from EXPORT_CONCURRENCY x
+          # MAX_DOCUMENT_BYTES x 3 plus overhead — see the comment on this
+          # block in values.yaml. The service asserts that product against
+          # the container's own limit at startup and refuses to start if it
+          # does not fit, so a concurrency raised without raising the limit
+          # is a crashed container rather than an hourly OOMKill that never
+          # converges.
+          resources:
+            {{- toYaml .Values.contentExternal.resources | nindent 12 }}
           # Safe with replicas: 1 + strategy: Recreate — there is no rolling
           # update for readiness to stall. /health is a sync handler, so a
           # long-running export cannot starve it, and it stays 200 even after
