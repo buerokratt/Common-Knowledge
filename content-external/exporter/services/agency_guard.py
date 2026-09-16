@@ -31,10 +31,16 @@ At run start the answer is load-bearing and the run needs the agency list
 anyway, so there is nothing to tolerate.
 
 WHY IT READS RESQL DIRECTLY. `list_agencies` has no Ruuter-internal wrapper
-today; its only caller is the public DSL/Ruuter/ckb/GET/agency/all.yml. Adding
-one here would pre-empt G1, which says to reuse that query and not add
-anything. CKB_RESQL is already a Settings field and this is a read-only
-SELECT, so the read-only posture holds.
+today; its only caller is the public DSL/Ruuter/ckb/GET/agency/all.yml, and G1
+says to reuse that query rather than add one.
+
+That bypasses the repo-wide convention in CLAUDE.md that every read goes
+through RUUTER_INTERNAL, so it is a **named exception** rather than a local
+judgement call — see "CKB_RESQL is a named exception to the RUUTER_INTERNAL
+convention" in content-external-pipeline.md, which is the authority for it.
+Do not extend the exception from here: it covers read-only, query-named
+SELECTs and nothing else. Stage E's enumeration queries inherit it; a write
+would not.
 """
 
 import logging
