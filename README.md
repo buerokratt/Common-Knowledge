@@ -78,11 +78,7 @@ docker build -t data-mapper ./DataMapper
 git clone -b dev https://github.com/buerokratt/TIM.git
 docker build -t tim ./TIM
 
-# 5. Authentication Layer — builds from Dockerfile.dev (note the -f flag)
-git clone -b dev https://github.com/buerokratt/Authentication-Layer.git
-docker build -f ./Authentication-Layer/Dockerfile.dev -t authentication-layer ./Authentication-Layer
-
-# 6. CronManager — scheduled-job runner. Build the Python-enabled image (Dockerfile.python)
+# 5. CronManager — scheduled-job runner. Build the Python-enabled image (Dockerfile.python)
 #    so jobs that shell out to Python work; the plain Dockerfile is Java-only.
 git clone -b dev https://github.com/buerokratt/CronManager.git
 docker build -f ./CronManager/Dockerfile.python -t cron-manager ./CronManager
@@ -90,10 +86,10 @@ docker build -f ./CronManager/Dockerfile.python -t cron-manager ./CronManager
 cd Common-Knowledge   # back to this repo for the remaining steps
 ```
 
-Verify all six tags exist before continuing:
+Verify all five tags exist before continuing:
 
 ```bash
-docker images | grep -E "ruuter|resql|data-mapper|tim|authentication-layer|cron-manager"
+docker images | grep -E "ruuter|resql|data-mapper|tim|cron-manager"
 ```
 
 
@@ -160,11 +156,30 @@ open http://localhost:3001
 curl http://localhost:8086/ckb/agency/all
 
 # Full end-to-end check: log in. With test data loaded (step 6) this returns HTTP 200 and a
-# JWT, exercising Ruuter → Authentication-Layer → TIM → Resql → PostgreSQL.
+# JWT, exercising Ruuter → TIM → Resql → PostgreSQL.
 curl -X POST -H "Content-Type: application/json" \
   -d '{"login":"EE30303039914","password":"OK"}' \
   http://localhost:8086/ckb/auth/login
 ```
+
+### Step 8 — Authenticate the GUI for local development
+
+There is no login page. The GUI authenticates with a JWT held in an `HttpOnly` cookie named
+`customJwtCookie`, which the browser sends automatically. To get a session locally:
+
+1. Run the `POST /auth/login` curl from step 7 and copy the JWT it returns.
+2. Open the GUI at <http://localhost:3001>, then DevTools → **Application** → **Cookies** →
+   `http://localhost:3001`.
+3. Add a cookie named `customJwtCookie` with the token as its value, and reload the page.
+
+Alternatively, to skip real auth entirely while working on the frontend, set
+`REACT_APP_LOCAL=true` (in `GUI/.env.development` or the `gui` service env in
+`docker-compose.yml`). The GUI then reads the mocked Ruuter routes under `GET generic/` —
+`generic/userinfo` and `generic/accounts/user-role` — which return a static administrator
+user without contacting TIM or checking any cookie. Both are needed: the first populates the
+user profile, the second drives the navigation menu role filter. The mocks mirror the ones in
+Service-Module and LLM-Module. It defaults to `false`, so real auth is used unless you opt in.
+Never enable it outside local development.
 
 > **Ports:** the GUI dev container is published on **3001** and the external Ruuter API on
 > **8086** (internal Ruuter on 8089). Earlier revisions of these docs mentioned 3000/8080 —
