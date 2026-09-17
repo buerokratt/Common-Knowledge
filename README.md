@@ -1,6 +1,6 @@
 # Common Knowledge Base
-
-The Common Knowledge Base (CKB) is a comprehensive data platform that collects, processes, and manages knowledge from public sector websites and APIs. The system automatically scrapes content, cleans it for large language model consumption, and provides structured access through REST APIs.
+ 
+The Common Knowledge Base (CKB) is a comprehensive data platform that collects, processes, and manages knowledge from public sector websites and APIs. The system automatically scrapes content, cleans it for large language model consumption, and provides structured access through REST APIs. 
 
 ## Overview
 
