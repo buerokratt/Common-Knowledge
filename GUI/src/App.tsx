@@ -23,6 +23,9 @@ import './locale/et_EE';
 
 const customJwtCookieKey = 'customJwtCookie';
 
+// Mirrors main.tsx: when true, user data comes from the mocked generic/ routes.
+const isLocal = import.meta.env.REACT_APP_LOCAL?.toLowerCase() === 'true';
+
 const App: FC = () => {
   const userInfo = useStore((state) => state.userInfo);
   const [_, setCookie] = useCookies([customJwtCookieKey]);
@@ -40,8 +43,9 @@ const App: FC = () => {
         const currentDate = new Date(Date.now());
         if (expirationDate < currentDate) {
           localStorage.removeItem('exp');
-          window.location.href =
-            import.meta.env.REACT_APP_CUSTOMER_SERVICE_LOGIN;
+          // Session expired. Login is handled outside this module, so there is
+          // nowhere to redirect to - paste a fresh customJwtCookie to continue.
+          console.warn('Session expired: set a new customJwtCookie to continue.');
         }
       }
     }, 2000);
@@ -51,9 +55,12 @@ const App: FC = () => {
   useQuery<{
     data: { custom_jwt_userinfo: UserInfo };
   }>({
-    queryKey: ['auth/jwt/userinfo', 'prod'],
+    queryKey: [isLocal ? 'userinfo' : 'auth/jwt/userinfo', 'prod'],
     onSuccess: (res: { response: UserInfo }) => {
-      localStorage.setItem('exp', res.response.JWTExpirationTimestamp);
+      // The mock has no real expiry, so skip the expiration bookkeeping locally.
+      if (!isLocal) {
+        localStorage.setItem('exp', res.response.JWTExpirationTimestamp);
+      }
       return useStore.getState().setUserInfo(res.response);
     },
   });
