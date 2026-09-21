@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
-import { CHAT_SESSIONS } from '../util/constants';
-import { generateUEID } from '../util/generateUEID';
+import { CHAT_SESSIONS } from '../utils/constants';
+import { generateUEID } from '../utils/generateUEID';
 import { notificationApiDev } from '../components/services/api';
 
 declare global {
