@@ -9,6 +9,7 @@ import socket
 import textwrap
 from html import escape as html_escape
 from pathlib import Path
+from typing import Any
 from urllib.parse import urljoin, urlparse
 from uuid import uuid4
 
@@ -721,15 +722,209 @@ def clean_pdf(entity: EntityToClean) -> str:
     return pymupdf4llm.to_markdown(entity.file_path.as_posix(), show_progress=False)
 
 
+def _docx_row_is_header(tr: Any) -> bool:
+    """True when a row carries <w:tblHeader> (and is not explicitly off)."""
+    from docx.oxml.ns import qn  # python-docx
+
+    tr_props = tr.trPr
+    if tr_props is None:
+        return False
+    flag = tr_props.find(qn("w:tblHeader"))
+    if flag is None:
+        return False
+    return flag.get(qn("w:val")) not in ("0", "false", "off")
+
+
+def _docx_cell_html(tc: Any, parent: Any) -> str:
+    """
+    Render one <w:tc>'s contents, keeping nested tables as nested HTML.
+
+    A cell's children are paragraphs and, in Word, possibly whole tables.
+    Reading only the cell's text would silently drop those nested tables,
+    so children are walked in document order and tables recursed into.
+    """
+    from docx.oxml.ns import qn  # python-docx
+    from docx.table import Table as DocxTable  # python-docx
+    from docx.text.paragraph import Paragraph  # python-docx
+
+    out = ""
+    previous_was_text = False
+    for child in tc.iterchildren():
+        if child.tag == qn("w:p"):
+            text = Paragraph(child, parent).text
+            if not text.strip():
+                continue
+            if previous_was_text:
+                out += "<br/>"
+            out += html_escape(text)
+            previous_was_text = True
+        elif child.tag == qn("w:tbl"):
+            out += _docx_table_to_html(DocxTable(child, parent))
+            previous_was_text = False
+    return out
+
+
+def _docx_table_to_html(table: Any) -> str:
+    """
+    Render a python-docx table as HTML, preserving merged cells.
+
+    Unstructured's text_as_html walks the logical cell grid, where Word
+    reports a merged cell once per column it covers. That both loses the
+    span and repeats the text ("Total" three times across a 3-column
+    merge). Walking the underlying <w:tc> elements instead yields each
+    cell exactly once, with w:gridSpan as colspan and w:vMerge marking
+    the start ("restart") and continuation ("continue") of a rowspan.
+    """
+    rows: list[list[dict]] = []
+    # Grid column -> the cell dict currently owning a vertical merge there.
+    pending: dict[int, dict] = {}
+
+    for tr in table._tbl.tr_lst:
+        is_header = _docx_row_is_header(tr)
+        column = 0
+        cells: list[dict] = []
+        for tc in tr.tc_lst:
+            span = tc.grid_span or 1
+            if tc.vMerge == "continue":
+                owner = pending.get(column)
+                if owner is not None:
+                    owner["rowspan"] += 1
+                column += span
+                continue
+            cell = {
+                "html": _docx_cell_html(tc, table),
+                "colspan": span,
+                "rowspan": 1,
+                "header": is_header,
+            }
+            if tc.vMerge == "restart":
+                pending[column] = cell
+            else:
+                pending.pop(column, None)
+            cells.append(cell)
+            column += span
+        rows.append(cells)
+
+    out = ["<table>"]
+    for cells in rows:
+        out.append("<tr>")
+        for cell in cells:
+            tag = "th" if cell["header"] else "td"
+            attrs = ""
+            if cell["colspan"] > 1:
+                attrs += f' colspan="{cell["colspan"]}"'
+            if cell["rowspan"] > 1:
+                attrs += f' rowspan="{cell["rowspan"]}"'
+            out.append(f"<{tag}{attrs}>{cell['html']}</{tag}>")
+        out.append("</tr>")
+    out.append("</table>")
+    return "".join(out)
+
+
+def _docx_tables(file_path: Path) -> list:
+    """Every top-level table in a .docx, in document order."""
+    from docx import Document  # python-docx
+
+    return list(Document(file_path.as_posix()).tables)
+
+
+def _pptx_table_to_html(table: Any) -> str:
+    """
+    Render a python-pptx table as HTML, preserving merged cells.
+
+    Unstructured emits one <td> per grid position, so a merge shows up as
+    the text followed by empty cells and the span itself is lost. python-pptx
+    marks the top-left cell of a merge as the origin (carrying span_width /
+    span_height) and the covered positions as spanned.
+    """
+    out = ["<table>"]
+    for row in table.rows:
+        out.append("<tr>")
+        for cell in row.cells:
+            if cell.is_spanned:
+                continue
+            attrs = ""
+            if cell.is_merge_origin:
+                if cell.span_width > 1:
+                    attrs += f' colspan="{cell.span_width}"'
+                if cell.span_height > 1:
+                    attrs += f' rowspan="{cell.span_height}"'
+            body = "<br/>".join(html_escape(line) for line in cell.text.split("\n"))
+            out.append(f"<td{attrs}>{body}</td>")
+        out.append("</tr>")
+    out.append("</table>")
+    return "".join(out)
+
+
+def _pptx_tables(file_path: Path) -> list:
+    """Every table in a .pptx, in slide then shape order."""
+    from pptx import Presentation  # python-pptx
+
+    tables = []
+    for slide in Presentation(file_path.as_posix()).slides:
+        tables.extend(
+            getattr(shape, "table")
+            for shape in slide.shapes
+            if getattr(shape, "has_table", False)
+        )
+    return tables
+
+
+def _apply_source_table_html(file_path: Path, elements: list) -> None:
+    """
+    Overwrite Unstructured's text_as_html for each Table element with a
+    merge-aware rendering read straight from the source document.
+
+    Both sequences are in document order, so they are matched positionally;
+    if the counts disagree (nested tables, a parse quirk) the substitution
+    is skipped entirely rather than risk pairing the wrong table.
+    """
+    suffix = file_path.suffix.lower()
+    if suffix == ".docx":
+        loader, renderer, label = _docx_tables, _docx_table_to_html, "docx"
+    elif suffix == ".pptx":
+        loader, renderer, label = _pptx_tables, _pptx_table_to_html, "pptx"
+    else:
+        return
+
+    table_elements = [el for el in elements if isinstance(el, Table)]
+    if not table_elements:
+        return
+    try:
+        source_tables = loader(file_path)
+    except Exception as e:
+        logger.warning(f"[{label}] could not re-read tables from {file_path}: {e}")
+        return
+
+    if len(source_tables) != len(table_elements):
+        logger.warning(
+            f"[{label}] table count mismatch for {file_path} "
+            f"({len(source_tables)} in document, {len(table_elements)} from "
+            "Unstructured); keeping Unstructured's table rendering"
+        )
+        return
+
+    for element, source_table in zip(table_elements, source_tables, strict=True):
+        try:
+            element.metadata.text_as_html = renderer(source_table)
+        except Exception as e:
+            logger.warning(f"[{label}] table rendering failed for {file_path}: {e}")
+
+
 def clean_any_file(entity: EntityToClean) -> str:
     """
     Use Unstructured for all non-HTML, non-PDF formats (DOCX, DOC, etc.).
     Output is rendered as Markdown via _elements_to_markdown so headings,
     lists, tables, and emphasis are all preserved.
+
+    DOCX and PPTX tables are re-rendered from the source file so merged
+    cells keep their colspan/rowspan instead of being flattened (and, for
+    DOCX, having their text duplicated across the merged columns).
     """
     partitioned = partition(
         filename=entity.file_path.as_posix(), languages=settings.languages
     )
+    _apply_source_table_html(entity.file_path, partitioned)
     return _elements_to_markdown(partitioned)
 
 
