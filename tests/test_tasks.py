@@ -669,6 +669,181 @@ class TestRestoreTables:
 
 
 # ---------------------------------------------------------------------------
+# DOCX / PPTX merged-cell fidelity
+# ---------------------------------------------------------------------------
+
+
+class TestOfficeTableMerges:
+    """
+    Unstructured's text_as_html walks the logical cell grid, so a merged cell
+    loses its span — and in DOCX its text is repeated once per covered column.
+    We re-render those tables from the source file instead.
+    """
+
+    @staticmethod
+    def _docx_with_merges(path: Path) -> Path:
+        from docx import Document
+
+        doc = Document()
+        table = doc.add_table(rows=3, cols=3)
+        for i, head in enumerate(("Aasta", "Summa", "Markus")):
+            table.rows[0].cells[i].text = head
+        table.rows[1].cells[0].merge(table.rows[1].cells[2]).text = "Kehtib koigile"
+        for i, val in enumerate(("2024", "700", "ok")):
+            table.rows[2].cells[i].text = val
+        doc.save(path.as_posix())
+        return path
+
+    def test_docx_colspan_preserved_and_text_not_duplicated(
+        self, tmp_path: Path
+    ) -> None:
+        from worker.tasks import clean_any_file
+
+        entity = MagicMock()
+        entity.file_path = self._docx_with_merges(tmp_path / "merged.docx")
+        result = clean_any_file(entity)
+
+        assert 'colspan="3"' in result
+        assert result.count("Kehtib koigile") == 1
+
+    def test_docx_rowspan_preserved(self, tmp_path: Path) -> None:
+        from docx import Document
+
+        from worker.tasks import clean_any_file
+
+        path = tmp_path / "vmerge.docx"
+        doc = Document()
+        table = doc.add_table(rows=3, cols=2)
+        table.rows[0].cells[0].text = "H1"
+        table.rows[0].cells[1].text = "H2"
+        table.cell(1, 0).merge(table.cell(2, 0)).text = "Spans two rows"
+        table.cell(1, 1).text = "b1"
+        table.cell(2, 1).text = "b2"
+        doc.save(path.as_posix())
+
+        entity = MagicMock()
+        entity.file_path = path
+        result = clean_any_file(entity)
+
+        assert 'rowspan="2"' in result
+        assert result.count("Spans two rows") == 1
+
+    def test_pptx_colspan_preserved(self, tmp_path: Path) -> None:
+        from pptx import Presentation
+        from pptx.util import Inches
+
+        from worker.tasks import clean_any_file
+
+        path = tmp_path / "merged.pptx"
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        table = slide.shapes.add_table(
+            2, 3, Inches(0.5), Inches(0.5), Inches(8), Inches(2)
+        ).table
+        for i, head in enumerate(("A", "B", "C")):
+            table.cell(0, i).text = head
+        table.cell(1, 0).merge(table.cell(1, 2))
+        table.cell(1, 0).text = "Merged across"
+        prs.save(path.as_posix())
+
+        entity = MagicMock()
+        entity.file_path = path
+        result = clean_any_file(entity)
+
+        assert 'colspan="3"' in result
+        assert result.count("Merged across") == 1
+
+    def test_table_count_mismatch_keeps_unstructured_rendering(
+        self, tmp_path: Path
+    ) -> None:
+        """Positional matching is only safe when both sides agree on how many
+        tables there are; otherwise leave Unstructured's version alone."""
+        from worker.tasks import _apply_source_table_html
+
+        path = self._docx_with_merges(tmp_path / "merged.docx")
+        element = Table(text="original")
+        element.metadata.text_as_html = "<table>original</table>"
+        # Two Table elements vs one table in the document.
+        _apply_source_table_html(path, [element, element])
+        assert element.metadata.text_as_html == "<table>original</table>"
+
+    def test_unreadable_source_leaves_elements_untouched(self, tmp_path: Path) -> None:
+        from worker.tasks import _apply_source_table_html
+
+        broken = tmp_path / "broken.docx"
+        broken.write_text("not a real docx", encoding="utf-8")
+        element = Table(text="original")
+        element.metadata.text_as_html = "<table>original</table>"
+        _apply_source_table_html(broken, [element])
+        assert element.metadata.text_as_html == "<table>original</table>"
+
+    def test_nested_table_content_is_preserved(self, tmp_path: Path) -> None:
+        """A table inside a cell must be rendered as a nested table, not
+        dropped — reading only the cell's text loses it entirely."""
+        from docx import Document
+
+        from worker.tasks import clean_any_file
+
+        path = tmp_path / "nested.docx"
+        doc = Document()
+        outer = doc.add_table(rows=1, cols=1)
+        inner = outer.cell(0, 0).add_table(rows=1, cols=2)
+        inner.cell(0, 0).text = "Inner A"
+        inner.cell(0, 1).text = "Inner B"
+        outer.cell(0, 0).paragraphs[0].text = "Outer"
+        doc.save(path.as_posix())
+
+        entity = MagicMock()
+        entity.file_path = path
+        result = clean_any_file(entity)
+
+        assert "Inner A" in result and "Inner B" in result
+        assert "Outer" in result
+        assert result.count("<table>") == 2
+
+    def test_tbl_header_false_is_not_a_header_row(self, tmp_path: Path) -> None:
+        from docx import Document
+        from docx.oxml.ns import qn
+
+        from worker.tasks import _docx_table_to_html
+
+        doc = Document()
+        table = doc.add_table(rows=1, cols=1)
+        table.rows[0].cells[0].text = "not a header"
+        tr_props = table.rows[0]._tr.get_or_add_trPr()
+        tr_props.append(tr_props.makeelement(qn("w:tblHeader"), {qn("w:val"): "false"}))
+        assert "<th" not in _docx_table_to_html(table)
+
+    def test_multi_paragraph_cell_uses_line_breaks(self, tmp_path: Path) -> None:
+        from docx import Document
+
+        from worker.tasks import _docx_table_to_html
+
+        doc = Document()
+        table = doc.add_table(rows=1, cols=1)
+        cell = table.cell(0, 0)
+        cell.text = "line one"
+        cell.add_paragraph("line two")
+        assert "line one<br/>line two" in _docx_table_to_html(table)
+
+    def test_cell_text_is_html_escaped(self, tmp_path: Path) -> None:
+        from docx import Document
+
+        from worker.tasks import clean_any_file
+
+        path = tmp_path / "escape.docx"
+        doc = Document()
+        table = doc.add_table(rows=1, cols=1)
+        table.rows[0].cells[0].text = "a < b & c"
+        doc.save(path.as_posix())
+
+        entity = MagicMock()
+        entity.file_path = path
+        result = clean_any_file(entity)
+        assert "&lt;" in result and "&amp;" in result
+
+
+# ---------------------------------------------------------------------------
 # clean_html — routing logic (no real LLM)
 # ---------------------------------------------------------------------------
 
