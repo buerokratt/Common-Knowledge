@@ -178,7 +178,7 @@ services:
     container_name: ruuter-internal
     image: ruuter
     environment:
-      - application.cors.allowedOrigins=http://localhost:8086,http://localhost:8089,http://localhost:3001,http://localhost:3003,http://localhost:3004,http://localhost:8080
+      - application.cors.allowedOrigins=http://localhost:8086,http://localhost:8089,http://localhost:3001,http://localhost:3003,http://localhost:8080
       - application.httpCodesAllowList=200,201,202,400,401,403,500
       - application.internalRequests.allowedIPs=127.0.0.1
       - application.logging.displayRequestContent=true
@@ -200,7 +200,7 @@ services:
     container_name: ruuter
     image: ruuter
     environment:
-      - application.cors.allowedOrigins=http://localhost:8086,http://localhost:3001,http://localhost:3003,http://localhost:3004,http://localhost:8080
+      - application.cors.allowedOrigins=http://localhost:8086,http://localhost:3001,http://localhost:3003,http://localhost:8080
       - application.httpCodesAllowList=200,201,202,400,401,403,500
       - application.internalRequests.allowedIPs=127.0.0.1
       - application.logging.displayRequestContent=true
@@ -253,14 +253,6 @@ services:
     networks:
       - bykstack
 
-  authentication-layer:
-    container_name: authentication-layer
-    image: authentication-layer
-    ports:
-      - 3004:3004
-    networks:
-      - bykstack
-
   gui:
     container_name: gui
     environment:
@@ -268,7 +260,7 @@ services:
       BASE_URL: http://localhost:8080/ckb
       REACT_APP_RUUTER_API_URL: http://localhost:8086/ckb
       REACT_APP_RUUTER_PRIVATE_API_URL: http://localhost:8086/ckb
-      REACT_APP_CUSTOMER_SERVICE_LOGIN: http://localhost:3004/et/dev-auth
+      REACT_APP_LOCAL: "true"
       REACT_APP_CSP: "upgrade-insecure-requests; default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
       DEBUG_ENABLED: true
       CHOKIDAR_USEPOLLING: true
@@ -357,7 +349,7 @@ services:
     depends_on:
       - tim-postgresql
     environment:
-      - SECURITY_ALLOWLIST_JWT=ruuter,ruuter-internal,data-mapper,resql,tim,tim-postgresql,chat-widget,authentication-layer,127.0.0.1,::1
+      - SECURITY_ALLOWLIST_JWT=ruuter,ruuter-internal,data-mapper,resql,tim,tim-postgresql,chat-widget,127.0.0.1,::1
       - JWT_INTEGRATION_SIGNATURE_KEY_STORE_PASSWORD=defaultpassword
     ports:
       - 8085:8085
