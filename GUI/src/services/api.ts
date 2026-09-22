@@ -22,6 +22,16 @@ const apiDev = axios.create({
   withCredentials: true,
 });
 
+const notificationApiDev = axios.create({
+  baseURL: import.meta.env.REACT_APP_NOTIFICATION_NODE_URL,
+  headers: {
+    Accept: 'application/json',
+    'Content-Type': 'application/json',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+  },
+  withCredentials: false,
+});
+
 const AxiosInterceptor = ({ children }) => {
   const { t } = useTranslation();
 
@@ -91,4 +101,4 @@ apiDev.interceptors.request.use(
   handleRequestError
 );
 
-export { api, apiDev, AxiosInterceptor };
+export { api, apiDev, notificationApiDev, AxiosInterceptor };
