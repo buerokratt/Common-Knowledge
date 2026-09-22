@@ -183,7 +183,7 @@ ruuter:
     port: 8086
   env:
     - name: application.cors.allowedOrigins
-      value: "http://localhost:8086,http://localhost:3001,http://localhost:3003,http://localhost:3004,http://localhost:8080"
+      value: "http://localhost:8086,http://localhost:3001,http://localhost:3003,http://localhost:8080"
     - name: application.httpCodesAllowList
       value: "200,201,202,400,401,403,500"
     - name: application.internalRequests.allowedIPs
@@ -236,7 +236,7 @@ ruuterInternal:
     port: 8089
   env:
     - name: application.cors.allowedOrigins
-      value: "http://localhost:8086,http://localhost:8089,http://localhost:3001,http://localhost:3003,http://localhost:3004,http://localhost:8080"
+      value: "http://localhost:8086,http://localhost:8089,http://localhost:3001,http://localhost:3003,http://localhost:8080"
     - name: application.httpCodesAllowList
       value: "200,201,202,400,401,403,500"
     - name: application.internalRequests.allowedIPs
@@ -313,28 +313,6 @@ dataExport:
   extraVolumes: []
   extraVolumeMounts: []
 
-# --- Authentication Layer ------------------------------------------------------
-authenticationLayer:
-  enabled: true
-  nameOverride: authentication-layer
-  image:
-    repository: ghcr.io/buerokratt/authentication-layer
-    tag: v1.1.1
-    pullPolicy: IfNotPresent
-  service:
-    type: ClusterIP
-    port: 3004
-  ingress:
-    enabled: false
-    annotations:
-      kubernetes.io/ingress.class: nginx
-    hosts:
-      - host: auth.example.com
-        paths:
-          - path: /
-            pathType: Prefix
-    tls: []
-
 # --- GUI (React) ---------------------------------------------------------------
 gui:
   enabled: true
@@ -353,8 +331,6 @@ gui:
       value: http://localhost:8080/ckb
     - name: REACT_APP_RUUTER_API_URL
       value: http://localhost:8086/ckb
-    - name: REACT_APP_CUSTOMER_SERVICE_LOGIN
-      value: http://localhost:3004/et/dev-auth
     - name: REACT_APP_CSP
       value: "upgrade-insecure-requests; default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
     - name: DEBUG_ENABLED
@@ -493,7 +469,7 @@ tim:
           name: tim-postgres-secret
           key: POSTGRES_PASSWORD
   config:
-    security_allowlist_jwt: "ruuter,ruuter-internal,data-mapper,resql,tim,tim-postgresql,chat-widget,authentication-layer,127.0.0.1,::1"
+    security_allowlist_jwt: "ruuter,ruuter-internal,data-mapper,resql,tim,tim-postgresql,chat-widget,127.0.0.1,::1"
     jwt_keystore_password: "defaultpassword"
     jwt_issuer: "tim-issuer"
     spring_profiles_active: "dev"

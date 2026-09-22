@@ -1,0 +1,22 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Decription placeholder for 'CUSTOMER-SUPPORT-ACTIVITY'"
+  method: get
+  accepts: json
+  returns: json
+  namespace: service
+
+step_1:
+  call: reflect.mock
+  args:
+    response:
+      response:
+        - idCode: 'EE49902216518'
+          active: 'true'
+          status: 'idle'
+  result: reflected_request
+
+step_2:
+  wrapper: true
+  return: ${reflected_request.response.body}
