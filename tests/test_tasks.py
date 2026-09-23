@@ -423,6 +423,215 @@ class TestLLMHelpers:
         result = _llm_extract(client, "dep", "<html><body><p>x</p></body></html>")
         assert result == "# Extracted\n\nContent here."
 
+    # -----------------------------------------------------------------
+    # HTML pre-strip before LLM re-extract
+    # -----------------------------------------------------------------
+
+    def test_prestrip_drops_non_content_tags(self) -> None:
+        from worker.tasks import _prestrip_html_for_llm
+
+        html = (
+            "<html><head><script>var x=1</script><style>b{}</style>"
+            "<meta charset='utf-8'><link rel='stylesheet' href='/a.css'>"
+            "</head><body><!-- c --><p>real content</p>"
+            "<svg><path d='m0 0'/></svg><noscript>x</noscript>"
+            "<iframe src='x'></iframe></body></html>"
+        )
+        out = _prestrip_html_for_llm(html)
+        for gone in ("<script", "<style", "<meta", "<link", "<svg",
+                     "<noscript", "<iframe"):
+            assert gone not in out
+        assert "<!-- c -->" not in out and "<!--" not in out
+        assert "real content" in out
+
+    def test_prestrip_keeps_landmark_tags(self) -> None:
+        """The whole reason comprehensive-mode beats basic on hard pages is
+        that the LLM sees content BS drops. Pre-strip must NOT strip the
+        landmark tags BS strips -- otherwise comprehensive collapses onto
+        basic."""
+        from worker.tasks import _prestrip_html_for_llm
+
+        html = (
+            "<html><body>"
+            "<header>H</header><nav>N</nav><aside>A</aside>"
+            "<main>M</main><footer>F</footer><form>FM</form>"
+            "</body></html>"
+        )
+        out = _prestrip_html_for_llm(html)
+        for kept in ("<header", "<nav", "<aside", "<main", "<footer", "<form"):
+            assert kept in out
+        for text in ("H", "N", "A", "M", "F", "FM"):
+            assert text in out
+
+    def test_prestrip_prunes_attributes_but_keeps_semantics(self) -> None:
+        from worker.tasks import _prestrip_html_for_llm
+
+        html = (
+            '<html><body>'
+            '<a href="/x" title="t" class="c" data-foo="d" '
+            'onclick="f()" style="color:red" id="anchor">link</a>'
+            '<img src="/i.png" alt="a" title="t" class="c" width="100">'
+            '<table><th colspan="2" scope="col" class="c">H</th>'
+            '<td rowspan="3" class="c" data-x="1">C</td></table>'
+            '</body></html>'
+        )
+        out = _prestrip_html_for_llm(html)
+        # Semantic attrs kept
+        assert 'href="/x"' in out and 'title="t"' in out and 'id="anchor"' in out
+        assert 'src="/i.png"' in out and 'alt="a"' in out
+        assert 'colspan="2"' in out and 'rowspan="3"' in out and 'scope="col"' in out
+        # Noise attrs gone
+        for gone in ("class=", "data-", "onclick=", "style=", "width="):
+            assert gone not in out
+
+    def test_prestrip_replaces_long_base64_data_uri(self) -> None:
+        from worker.tasks import _prestrip_html_for_llm
+
+        big = "data:image/png;base64," + "A" * 400
+        html = f'<html><body><img src="{big}" alt="x"></body></html>'
+        out = _prestrip_html_for_llm(html)
+        assert "[data-uri]" in out
+        assert "AAAA" not in out  # payload gone
+        assert 'alt="x"' in out   # alt preserved
+
+    def test_prestrip_leaves_short_data_uri_alone(self) -> None:
+        """Short data URIs (favicons, tiny SVGs) are cheap to keep."""
+        from worker.tasks import _prestrip_html_for_llm
+
+        # A short base64 URI stays character-identical (no HTML-entity
+        # escaping the serialiser might introduce for URI text).
+        small = "data:image/png;base64,iVBORw0KGgoA"
+        html = f'<html><body><img src="{small}"></body></html>'
+        out = _prestrip_html_for_llm(html)
+        assert small in out
+        assert "[data-uri]" not in out
+
+    def test_prestrip_collapses_whitespace(self) -> None:
+        from worker.tasks import _prestrip_html_for_llm
+
+        html = "<html><body><p>a\n\n\n\n\n\nb</p>   \t  <p>c</p></body></html>"
+        out = _prestrip_html_for_llm(html)
+        assert "\n\n\n" not in out
+        assert "   " not in out
+
+    # -----------------------------------------------------------------
+    # _llm_extract input-size gate + pre-strip integration
+    # -----------------------------------------------------------------
+
+    def test_llm_extract_uses_prestripped_html(self) -> None:
+        """The user content sent to the API must be the pre-stripped HTML,
+        not the raw input -- scripts/styles must never reach the model."""
+        from worker.tasks import _llm_extract
+
+        client = MagicMock()
+        client.chat.completions.create.return_value.choices[
+            0
+        ].message.content = "# ok"
+        raw = "<html><body><script>secret</script><p>keep</p></body></html>"
+        _llm_extract(client, "dep", raw)
+
+        sent = client.chat.completions.create.call_args.kwargs["messages"][1]["content"]
+        assert "<script" not in sent
+        assert "secret" not in sent
+        assert "keep" in sent
+
+    def test_llm_extract_size_gate_skips_api_call(self, monkeypatch) -> None:
+        """When even the pre-stripped HTML would exceed the ceiling, skip
+        the API call entirely and return "" so the caller falls back to BS."""
+        import worker.tasks as tasks_mod
+
+        # Lower the ceiling so the test doesn't need a truly huge fixture.
+        monkeypatch.setattr(tasks_mod, "_LLM_INPUT_TOKEN_CEILING", 100)
+
+        client = MagicMock()
+        # 5000 chars of text -> ~1400 tokens by the estimator, well above 100
+        big = "<html><body><p>" + ("word " * 1000) + "</p></body></html>"
+        result = tasks_mod._llm_extract(client, "dep", big)
+
+        assert result == ""
+        client.chat.completions.create.assert_not_called()
+
+    # -----------------------------------------------------------------
+    # 429 retry wrapper
+    # -----------------------------------------------------------------
+
+    def test_call_with_llm_retry_succeeds_after_transient_429(
+        self, monkeypatch
+    ) -> None:
+        from openai import RateLimitError
+        import worker.tasks as tasks_mod
+
+        monkeypatch.setattr(tasks_mod.time, "sleep", lambda _s: None)
+
+        attempts = iter([
+            RateLimitError("r1", response=MagicMock(), body=None),
+            RateLimitError("r2", response=MagicMock(), body=None),
+            "success",
+        ])
+
+        def flaky() -> str:
+            nxt = next(attempts)
+            if isinstance(nxt, RateLimitError):
+                raise nxt
+            return nxt
+
+        assert tasks_mod._call_with_llm_retry(flaky) == "success"
+
+    def test_call_with_llm_retry_reraises_after_max_attempts(
+        self, monkeypatch
+    ) -> None:
+        from openai import RateLimitError
+        import worker.tasks as tasks_mod
+
+        monkeypatch.setattr(tasks_mod.time, "sleep", lambda _s: None)
+
+        def always_429() -> None:
+            raise RateLimitError("still 429", response=MagicMock(), body=None)
+
+        with pytest.raises(RateLimitError):
+            tasks_mod._call_with_llm_retry(always_429)
+
+    def test_llm_extract_returns_empty_after_persistent_429(
+        self, monkeypatch
+    ) -> None:
+        """After retries are exhausted the RateLimitError propagates up and
+        _llm_extract's APIError handler catches it (RateLimitError is an
+        APIError subclass), returning "" so the caller falls back to BS."""
+        from openai import RateLimitError
+        import worker.tasks as tasks_mod
+
+        monkeypatch.setattr(tasks_mod.time, "sleep", lambda _s: None)
+
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RateLimitError(
+            "429", response=MagicMock(), body=None
+        )
+        result = tasks_mod._llm_extract(
+            client, "dep", "<html><body><p>x</p></body></html>"
+        )
+        assert result == ""
+        # Retried exactly _LLM_MAX_ATTEMPTS times before giving up
+        assert (
+            client.chat.completions.create.call_count
+            == tasks_mod._LLM_MAX_ATTEMPTS
+        )
+
+    def test_llm_evaluate_returns_empty_after_persistent_429(
+        self, monkeypatch
+    ) -> None:
+        from openai import RateLimitError
+        import worker.tasks as tasks_mod
+
+        monkeypatch.setattr(tasks_mod.time, "sleep", lambda _s: None)
+
+        client = MagicMock()
+        client.chat.completions.create.side_effect = RateLimitError(
+            "429", response=MagicMock(), body=None
+        )
+        passed, reason = tasks_mod._llm_evaluate(client, "dep", "markdown")
+        assert passed is False
+        assert "429" in reason or "rate" in reason.lower() or "API error" in reason
+
 
 # ---------------------------------------------------------------------------
 # set_up_logging — deduplication
