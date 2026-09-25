@@ -584,6 +584,81 @@ cleaningServer:
   extraVolumes: []
   extraVolumeMounts: []
 
+# --- Content External ----------------------------------------------------------
+contentExternal:
+  enabled: true
+  nameOverride: content-external
+  image:
+    repository: ghcr.io/buerokratt/common-knowledge
+    tag: content-external-dev-1-1-1
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 8125
+  # Guarded by ckb.contentExternal.workDir in templates/_helpers.tpl: a value
+  # inside a scrapped-data tree aborts the render (rule 1).
+  workDir: /var/lib/content-external
+  # CONTENT_WORK_DIR is NOT listed here — the deployment templates it from
+  # workDir above so the env var and the volume mount cannot drift.
+  #
+  # The destination is a DEPLOYMENT choice, set explicitly rather than left to
+  # the code default so `helm template` answers "which sink is this running?"
+  # without anyone reading Python. Every invalid combination below is refused
+  # at startup by name, never at first commit.
+  #
+  # MANIFEST_STORE_* is deliberately absent for object_store: an empty
+  # MANIFEST_STORE_BACKEND means the manifest lives in the sink's own store,
+  # bucket AND prefix, inherited wholesale, so this deployment shape gains no
+  # configuration at all. An llm_module deployment MUST set it — an HTTP API
+  # has nowhere to hold a manifest — along with LLM_MODULE_BASE_URL (https://
+  # only; the body is Estonian government document text) and
+  # LLM_MODULE_VAULT_SECRET_PATH.
+  #
+  # MANIFEST_STORE_BACKEND=local is development only and additionally needs
+  # MANIFEST_STORE_ALLOW_LOCAL=true. Never set it in a chart values file: a
+  # re-provisioned PVC would read as a first run, republishing the corpus and
+  # permanently orphaning every document CKB deleted while it was gone.
+  env:
+    - name: CONTENT_SINK
+      value: "object_store"
+  # A16. Peak memory is a PRODUCT, and both of its factors are configured
+  # elsewhere:
+  #
+  #   limits.memory >= EXPORT_CONCURRENCY x MAX_DOCUMENT_BYTES x 3 + ~192Mi
+  #
+  # The x3 is because a document is held as bytes, as a decoded NFC-normalised
+  # string, and as its chunks, all at once — the chunker needs the whole
+  # string in memory. At the defaults (4 x 20MB) that is ~432Mi; at the
+  # documented concurrency cap of 16 it is ~1.2Gi, before JSON encoding
+  # inflates an llm-module request body.
+  #
+  # RAISING EXPORT_CONCURRENCY MEANS RAISING THIS. The service computes the
+  # product at startup, compares it against the container's own limit, and
+  # REFUSES TO START if it does not fit — because an OOMKill on an
+  # incremental run never converges: manifest checkpointing is first-run-only
+  # by design, so the run would die at the same document every hour,
+  # committing nothing, forever.
+  resources:
+    limits:
+      cpu: "1000m"
+      memory: "1Gi"
+    requests:
+      cpu: "250m"
+      memory: "512Mi"
+  persistence:
+    size: 1Gi
+    # A14. MUST be ReadWriteOnce, and ckb.contentExternal.accessMode in
+    # templates/_helpers.tpl fails the render on anything else. F2's run lock
+    # is an flock, which is only sound within one kernel: on a ReadWriteMany
+    # volume (NFS/EFS/CephFS) it is advisory and routinely not honoured
+    # across nodes, so an export and a drain would run concurrently with no
+    # error at all. The StorageClass backing this must be block or local.
+    #
+    # The other two A14 facts live in content-external-deployment.yaml:
+    # replicas: 1, and strategy: Recreate (never RollingUpdate, whose whole
+    # behaviour is to run two pods at once).
+    accessMode: ReadWriteOnce
+
 # --- RabbitMQ (scrapper) -------------------------------------------------------
 rabbitmq:
   enabled: true

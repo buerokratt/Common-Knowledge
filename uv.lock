@@ -320,6 +320,14 @@ cleaning = [
     { name = "unstructured", extra = ["doc", "docx", "md", "pptx"] },
     { name = "uvicorn" },
 ]
+content-external = [
+    { name = "boto3" },
+    { name = "fastapi" },
+    { name = "hvac" },
+    { name = "pydantic-settings" },
+    { name = "requests" },
+    { name = "uvicorn" },
+]
 data-export = [
     { name = "fastapi" },
     { name = "psycopg2-binary" },
@@ -354,6 +362,7 @@ scrapper = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "httpx" },
     { name = "hvac" },
     { name = "loguru" },
     { name = "pre-commit" },
@@ -369,22 +378,26 @@ dev = [
 requires-dist = [
     { name = "beautifulsoup4", marker = "extra == 'cleaning'", specifier = "==4.13.4" },
     { name = "beautifulsoup4", marker = "extra == 'scrapper'", specifier = "==4.13.4" },
+    { name = "boto3", marker = "extra == 'content-external'", specifier = "==1.34.0" },
     { name = "boto3", marker = "extra == 'file-processing'", specifier = "==1.34.0" },
     { name = "celery", marker = "extra == 'scrapper'", specifier = "==5.5.3" },
     { name = "croniter", marker = "extra == 'scheduler'", specifier = "==6.0.0" },
     { name = "fake-useragent", marker = "extra == 'scrapper'", specifier = "==2.2.0" },
     { name = "fastapi", marker = "extra == 'cleaning'", specifier = "==0.115.12" },
+    { name = "fastapi", marker = "extra == 'content-external'", specifier = "==0.115.12" },
     { name = "fastapi", marker = "extra == 'data-export'", specifier = "==0.115.12" },
     { name = "fastapi", marker = "extra == 'file-processing'", specifier = "==0.115.12" },
     { name = "fastapi", marker = "extra == 'scheduler'", specifier = "==0.115.12" },
     { name = "fastapi", marker = "extra == 'scrapper'", specifier = "==0.115.12" },
     { name = "hvac", marker = "extra == 'cleaning'", specifier = "==2.3.0" },
+    { name = "hvac", marker = "extra == 'content-external'", specifier = "==2.3.0" },
     { name = "langdetect", marker = "extra == 'cleaning'", specifier = "==1.0.9" },
     { name = "markdownify", marker = "extra == 'cleaning'", specifier = "==0.14.1" },
     { name = "openai", marker = "extra == 'cleaning'", specifier = "==1.82.0" },
     { name = "psycopg2-binary", marker = "extra == 'data-export'", specifier = "==2.9.10" },
     { name = "psycopg2-binary", marker = "extra == 'file-processing'", specifier = "==2.9.10" },
     { name = "pydantic-settings", marker = "extra == 'cleaning'", specifier = "==2.10.1" },
+    { name = "pydantic-settings", marker = "extra == 'content-external'", specifier = "==2.10.1" },
     { name = "pydantic-settings", marker = "extra == 'data-export'", specifier = "==2.10.1" },
     { name = "pydantic-settings", marker = "extra == 'file-processing'", specifier = "==2.10.1" },
     { name = "pydantic-settings", marker = "extra == 'scrapper'", specifier = "==2.10.1" },
@@ -395,21 +408,24 @@ requires-dist = [
     { name = "python-pptx", marker = "extra == 'cleaning'", specifier = "==1.0.2" },
     { name = "pyyaml", marker = "extra == 'file-processing'", specifier = "==6.0.2" },
     { name = "requests", marker = "extra == 'cleaning'", specifier = "==2.32.4" },
+    { name = "requests", marker = "extra == 'content-external'", specifier = "==2.32.4" },
     { name = "requests", marker = "extra == 'file-processing'", specifier = "==2.32.4" },
     { name = "scrapy", marker = "extra == 'scrapper'", specifier = "==2.13.2" },
     { name = "scrapy-playwright", marker = "extra == 'scrapper'", specifier = "==0.0.43" },
     { name = "trafilatura", marker = "extra == 'cleaning'", specifier = "==2.0.0" },
     { name = "unstructured", extras = ["docx", "doc", "pptx", "md"], marker = "extra == 'cleaning'", specifier = "==0.18.5" },
     { name = "uvicorn", marker = "extra == 'cleaning'", specifier = "==0.34.2" },
+    { name = "uvicorn", marker = "extra == 'content-external'", specifier = "==0.34.2" },
     { name = "uvicorn", marker = "extra == 'data-export'", specifier = "==0.34.2" },
     { name = "uvicorn", marker = "extra == 'file-processing'", specifier = "==0.34.2" },
     { name = "uvicorn", marker = "extra == 'scheduler'", specifier = "==0.34.2" },
     { name = "uvicorn", marker = "extra == 'scrapper'", specifier = "==0.34.2" },
 ]
-provides-extras = ["cleaning", "scrapper", "scheduler", "data-export", "file-processing"]
+provides-extras = ["cleaning", "scrapper", "scheduler", "data-export", "file-processing", "content-external"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "httpx", specifier = "==0.28.1" },
     { name = "hvac", specifier = "==2.3.0" },
     { name = "loguru", specifier = "==0.7.3" },
     { name = "pre-commit", specifier = "==4.3.0" },
