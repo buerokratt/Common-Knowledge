@@ -430,6 +430,54 @@ services:
       vault-agent-cleaner:
         condition: service_healthy
 
+  # Rule 1, first of three assertion sites: this service never mounts
+  # ./scrapped-data, in any mode. Its work dir is a dedicated named volume and
+  # CONTENT_WORK_DIR points at it. Anything written under the scraped tree is
+  # zipped into the Global Classifier's payload on the next hourly run,
+  # silently. Also asserted in charts/ckb/templates/_helpers.tpl and in
+  # content-external/exporter/api/config.py.
+  content-external:
+    container_name: content-external
+    build:
+      context: .
+      dockerfile: content-external/Dockerfile
+    ports:
+      - 8125:8125
+    volumes:
+      - content-external-work:/var/lib/content-external
+    environment:
+      # Required, with no default in the code: a fallback would let a
+      # deployment that forgot this write the run lock and the deletion
+      # journal somewhere other than the volume above, unnoticed.
+      - CONTENT_WORK_DIR=/var/lib/content-external
+      # The destination is a DEPLOYMENT choice, set explicitly rather than
+      # left to the code default so `docker compose config` answers "which
+      # sink is this running?" without anyone reading Python.
+      - CONTENT_SINK=object_store
+      # MANIFEST_STORE_* is deliberately unset. On the object_store sink an
+      # empty MANIFEST_STORE_BACKEND means the manifest lives in the sink's
+      # own store, bucket and prefix — endpoint, bucket AND prefix inherited
+      # wholesale. Setting any of them is what an llm_module deployment does,
+      # and that deployment MUST, because an HTTP API has nowhere to hold a
+      # manifest. Startup refuses every invalid combination by name.
+      #
+      # For an llm_module deployment, uncomment and fill all five:
+      # - CONTENT_SINK=llm_module
+      # - MANIFEST_STORE_BACKEND=s3
+      # - MANIFEST_STORE_ENDPOINT_URL=
+      # - MANIFEST_STORE_BUCKET=
+      # - MANIFEST_STORE_PREFIX=content-manifests
+      # - LLM_MODULE_BASE_URL=            # https:// only — the body is
+      #                                   # Estonian government document text
+      # - LLM_MODULE_VAULT_SECRET_PATH=   # fetched per task, never cached
+      #
+      # MANIFEST_STORE_BACKEND=local is development only and additionally
+      # requires MANIFEST_STORE_ALLOW_LOCAL=true. Do not set it here: a
+      # re-provisioned volume would read as a first run, republishing the
+      # corpus and permanently orphaning everything CKB deleted meanwhile.
+    networks:
+      - bykstack
+
   rabbit-scrapper:
     image: rabbitmq:4-management
     container_name: rabbit-scrapper
@@ -455,6 +503,18 @@ services:
       - bykstack
 
 volumes:
+  # content-external's durable work dir: the run lock (F2) and the
+  # deferred-deletion journal. Must survive a restart, and must never be a
+  # bind mount into the scraped tree (rule 1).
+  #
+  # A14: a local-driver named volume, so the run lock is an flock on one
+  # kernel and therefore sound. Do not move this to an NFS/CIFS volume driver
+  # and do not scale the service (`--scale content-external=N`): flock is
+  # advisory across nodes and would let two exports run concurrently with no
+  # error at all. The chart's counterparts are replicas: 1, strategy:
+  # Recreate, and a ReadWriteOnce PVC; the service itself refuses to start if
+  # it cannot take an exclusive lock here.
+  content-external-work:
   opensearch-data:
   vault-data:
   vault-init-data:      # separate from vault-data — stores unseal keys and init flag only

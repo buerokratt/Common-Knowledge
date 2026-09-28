@@ -1,0 +1,48 @@
+name: Build and publish content-external
+
+on:
+  push:
+    branches: [ wip ]
+    paths:
+      - '.env.content-external'
+
+jobs:
+  PackageDeploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Debugging Step
+        run: |
+          echo "Checking runner status..."
+          # Add more debugging commands as needed
+
+      - uses: actions/checkout@v2
+
+      - name: Docker Setup BuildX
+        uses: docker/setup-buildx-action@v2
+
+      - name: Load environment variables and set them
+        run: |
+          if [ -f .env.content-external ]; then
+            export $(cat .env.content-external | grep -v '^#' | xargs)
+          fi
+          echo "RELEASE=$RELEASE" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "BUILD=$BUILD" >> $GITHUB_ENV
+          echo "FIX=$FIX" >> $GITHUB_ENV
+      - name: Set repo
+        run: |
+           LOWER_CASE_GITHUB_REPOSITORY=$(echo $GITHUB_REPOSITORY | tr '[:upper:]' '[:lower:]')
+           echo "DOCKER_TAG_CUSTOM=ghcr.io/${LOWER_CASE_GITHUB_REPOSITORY}:content-external-$RELEASE-$VERSION.$BUILD.$FIX" >> $GITHUB_ENV
+
+           echo "$GITHUB_ENV"
+      - name: Docker Build server
+        run: |
+
+           docker build -f content-external/Dockerfile --tag $DOCKER_TAG_CUSTOM .
+
+      - name: Log in to GitHub container registry
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u $ --password-stdin
+
+      - name: Push fileproc image
+        run: docker push $DOCKER_TAG_CUSTOM
