@@ -753,6 +753,106 @@ class TestOfficeTableMerges:
         assert 'colspan="3"' in result
         assert result.count("Merged across") == 1
 
+    def test_pptx_tables_paired_by_position_not_z_order(
+        self, tmp_path: Path
+    ) -> None:
+        """When two tables are added in a z-order that differs from their
+        visual (top, left) order, the source-side loader must sort by
+        position so it lines up with Unstructured. Otherwise the count
+        check passes (both sides see 2 tables) but the pairing swaps
+        them, and each Table element gets the OTHER table's HTML."""
+        from pptx import Presentation
+        from pptx.util import Inches
+        from unstructured.documents.elements import Table as UTable
+        from unstructured.partition.auto import partition
+
+        from worker.tasks import _apply_source_table_html
+
+        path = tmp_path / "z_order.pptx"
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        # LOWER table added first (higher `top`, so later in position order).
+        lower = slide.shapes.add_table(
+            1, 2, Inches(1), Inches(4), Inches(4), Inches(1)
+        ).table
+        lower.cell(0, 0).text = "LOWER"
+        lower.cell(0, 1).text = "2"
+        # UPPER table added second (smaller `top`, so first in position order).
+        upper = slide.shapes.add_table(
+            1, 2, Inches(1), Inches(1), Inches(4), Inches(1)
+        ).table
+        upper.cell(0, 0).text = "UPPER"
+        upper.cell(0, 1).text = "1"
+        prs.save(path.as_posix())
+
+        elements = partition(filename=path.as_posix())
+        _apply_source_table_html(path, elements)
+
+        tables = [el for el in elements if isinstance(el, UTable)]
+        assert len(tables) == 2
+        # Each Table element must carry its OWN table's HTML.
+        for el in tables:
+            html = el.metadata.text_as_html
+            assert html is not None
+            if "UPPER" in el.text:
+                assert "UPPER" in html and "LOWER" not in html, (
+                    f"UPPER element paired with wrong HTML: {html!r}"
+                )
+            elif "LOWER" in el.text:
+                assert "LOWER" in html and "UPPER" not in html, (
+                    f"LOWER element paired with wrong HTML: {html!r}"
+                )
+
+    def test_pptx_empty_table_and_grouped_table_pair_correctly(
+        self, tmp_path: Path
+    ) -> None:
+        """Unstructured drops empty tables and flattens group shapes. If
+        `_pptx_tables` keeps empty tables and doesn't descend into groups,
+        the two sequences count differently AND, worse, when they happen
+        to have the same count the empty table's HTML gets bound to a
+        content table's element. Sort-by-position + flatten-groups +
+        skip-empty-tables fixes this; the per-pair text safety net keeps
+        it fixed if Unstructured's internals ever drift."""
+        from pptx import Presentation
+        from pptx.util import Inches
+        from unstructured.documents.elements import Table as UTable
+        from unstructured.partition.auto import partition
+
+        from worker.tasks import _apply_source_table_html
+
+        path = tmp_path / "empty_and_grouped.pptx"
+        prs = Presentation()
+        slide = prs.slides.add_slide(prs.slide_layouts[6])
+        # An empty table (Unstructured drops it because it carries no text).
+        slide.shapes.add_table(1, 1, Inches(1), Inches(1), Inches(2), Inches(0.5))
+        # A content-bearing table.
+        frame = slide.shapes.add_table(
+            1, 1, Inches(1), Inches(3), Inches(2), Inches(0.5)
+        )
+        frame.table.cell(0, 0).text = "GROUPED"
+        # Move the content table into a fresh group shape. Unstructured
+        # flattens groups; the loader must too, or the content table will
+        # never be seen.
+        group = slide.shapes.add_group_shape()
+        group._element.append(frame._element)
+        prs.save(path.as_posix())
+
+        elements = partition(filename=path.as_posix())
+        _apply_source_table_html(path, elements)
+
+        tables = [el for el in elements if isinstance(el, UTable)]
+        assert len(tables) >= 1, "Unstructured should surface the content table"
+        for el in tables:
+            if "GROUPED" in el.text:
+                html = el.metadata.text_as_html
+                assert html is not None
+                assert "GROUPED" in html, (
+                    f"GROUPED element paired with wrong HTML: {html!r}"
+                )
+                break
+        else:
+            raise AssertionError("no GROUPED Table element surfaced")
+
     def test_table_count_mismatch_keeps_unstructured_rendering(
         self, tmp_path: Path
     ) -> None:

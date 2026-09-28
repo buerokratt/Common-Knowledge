@@ -857,17 +857,54 @@ def _pptx_table_to_html(table: Any) -> str:
 
 
 def _pptx_tables(file_path: Path) -> list:
-    """Every table in a .pptx, in slide then shape order."""
+    """Every non-empty table in a .pptx, in the order Unstructured emits them:
+    per slide, group shapes flattened, sorted by (top, left).
+
+    Ordering must mirror Unstructured 0.18.5's partition_pptx internals --
+    `_order_shapes` sorts by (top, left) and `_iter_table_element` skips
+    tables that carry no text -- otherwise the positional matching in
+    `_apply_source_table_html` pairs the wrong table with the wrong
+    element. That path also carries a per-pair text safety net so if
+    Unstructured's ordering ever diverges again, the offending pair keeps
+    Unstructured's rendering and a warning is logged instead of the wrong
+    table being written.
+    """
     from pptx import Presentation  # python-pptx
+    from pptx.shapes.group import GroupShape
+
+    def iter_shapes(shapes):
+        for shape in shapes:
+            if isinstance(shape, GroupShape):
+                yield from iter_shapes(shape.shapes)
+            else:
+                yield shape
 
     tables = []
     for slide in Presentation(file_path.as_posix()).slides:
-        tables.extend(
-            getattr(shape, "table")
-            for shape in slide.shapes
-            if getattr(shape, "has_table", False)
+        ordered = sorted(
+            iter_shapes(slide.shapes),
+            key=lambda s: (s.top or 0, s.left or 0),
         )
+        for shape in ordered:
+            if not getattr(shape, "has_table", False):
+                continue
+            table = shape.table
+            if any(cell.text.strip() for row in table.rows for cell in row.cells):
+                tables.append(table)
     return tables
+
+
+def _norm_table_text(text: str) -> str:
+    """Collapse whitespace runs so texts from Unstructured and python-pptx
+    can be compared directly regardless of internal spacing."""
+    return " ".join((text or "").split())
+
+
+def _pptx_source_table_text(table: Any) -> str:
+    """Concatenated cell text of a python-pptx table, whitespace-normalised."""
+    return _norm_table_text(
+        " ".join(cell.text for row in table.rows for cell in row.cells)
+    )
 
 
 def _apply_source_table_html(file_path: Path, elements: list) -> None:
@@ -878,6 +915,12 @@ def _apply_source_table_html(file_path: Path, elements: list) -> None:
     Both sequences are in document order, so they are matched positionally;
     if the counts disagree (nested tables, a parse quirk) the substitution
     is skipped entirely rather than risk pairing the wrong table.
+
+    For PPTX the ordering `_pptx_tables` produces is only guaranteed to
+    line up with Unstructured under the version we develop against, so
+    each pair is verified by text before its HTML is overwritten -- a
+    mismatch on any pair keeps that element's Unstructured rendering and
+    logs a warning.
     """
     suffix = file_path.suffix.lower()
     if suffix == ".docx":
@@ -905,6 +948,15 @@ def _apply_source_table_html(file_path: Path, elements: list) -> None:
         return
 
     for element, source_table in zip(table_elements, source_tables, strict=True):
+        if label == "pptx":
+            source_text = _pptx_source_table_text(source_table)
+            element_text = _norm_table_text(getattr(element, "text", ""))
+            if source_text != element_text:
+                logger.warning(
+                    f"[pptx] table text mismatch for {file_path}; "
+                    "keeping Unstructured's rendering for this pair"
+                )
+                continue
         try:
             element.metadata.text_as_html = renderer(source_table)
         except Exception as e:
