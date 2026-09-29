@@ -20,12 +20,15 @@ file-based and never calls these functions at all.
 import hashlib
 
 from exporter.core.constants import (
+    CHUNKER_VERSION,
     DOCUMENT_CHUNK_BLOB_KEY_TEMPLATE,
     DOCUMENT_METADATA_BLOB_KEY_TEMPLATE,
     ID_NAMESPACE,
     ID_VERSION,
     MANIFEST_BLOB_KEY_TEMPLATE,
+    NORMALISER_VERSION,
     PENDING_DELETIONS_BLOB_KEY_TEMPLATE,
+    ChunkProfile,
 )
 
 # Hex digest length, in bytes -> 32 hex characters. "128" in blake2b_128
@@ -63,6 +66,36 @@ def make_chunk_id(agency_id: str, document_id: str, ordinal: int) -> str:
     ).encode("utf-8")
     digest = hashlib.blake2b(payload, digest_size=_CHUNK_ID_DIGEST_SIZE).hexdigest()
     return _CHUNK_ID_PREFIX + digest
+
+
+def chunker_fingerprint(profile: ChunkProfile) -> str:
+    """A single hash standing in for "how this run would chunk a document",
+    covering CHUNKER_VERSION, NORMALISER_VERSION and the four resolved size
+    params of the active profile — and nothing else.
+
+    Stored in the manifest. If it differs from the value the manifest was
+    last committed with, the diff treats every document as content_changed,
+    which is what makes a chunking-logic or profile change re-chunk the
+    whole corpus cleanly instead of leaving some documents on old geometry
+    and some on new.
+
+    Must NOT include sink or store identity. Switching destination
+    does not change how a document would be chunked, so it must not force
+    a re-chunk — and on the llm-module sink, a re-chunk means a full
+    corpus re-embed on someone else's service. Destination identity is
+    guarded separately, by the manifest's own sink_id field.
+    """
+    payload = "\x1f".join(
+        (
+            str(CHUNKER_VERSION),
+            str(NORMALISER_VERSION),
+            str(profile.target),
+            str(profile.overlap),
+            str(profile.min),
+            str(profile.max),
+        )
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def manifest_key(prefix: str, agency_id: str) -> str:
