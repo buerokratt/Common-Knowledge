@@ -63,11 +63,22 @@ DEFAULT_CHUNK_PROFILE = "azure_native"
 
 # Blob key templates. The literal layout strings live here as the single
 # source of truth; ids.py's key-builder functions are what fill in
-# {id}/{ordinal}/{run_id} — no destination-specific logic (no sink, no
-# store client) belongs in this file.
-MANIFEST_BLOB_KEY_TEMPLATE = "manifest.json"
-DOCUMENT_METADATA_BLOB_KEY_TEMPLATE = "documents/{document_id}/metadata.json"
-DOCUMENT_CHUNK_BLOB_KEY_TEMPLATE = (
-    "documents/{document_id}/chunks/{ordinal:05d}.json"
+# {prefix}/{agency_id}/{document_id}/{ordinal}/{run_id} — no
+# destination-specific logic (no sink, no store client) belongs in this
+# file. {prefix} is CONTENT_EXTERNAL_PREFIX, supplied by the caller, not
+# baked in here — it is deployment config, not an invariant.
+#
+# metadata.json sits beside chunks/, not inside it, so the two publish
+# stages (metadata-only vs. content-and-chunks) own disjoint key spaces
+# and either can be replayed alone. Keys are addressed by ordinal, not by
+# chunk_id, because ordinal -> id is a pure function while id -> ordinal
+# is not — this is what lets the orphan sweep list a prefix and drop
+# every ordinal >= the current chunk_count without needing a manifest.
+MANIFEST_BLOB_KEY_TEMPLATE = "{prefix}/agencies/{agency_id}/manifest.json"
+DOCUMENT_METADATA_BLOB_KEY_TEMPLATE = (
+    "{prefix}/agencies/{agency_id}/documents/{document_id}/metadata.json"
 )
-PENDING_DELETIONS_BLOB_KEY_TEMPLATE = "_control/deletions/pending-{run_id}.jsonl"
+DOCUMENT_CHUNK_BLOB_KEY_TEMPLATE = (
+    "{prefix}/agencies/{agency_id}/documents/{document_id}/chunks/{ordinal:05d}.json"
+)
+PENDING_DELETIONS_BLOB_KEY_TEMPLATE = "{prefix}/_control/deletions/pending-{run_id}.jsonl"
