@@ -17,9 +17,13 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from worker.tasks import LLMEvaluation, LLMExtraction
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +69,18 @@ def _make_entity(
     entity.use_llm = use_llm
     entity.use_llm_correction = use_llm_correction
     return entity
+
+
+def _eval(verdict: str, reason: str, category: str | None = None) -> LLMEvaluation:
+    from worker.tasks import LLMEvaluation
+
+    return LLMEvaluation(verdict, reason, category=category)
+
+
+def _extraction(status: str, content: str = "") -> LLMExtraction:
+    from worker.tasks import LLMExtraction
+
+    return LLMExtraction(status, content)
 
 
 # ---------------------------------------------------------------------------
@@ -204,7 +220,7 @@ class TestCleanHtmlRouting:
             "worker.tasks._trafilatura_extract",
             return_value="# Extracted\n\nGood content.",
         ) as mock_traf:
-            result = clean_html(entity, client=None, deployment=None)
+            result, report = clean_html(entity, client=None, deployment=None)
 
         mock_traf.assert_called_once()
         assert result == "# Extracted\n\nGood content."
@@ -224,7 +240,7 @@ class TestCleanHtmlRouting:
                 "worker.tasks._beautifulsoup_extract", return_value="BS result"
             ) as mock_bs,
         ):
-            result = clean_html(entity, client=None, deployment=None)
+            result, report = clean_html(entity, client=None, deployment=None)
 
         mock_bs.assert_called_once()
         assert result == "BS result"
@@ -243,9 +259,11 @@ class TestCleanHtmlRouting:
 
         with (
             patch("worker.tasks._trafilatura_extract", return_value="Good extraction"),
-            patch("worker.tasks._llm_evaluate", return_value=(True, "looks good")),
+            patch(
+                "worker.tasks._llm_evaluate", return_value=_eval("pass", "looks good")
+            ),
         ):
-            result = clean_html(entity, client=client, deployment="dep")
+            result, report = clean_html(entity, client=client, deployment="dep")
 
         assert result == "Good extraction"
 
@@ -265,12 +283,15 @@ class TestCleanHtmlRouting:
 
         with (
             patch("worker.tasks._trafilatura_extract", return_value="Bad extraction"),
-            patch("worker.tasks._llm_evaluate", return_value=(False, "too noisy")),
+            patch(
+                "worker.tasks._llm_evaluate",
+                return_value=_eval("fail", "too noisy", "nav"),
+            ),
             patch(
                 "worker.tasks._beautifulsoup_extract", return_value="BS fallback"
             ) as mock_bs,
         ):
-            result = clean_html(entity, client=client, deployment="dep")
+            result, report = clean_html(entity, client=client, deployment="dep")
 
         mock_bs.assert_called_once()
         assert result == "BS fallback"
@@ -291,12 +312,16 @@ class TestCleanHtmlRouting:
 
         with (
             patch("worker.tasks._trafilatura_extract", return_value="Bad extraction"),
-            patch("worker.tasks._llm_evaluate", return_value=(False, "too noisy")),
             patch(
-                "worker.tasks._llm_extract", return_value="LLM corrected content"
+                "worker.tasks._llm_evaluate",
+                return_value=_eval("fail", "too noisy", "nav"),
+            ),
+            patch(
+                "worker.tasks._llm_extract",
+                return_value=_extraction("success", "LLM corrected content"),
             ) as mock_llm_ext,
         ):
-            result = clean_html(entity, client=client, deployment="dep")
+            result, report = clean_html(entity, client=client, deployment="dep")
 
         mock_llm_ext.assert_called_once()
         assert result == "LLM corrected content"
@@ -317,13 +342,16 @@ class TestCleanHtmlRouting:
 
         with (
             patch("worker.tasks._trafilatura_extract", return_value="Bad extraction"),
-            patch("worker.tasks._llm_evaluate", return_value=(False, "too noisy")),
-            patch("worker.tasks._llm_extract", return_value=""),
+            patch(
+                "worker.tasks._llm_evaluate",
+                return_value=_eval("fail", "too noisy", "nav"),
+            ),
+            patch("worker.tasks._llm_extract", return_value=_extraction("empty")),
             patch(
                 "worker.tasks._beautifulsoup_extract", return_value="BS last resort"
             ) as mock_bs,
         ):
-            result = clean_html(entity, client=client, deployment="dep")
+            result, report = clean_html(entity, client=client, deployment="dep")
 
         mock_bs.assert_called_once()
         assert result == "BS last resort"
@@ -345,7 +373,7 @@ class TestCleanHtmlRouting:
             patch("worker.tasks._trafilatura_extract", return_value="Traf result"),
             caplog.at_level(logging.WARNING, logger="worker.tasks"),
         ):
-            result = clean_html(entity, client=None, deployment=None)
+            result, report = clean_html(entity, client=None, deployment=None)
 
         assert result == "Traf result"
         assert any("use_llm_correction=True" in r.message for r in caplog.records)
@@ -365,9 +393,10 @@ class TestLLMHelpers:
         client.chat.completions.create.side_effect = APIError(
             message="rate limit", request=MagicMock(), body=None
         )
-        passed, reason = _llm_evaluate(client, "dep", "some markdown")
-        assert passed is False
-        assert "LLM API error" in reason
+        evaluation = _llm_evaluate(client, "dep", "some markdown")
+        assert evaluation.passed is False
+        assert evaluation.verdict == "error"
+        assert "LLM API error" in evaluation.reason
 
     def test_llm_evaluate_returns_false_on_json_decode_error(self) -> None:
         from worker.tasks import _llm_evaluate
@@ -376,9 +405,10 @@ class TestLLMHelpers:
         client.chat.completions.create.return_value.choices[
             0
         ].message.content = "not json"
-        passed, reason = _llm_evaluate(client, "dep", "some markdown")
-        assert passed is False
-        assert "non-JSON" in reason
+        evaluation = _llm_evaluate(client, "dep", "some markdown")
+        assert evaluation.passed is False
+        assert evaluation.verdict == "error"
+        assert "non-JSON" in evaluation.reason
 
     def test_llm_evaluate_parses_pass_true(self) -> None:
         from worker.tasks import _llm_evaluate
@@ -387,9 +417,11 @@ class TestLLMHelpers:
         client.chat.completions.create.return_value.choices[
             0
         ].message.content = '{"pass": true, "reason": "looks great"}'
-        passed, reason = _llm_evaluate(client, "dep", "some markdown")
-        assert passed is True
-        assert reason == "looks great"
+        evaluation = _llm_evaluate(client, "dep", "some markdown")
+        assert evaluation.passed is True
+        assert evaluation.verdict == "pass"
+        assert evaluation.reason == "looks great"
+        assert evaluation.category is None
 
     def test_llm_evaluate_parses_pass_false(self) -> None:
         from worker.tasks import _llm_evaluate
@@ -397,10 +429,14 @@ class TestLLMHelpers:
         client = MagicMock()
         client.chat.completions.create.return_value.choices[
             0
-        ].message.content = '{"pass": false, "reason": "too noisy"}'
-        passed, reason = _llm_evaluate(client, "dep", "some markdown")
-        assert passed is False
-        assert reason == "too noisy"
+        ].message.content = (
+            '{"pass": false, "reason": "too noisy", "category": "cookie"}'
+        )
+        evaluation = _llm_evaluate(client, "dep", "some markdown")
+        assert evaluation.passed is False
+        assert evaluation.verdict == "fail"
+        assert evaluation.reason == "too noisy"
+        assert evaluation.category == "cookie"
 
     def test_llm_extract_returns_empty_string_on_api_error(self) -> None:
         from worker.tasks import _llm_extract
@@ -411,7 +447,8 @@ class TestLLMHelpers:
             message="timeout", request=MagicMock(), body=None
         )
         result = _llm_extract(client, "dep", "<html></html>")
-        assert result == ""
+        assert result.status == "error"
+        assert result.content == ""
 
     def test_llm_extract_returns_content(self) -> None:
         from worker.tasks import _llm_extract
@@ -421,7 +458,350 @@ class TestLLMHelpers:
             0
         ].message.content = "# Extracted\n\nContent here."
         result = _llm_extract(client, "dep", "<html><body><p>x</p></body></html>")
-        assert result == "# Extracted\n\nContent here."
+        assert result.status == "success"
+        assert result.content == "# Extracted\n\nContent here."
+
+
+class TestLLMEvaluateParsing:
+    @staticmethod
+    def _client(content: str) -> MagicMock:
+        client = MagicMock()
+        response = client.chat.completions.create.return_value
+        response.choices[0].message.content = content
+        response.usage.prompt_tokens = 1200
+        response.usage.completion_tokens = 35
+        return client
+
+    def test_unknown_category_becomes_other(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client('{"pass": false, "reason": "x", "category": "Ads"}')
+        assert _llm_evaluate(client, "dep", "md").category == "other"
+
+    def test_missing_category_on_fail_becomes_other(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client('{"pass": false, "reason": "x"}')
+        evaluation = _llm_evaluate(client, "dep", "md")
+        assert evaluation.verdict == "fail"
+        assert evaluation.category == "other"
+
+    def test_category_is_normalised(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client('{"pass": false, "reason": "x", "category": " NAV "}')
+        assert _llm_evaluate(client, "dep", "md").category == "nav"
+
+    def test_category_ignored_on_pass(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client('{"pass": true, "reason": "ok", "category": "nav"}')
+        assert _llm_evaluate(client, "dep", "md").category is None
+
+    def test_json_without_pass_key_is_error(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client('{"reason": "x"}')
+        assert _llm_evaluate(client, "dep", "md").verdict == "error"
+
+    def test_non_object_json_is_error(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client("[1, 2]")
+        assert _llm_evaluate(client, "dep", "md").verdict == "error"
+
+    def test_token_usage_captured(self) -> None:
+        from worker.tasks import _llm_evaluate
+
+        client = self._client('{"pass": true, "reason": "ok"}')
+        evaluation = _llm_evaluate(client, "dep", "md")
+        assert evaluation.prompt_tokens == 1200
+        assert evaluation.completion_tokens == 35
+
+    def test_extract_token_usage_and_empty_status(self) -> None:
+        from worker.tasks import _llm_extract
+
+        client = self._client("   ")
+        extraction = _llm_extract(client, "dep", "<html></html>")
+        assert extraction.status == "empty"
+        assert extraction.prompt_tokens == 1200
+
+
+class TestCleanHtmlReport:
+    """clean_html must describe the path it took in the returned CleaningReport."""
+
+    HTML = "<html><body><p>text</p></body></html>"
+
+    def test_no_llm_trafilatura(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", self.HTML)
+        with patch("worker.tasks._trafilatura_extract", return_value="Traf"):
+            _, report = clean_html(entity, client=None, deployment=None)
+
+        assert report.extraction_method == "trafilatura"
+        assert report.quality_control is None
+        assert report.evaluation is None
+
+    def test_no_llm_beautifulsoup(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", self.HTML)
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value=None),
+            patch("worker.tasks._beautifulsoup_extract", return_value="BS"),
+        ):
+            _, report = clean_html(entity, client=None, deployment=None)
+
+        assert report.extraction_method == "beautifulsoup"
+
+    def test_basic_pass(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", self.HTML, use_llm=True)
+        evaluation = _eval("pass", "ok")
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value="Traf"),
+            patch("worker.tasks._llm_evaluate", return_value=evaluation),
+        ):
+            _, report = clean_html(entity, client=MagicMock(), deployment="dep")
+
+        assert report.quality_control == "basic"
+        assert report.evaluated_method == "trafilatura"
+        assert report.extraction_method == "trafilatura"
+        assert report.llm_model == "dep"
+        assert report.evaluation is evaluation
+        assert report.extraction is None
+        assert report.deterministic_text is None
+
+    def test_basic_fail_falls_back_to_beautifulsoup(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", self.HTML, use_llm=True)
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value="Traf"),
+            patch("worker.tasks._llm_evaluate", return_value=_eval("fail", "x", "nav")),
+            patch("worker.tasks._beautifulsoup_extract", return_value="BS"),
+        ):
+            _, report = clean_html(entity, client=MagicMock(), deployment="dep")
+
+        assert report.evaluated_method == "trafilatura"
+        assert report.extraction_method == "beautifulsoup"
+        assert report.evaluation.category == "nav"
+        assert report.deterministic_text is None
+
+    def test_evaluated_method_is_beautifulsoup_when_trafilatura_empty(
+        self, tmp_path: Path
+    ) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", self.HTML, use_llm=True)
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value=None),
+            patch("worker.tasks._beautifulsoup_extract", return_value="BS"),
+            patch("worker.tasks._llm_evaluate", return_value=_eval("pass", "ok")),
+        ):
+            _, report = clean_html(entity, client=MagicMock(), deployment="dep")
+
+        assert report.evaluated_method == "beautifulsoup"
+        assert report.extraction_method == "beautifulsoup"
+
+    def test_comprehensive_fail_keeps_deterministic_text(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(
+            tmp_path, ".html", self.HTML, use_llm=True, use_llm_correction=True
+        )
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value="Traf"),
+            patch("worker.tasks._llm_evaluate", return_value=_eval("fail", "x", "nav")),
+            patch(
+                "worker.tasks._llm_extract",
+                return_value=_extraction("success", "LLM text"),
+            ),
+        ):
+            text, report = clean_html(entity, client=MagicMock(), deployment="dep")
+
+        assert text == "LLM text"
+        assert report.quality_control == "comprehensive"
+        assert report.extraction_method == "llm"
+        assert report.extraction.status == "success"
+        assert report.deterministic_text == "Traf"
+
+    def test_comprehensive_error_verdict_still_reextracts(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(
+            tmp_path, ".html", self.HTML, use_llm=True, use_llm_correction=True
+        )
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value="Traf"),
+            patch("worker.tasks._llm_evaluate", return_value=_eval("error", "api")),
+            patch(
+                "worker.tasks._llm_extract",
+                return_value=_extraction("success", "LLM text"),
+            ) as mock_extract,
+        ):
+            text, report = clean_html(entity, client=MagicMock(), deployment="dep")
+
+        mock_extract.assert_called_once()
+        assert text == "LLM text"
+        assert report.evaluation.verdict == "error"
+
+    def test_comprehensive_empty_extract_has_no_deterministic_text(
+        self, tmp_path: Path
+    ) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(
+            tmp_path, ".html", self.HTML, use_llm=True, use_llm_correction=True
+        )
+        with (
+            patch("worker.tasks._trafilatura_extract", return_value="Traf"),
+            patch("worker.tasks._llm_evaluate", return_value=_eval("fail", "x")),
+            patch("worker.tasks._llm_extract", return_value=_extraction("empty")),
+            patch("worker.tasks._beautifulsoup_extract", return_value="BS"),
+        ):
+            _, report = clean_html(entity, client=MagicMock(), deployment="dep")
+
+        assert report.extraction_method == "beautifulsoup"
+        assert report.extraction.status == "empty"
+        assert report.deterministic_text is None
+
+
+class TestCleaningReportPersistence:
+    @staticmethod
+    def _ok_response() -> MagicMock:
+        resp = MagicMock()
+        resp.json.return_value = {"response": "http://mock/file"}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    @staticmethod
+    def _report_calls(mock_post: MagicMock) -> list:
+        return [
+            c for c in mock_post.call_args_list if "add-cleaning-report" in c.args[0]
+        ]
+
+    def test_report_sent_after_cleaning(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_file_task
+
+        entity = _make_entity(tmp_path, ".txt", "Some text.\n")
+        with (
+            patch("worker.tasks.requests.post") as mock_post,
+            patch("worker.tasks.cleanup_directory"),
+        ):
+            mock_post.return_value = self._ok_response()
+            clean_file_task(entity)
+
+        calls = self._report_calls(mock_post)
+        assert len(calls) == 1
+        payload = calls[0].kwargs["json"]
+        assert payload["source_file_base_id"] == "test-id"
+        assert payload["extraction_method"] == "plain_text"
+        assert payload["file_type"] == ".txt"
+        assert payload["cleaned_data_url"] == "http://mock/file"
+        # No LLM -> LLM fields empty (Resql turns "" into NULL)
+        assert payload["llm_verdict"] == ""
+        assert payload["eval_prompt_tokens"] == ""
+        assert payload["quality_control"] == ""
+        assert all(isinstance(v, str) for v in payload.values())
+        # Report is sent after the source file has been updated
+        paths = [c.args[0] for c in mock_post.call_args_list]
+        assert any(
+            "update-cleaned-file" in p for p in paths[: paths.index(calls[0].args[0])]
+        )
+
+    def test_llm_fields_in_payload(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_file_task, LLMEvaluation
+
+        entity = _make_entity(tmp_path, ".html", "<html></html>", use_llm=True)
+        evaluation = LLMEvaluation(
+            "fail", "menu in text", "nav", prompt_tokens=900, completion_tokens=20
+        )
+        with (
+            patch("worker.tasks.requests.post") as mock_post,
+            patch("worker.tasks.cleanup_directory"),
+            patch("worker.tasks.get_vault_secrets"),
+            patch("worker.tasks._make_openai_client"),
+            patch("worker.tasks._trafilatura_extract", return_value="Traf"),
+            patch("worker.tasks._beautifulsoup_extract", return_value="BS text"),
+            patch("worker.tasks._llm_evaluate", return_value=evaluation),
+        ):
+            mock_post.return_value = self._ok_response()
+            clean_file_task(entity)
+
+        payload = self._report_calls(mock_post)[0].kwargs["json"]
+        assert payload["quality_control"] == "basic"
+        assert payload["evaluated_method"] == "trafilatura"
+        assert payload["extraction_method"] == "beautifulsoup"
+        assert payload["llm_verdict"] == "fail"
+        assert payload["llm_reason"] == "menu in text"
+        assert payload["llm_issue_category"] == "nav"
+        assert payload["eval_prompt_tokens"] == "900"
+        assert payload["eval_completion_tokens"] == "20"
+        assert payload["llm_extract_status"] == ""
+        assert payload["deterministic_data_url"] == ""
+
+    def test_comprehensive_uploads_deterministic_text(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_file_task
+
+        entity = _make_entity(
+            tmp_path,
+            ".html",
+            "<html></html>",
+            use_llm=True,
+            use_llm_correction=True,
+        )
+        with (
+            patch("worker.tasks.requests.post") as mock_post,
+            patch("worker.tasks.cleanup_directory"),
+            patch("worker.tasks.get_vault_secrets"),
+            patch("worker.tasks._make_openai_client"),
+            patch("worker.tasks._trafilatura_extract", return_value="Traf text"),
+            patch("worker.tasks._llm_evaluate", return_value=_eval("fail", "x")),
+            patch(
+                "worker.tasks._llm_extract",
+                return_value=_extraction("success", "LLM text"),
+            ),
+        ):
+            mock_post.return_value = self._ok_response()
+            clean_file_task(entity)
+
+        assert (tmp_path / "cleaned.txt").read_text() == "LLM text"
+        assert (tmp_path / "deterministic.txt").read_text() == "Traf text"
+        uploaded = [
+            c.kwargs["json"]["source_file_path"]
+            for c in mock_post.call_args_list
+            if "upload-file-sync" in c.args[0]
+        ]
+        assert any(p.endswith("deterministic.txt") for p in uploaded)
+        payload = self._report_calls(mock_post)[0].kwargs["json"]
+        assert payload["extraction_method"] == "llm"
+        assert payload["llm_extract_status"] == "success"
+        assert payload["deterministic_data_url"] == "http://mock/file"
+
+    def test_report_failure_does_not_fail_cleaning(self, tmp_path: Path) -> None:
+        import requests as _requests
+        from worker.tasks import clean_file_task
+
+        entity = _make_entity(tmp_path, ".txt", "Some text.\n")
+        ok = self._ok_response()
+
+        def _post(url: str, *args: object, **kwargs: object) -> MagicMock:
+            if "add-cleaning-report" in url:
+                raise _requests.ConnectionError("ruuter down")
+            return ok
+
+        with (
+            patch("worker.tasks.requests.post", side_effect=_post),
+            patch("worker.tasks.cleanup_directory") as mock_cleanup,
+            patch("worker.tasks.send_error") as mock_send_error,
+        ):
+            clean_file_task(entity)
+
+        mock_cleanup.assert_called_once()
+        mock_send_error.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
