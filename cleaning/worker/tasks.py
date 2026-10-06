@@ -7,6 +7,7 @@ import mimetypes
 import re
 import socket
 import textwrap
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
@@ -163,10 +164,19 @@ _EVAL_SYSTEM = textwrap.dedent("""
          footer boilerplate, and other noise?
       4. Structure    - are headings, lists, and paragraphs logically preserved?
 
+    On failure, classify the main problem with exactly one category:
+      nav       - navigation menus or breadcrumbs mixed into the content
+      cookie    - cookie or consent banner text
+      footer    - footer boilerplate (contacts, legal links, copyright)
+      sidebar   - sidebar, related-links or promo blocks
+      truncated - main content missing or cut off
+      structure - headings, lists or tables lost or garbled
+      other     - any other problem
+
     Reply with ONLY a JSON object in this exact shape (no markdown fences):
-    {"pass": true, "reason": "<one-sentence explanation>"}
+    {"pass": true, "reason": "<one-sentence explanation>", "category": null}
     or
-    {"pass": false, "reason": "<one-sentence explanation>"}
+    {"pass": false, "reason": "<one-sentence explanation>", "category": "<category>"}
 """).strip()
 
 _EXTRACT_SYSTEM = textwrap.dedent("""
@@ -178,14 +188,76 @@ _EXTRACT_SYSTEM = textwrap.dedent("""
     where appropriate). Do not include any commentary - only the extracted Markdown.
 """).strip()
 
+_ISSUE_CATEGORIES = frozenset(
+    {"nav", "cookie", "footer", "sidebar", "truncated", "structure", "other"}
+)
+
+
+@dataclass
+class LLMEvaluation:
+    """
+    Outcome of _llm_evaluate. verdict is "pass", "fail", or "error" -- the
+    latter when the API call or response parsing failed, so a real FAIL can be
+    told apart from an outage. Callers treat "error" like "fail".
+    """
+
+    verdict: str
+    reason: str
+    category: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+    @property
+    def passed(self) -> bool:
+        return self.verdict == "pass"
+
+
+@dataclass
+class LLMExtraction:
+    """Outcome of _llm_extract. status is "success", "empty", or "error"."""
+
+    status: str
+    content: str = ""
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+
+
+@dataclass
+class CleaningReport:
+    """
+    What happened while cleaning one file; persisted to
+    monitoring.cleaning_report by _send_cleaning_report.
+    """
+
+    extraction_method: str
+    quality_control: str | None = None
+    evaluated_method: str | None = None
+    llm_model: str | None = None
+    evaluation: LLMEvaluation | None = None
+    extraction: LLMExtraction | None = None
+    # Deterministic text replaced by the LLM re-extraction (comprehensive mode);
+    # uploaded alongside the report so both versions can be compared later.
+    deterministic_text: str | None = None
+
+
+def _usage_tokens(response: object) -> tuple[int | None, int | None]:
+    """Return (prompt_tokens, completion_tokens) from a completion, if reported."""
+    usage = getattr(response, "usage", None)
+    prompt = getattr(usage, "prompt_tokens", None)
+    completion = getattr(usage, "completion_tokens", None)
+    return (
+        prompt if isinstance(prompt, int) else None,
+        completion if isinstance(completion, int) else None,
+    )
+
 
 def _llm_evaluate(
     client: AzureOpenAI, deployment: str, extracted_markdown: str
-) -> tuple[bool, str]:
+) -> LLMEvaluation:
     """
     Ask the LLM to evaluate the quality of an extraction.
-    Returns (passed, reason). On any API or parse error returns (False, reason)
-    so the caller can fall back gracefully without crashing.
+    On any API or parse error returns verdict "error" so the caller can fall
+    back gracefully without crashing.
     """
     try:
         response = client.chat.completions.create(
@@ -201,22 +273,51 @@ def _llm_evaluate(
         )
         raw = response.choices[0].message.content or "{}"
     except APIError as e:
-        return False, f"LLM API error during evaluation: {e}"
+        return LLMEvaluation("error", f"LLM API error during evaluation: {e}")
     except Exception as e:
-        return False, f"Unexpected error during LLM evaluation: {e}"
+        return LLMEvaluation("error", f"Unexpected error during LLM evaluation: {e}")
+
+    prompt_tokens, completion_tokens = _usage_tokens(response)
 
     try:
         result = json.loads(raw)
-        return bool(result.get("pass", False)), result.get("reason", "no reason given")
     except json.JSONDecodeError:
-        return False, f"LLM returned non-JSON: {raw[:120]}"
+        return LLMEvaluation(
+            "error",
+            f"LLM returned non-JSON: {raw[:120]}",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+    if not isinstance(result, dict) or "pass" not in result:
+        return LLMEvaluation(
+            "error",
+            f"LLM returned unexpected JSON: {raw[:120]}",
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
+
+    passed = bool(result["pass"])
+    category = None
+    if not passed:
+        # Unknown or missing categories are kept as "other" rather than
+        # failing the evaluation -- the verdict is what drives cleaning.
+        category = str(result.get("category") or "").strip().lower()
+        if category not in _ISSUE_CATEGORIES:
+            category = "other"
+    return LLMEvaluation(
+        "pass" if passed else "fail",
+        str(result.get("reason") or "no reason given"),
+        category=category,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 
-def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
+def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtraction:
     """
     Ask the LLM to re-extract the main content from raw HTML.
-    Returns the extracted Markdown, or empty string on any error so the
-    caller can fall back gracefully without crashing.
+    Returns status "empty" or "error" with empty content when nothing usable
+    came back, so the caller can fall back gracefully without crashing.
     """
     try:
         response = client.chat.completions.create(
@@ -226,13 +327,21 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
                 {"role": "user", "content": html},
             ],
         )
-        return (response.choices[0].message.content or "").strip()
+        content = (response.choices[0].message.content or "").strip()
     except APIError as e:
         logger.error(f"LLM API error during re-extraction: {e}")
-        return ""
+        return LLMExtraction("error")
     except Exception as e:
         logger.error(f"Unexpected error during LLM re-extraction: {e}")
-        return ""
+        return LLMExtraction("error")
+
+    prompt_tokens, completion_tokens = _usage_tokens(response)
+    return LLMExtraction(
+        "success" if content else "empty",
+        content,
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -242,7 +351,7 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
 
 def clean_html(
     entity: EntityToClean, client: AzureOpenAI | None, deployment: str | None
-) -> str:
+) -> tuple[str, CleaningReport]:
     """
     Three modes controlled by entity.use_llm and entity.use_llm_correction:
 
@@ -261,6 +370,9 @@ def clean_html(
         empty fall back to BeautifulSoup.
 
     Note: use_llm_correction=True has no effect when use_llm=False.
+
+    Returns the cleaned text and a CleaningReport describing which path
+    produced it.
     """
     with entity.file_path.open("r", encoding="utf-8", errors="replace") as f:
         html = f.read()
@@ -277,16 +389,25 @@ def clean_html(
         extracted = _trafilatura_extract(html, url=entity.url)
         if extracted:
             logger.info(f"[html] trafilatura succeeded for {entity.url}")
-            return extracted
+            return extracted, CleaningReport(extraction_method="trafilatura")
         logger.warning(
             f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}"
         )
-        return _beautifulsoup_extract(html)
+        return _beautifulsoup_extract(html), CleaningReport(
+            extraction_method="beautifulsoup"
+        )
 
     # LLM paths — entity.use_llm is True here, so the caller must have provided
     # an Azure OpenAI client + deployment; assert to narrow the optional types.
     assert client is not None and deployment is not None, (
         "use_llm=True requires Azure OpenAI client and deployment"
+    )
+
+    report = CleaningReport(
+        extraction_method="trafilatura",
+        quality_control="comprehensive" if entity.use_llm_correction else "basic",
+        evaluated_method="trafilatura",
+        llm_model=deployment,
     )
 
     extracted = _trafilatura_extract(html, url=entity.url)
@@ -295,31 +416,39 @@ def clean_html(
             f"[html] trafilatura empty for {entity.url}; using BeautifulSoup before LLM eval"
         )
         extracted = _beautifulsoup_extract(html)
+        report.evaluated_method = report.extraction_method = "beautifulsoup"
 
     logger.info(f"[html] running LLM evaluation for {entity.url}")
-    passed, reason = _llm_evaluate(client, deployment, extracted)
+    evaluation = _llm_evaluate(client, deployment, extracted)
+    report.evaluation = evaluation
     logger.info(
-        f"[html] LLM evaluation {'PASSED' if passed else 'FAILED'} for {entity.url}: {reason}"
+        f"[html] LLM evaluation {evaluation.verdict.upper()} for {entity.url}: "
+        f"{evaluation.reason}"
     )
 
-    if passed:
-        return extracted
+    if evaluation.passed:
+        return extracted, report
 
     if not entity.use_llm_correction:
         logger.warning(
             f"[html] LLM eval failed, falling back to BeautifulSoup for {entity.url}"
         )
-        return _beautifulsoup_extract(html)
+        report.extraction_method = "beautifulsoup"
+        return _beautifulsoup_extract(html), report
 
     logger.info(f"[html] LLM correction: re-extracting from raw HTML for {entity.url}")
-    corrected = _llm_extract(client, deployment, html)
-    if corrected:
-        return corrected
+    extraction = _llm_extract(client, deployment, html)
+    report.extraction = extraction
+    if extraction.content:
+        report.extraction_method = "llm"
+        report.deterministic_text = extracted
+        return extraction.content, report
 
     logger.warning(
         f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}"
     )
-    return _beautifulsoup_extract(html)
+    report.extraction_method = "beautifulsoup"
+    return _beautifulsoup_extract(html), report
 
 
 # ---------------------------------------------------------------------------
@@ -669,23 +798,27 @@ def clean_file_task(entity: EntityToClean) -> None:
             deployment_name = secrets.azure_openai_deployment
 
         if file_type == ".html":
-            cleaned_text = clean_html(entity, client, deployment_name)
+            cleaned_text, report = clean_html(entity, client, deployment_name)
             logger.info(f"Cleaned as HTML for {entity.file_path.as_posix()}")
         elif file_type == ".pdf":
             cleaned_text = clean_pdf(entity)
+            report = CleaningReport(extraction_method="pymupdf4llm")
             logger.info(
                 f"Cleaned as PDF (pymupdf4llm) for {entity.file_path.as_posix()}"
             )
         elif file_type in (".pptx", ".ppt"):
             cleaned_text = clean_any_file(entity)
+            report = CleaningReport(extraction_method="unstructured")
             logger.info(
                 f"Cleaned as PPTX (unstructured) for {entity.file_path.as_posix()}"
             )
         elif file_type in (".txt", ".md"):
             cleaned_text = clean_plain_text(entity)
+            report = CleaningReport(extraction_method="plain_text")
             logger.info(f"Cleaned as plain text for {entity.file_path.as_posix()}")
         else:
             cleaned_text = clean_any_file(entity)
+            report = CleaningReport(extraction_method="unstructured")
             logger.info(
                 f"Cleaned as unstructured file for {entity.file_path.as_posix()}"
             )
@@ -807,8 +940,81 @@ def clean_file_task(entity: EntityToClean) -> None:
         )
         r.raise_for_status()
 
+        _send_cleaning_report(
+            entity, report, file_type, uploaded_cleaned_text_url, ruuter_timeout
+        )
+
         # All uploads confirmed -- safe to delete the working directory
         cleanup_directory(entity)
+
+
+def _send_cleaning_report(
+    entity: EntityToClean,
+    report: CleaningReport,
+    file_type: str,
+    cleaned_data_url: str,
+    timeout: int,
+) -> None:
+    """
+    Persist the cleaning report via Ruuter. Best-effort: the file is already
+    cleaned and stored, so any failure here is logged and never raised.
+
+    All values are sent as strings with "" for missing ones -- Resql maps ""
+    back to NULL (NULLIF), matching how other optional fields are passed.
+    """
+    try:
+        deterministic_data_url = ""
+        if report.deterministic_text is not None:
+            deterministic_filename = entity.directory_path / "deterministic.txt"
+            with deterministic_filename.open("w") as f:
+                f.write(normalize_newlines(report.deterministic_text))
+            r = requests.post(
+                f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                json={"source_file_path": deterministic_filename.as_posix()},
+                timeout=timeout,
+            )
+            r.raise_for_status()
+            deterministic_data_url = r.json().get("response", "") or ""
+
+        evaluation = report.evaluation
+        extraction = report.extraction
+
+        def _s(value: object) -> str:
+            return "" if value is None else str(value)
+
+        payload = {
+            "source_file_base_id": entity.source_file_id,
+            "source_base_id": entity.source_base_id,
+            "agency_base_id": entity.agency_base_id,
+            "source_run_report_base_id": entity.source_run_report_base_id,
+            "url": entity.url,
+            "file_type": file_type,
+            "quality_control": _s(report.quality_control),
+            "evaluated_method": _s(report.evaluated_method),
+            "extraction_method": report.extraction_method,
+            "llm_model": _s(report.llm_model),
+            "llm_verdict": _s(evaluation and evaluation.verdict),
+            "llm_reason": _s(evaluation and evaluation.reason),
+            "llm_issue_category": _s(evaluation and evaluation.category),
+            "llm_extract_status": _s(extraction and extraction.status),
+            "eval_prompt_tokens": _s(evaluation and evaluation.prompt_tokens),
+            "eval_completion_tokens": _s(evaluation and evaluation.completion_tokens),
+            "extract_prompt_tokens": _s(extraction and extraction.prompt_tokens),
+            "extract_completion_tokens": _s(
+                extraction and extraction.completion_tokens
+            ),
+            "cleaned_data_url": cleaned_data_url,
+            "deterministic_data_url": deterministic_data_url,
+        }
+        r = requests.post(
+            f"{settings.ruuter_internal}/ckb/source-file/add-cleaning-report",
+            json=payload,
+            timeout=timeout,
+        )
+        r.raise_for_status()
+        logger.info(f"Saved cleaning report for {entity.file_path.as_posix()}")
+    except Exception as e:
+        logger.error(f"[cleaning] failed to save cleaning report for {entity.url}: {e}")
 
 
 # ---------------------------------------------------------------------------
