@@ -6,6 +6,7 @@ autouse fixtures, so nothing here starts the cleaning stack.
 
 import logging
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -21,6 +22,12 @@ from exporter.api.config import (
     log_redacted_config,
     redacted_settings,
 )
+from exporter.core.constants import (
+    CHUNK_PROFILES,
+    DEFAULT_CHUNK_PROFILE,
+    MAX_CHUNK_ORDINAL,
+)
+from exporter.core.ids import chunker_fingerprint
 
 WORK_DIR_ENV = "CONTENT_WORK_DIR"
 
@@ -118,17 +125,21 @@ def test_nothing_but_the_work_dir_is_required(clean_env: None) -> None:
 # --------------------------------------------------------------------------
 
 
+_LLM_MODULE_MINIMUM: dict[str, str] = {
+    "content_sink": "llm_module",
+    "chunk_profile": "azure_native",
+    "manifest_store_backend": "s3",
+    "manifest_store_endpoint_url": "https://store.example",
+    "manifest_store_bucket": "content-manifests",
+    "llm_module_base_url": "https://llm.example/ingest",
+    "llm_module_vault_secret_path": "llm/connections/ingest",
+}
+
+
 def _llm_module_settings(**overrides: object) -> Settings:
     """The minimum viable llm_module deployment, so each test can break
     exactly one thing about it."""
-    kwargs: dict[str, object] = {
-        "content_sink": "llm_module",
-        "manifest_store_backend": "s3",
-        "manifest_store_endpoint_url": "https://store.example",
-        "manifest_store_bucket": "content-manifests",
-        "llm_module_base_url": "https://llm.example/ingest",
-        "llm_module_vault_secret_path": "llm/connections/ingest",
-    }
+    kwargs: dict[str, object] = {**_LLM_MODULE_MINIMUM}
     kwargs.update(overrides)
     return _settings(**kwargs)
 
@@ -550,6 +561,159 @@ def test_load_settings_sanitises_the_validation_error(
     message = str(excinfo.value)
     assert "export_concurrency" in message
     assert "hunter2" not in message
+
+
+# --------------------------------------------------------------------------
+# Chunk profile (B11)
+#
+# One env var naming a reviewed preset — never four knobs — and pinned
+# explicitly on the llm_module sink, where the far side embeds our chunks and
+# an oversized one is truncated in silence.
+# --------------------------------------------------------------------------
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_default_chunk_profile_is_a_known_preset(clean_env: None) -> None:
+    assert DEFAULT_CHUNK_PROFILE in CHUNK_PROFILES
+    assert _settings().chunk_profile == DEFAULT_CHUNK_PROFILE
+
+
+@pytest.mark.parametrize("name", sorted(CHUNK_PROFILES))
+def test_every_preset_is_accepted_and_resolves_to_its_row(
+    clean_env: None, name: str
+) -> None:
+    assert _settings(chunk_profile=name).resolved_chunk_profile == CHUNK_PROFILES[name]
+
+
+@pytest.mark.parametrize("name", ["medium", "Compact", "azure_native "])
+def test_unknown_chunk_profile_is_refused_by_name(clean_env: None, name: str) -> None:
+    with pytest.raises(ValidationError) as excinfo:
+        _settings(chunk_profile=name)
+    message = str(excinfo.value)
+    assert "CHUNK_PROFILE" in message
+    for preset in CHUNK_PROFILES:
+        assert preset in message
+
+
+def test_llm_module_without_an_explicit_chunk_profile_is_refused(
+    clean_env: None,
+) -> None:
+    unpinned = {k: v for k, v in _LLM_MODULE_MINIMUM.items() if k != "chunk_profile"}
+    with pytest.raises(ValidationError) as excinfo:
+        _settings(**unpinned)
+    message = str(excinfo.value)
+    assert "CHUNK_PROFILE" in message
+    assert "silently truncated" in message
+
+
+def test_object_store_may_rely_on_the_default_chunk_profile(clean_env: None) -> None:
+    settings = _settings()
+    assert "chunk_profile" not in settings.model_fields_set
+    assert settings.resolved_chunk_profile == CHUNK_PROFILES[DEFAULT_CHUNK_PROFILE]
+
+
+# A setting name that would carry one of the four chunk sizes on its own.
+# max_chunks_per_document is a safety limit, not geometry, and does not match.
+_GEOMETRY_KNOB = re.compile(
+    r"overlap|target|(?:^|_)(?:min|max)_(?:size|chars|length)"
+    r"|chunk_(?:size|min|max|length)"
+)
+
+
+def test_chunk_geometry_is_never_a_separate_setting() -> None:
+    """B11: the four sizes are one reviewed row in CHUNK_PROFILES, picked by
+    name. A Settings field per size is the four independent knobs the
+    presets exist to prevent — and with extra="ignore", a stray CHUNK_TARGET
+    in the environment is silently dropped, not honoured."""
+    knobs = sorted(
+        name for name in Settings.model_fields if _GEOMETRY_KNOB.search(name)
+    )
+    assert not knobs, (
+        f"{knobs} look like separate chunk-size settings. Add a preset to "
+        "CHUNK_PROFILES in exporter/core/constants.py instead."
+    )
+    assert _GEOMETRY_KNOB.search("chunk_overlap")
+    assert not _GEOMETRY_KNOB.search("max_chunks_per_document")
+
+
+def test_max_chunks_per_document_is_capped_by_the_chunk_key(clean_env: None) -> None:
+    """B6: {ordinal:05d} holds ordinals up to MAX_CHUNK_ORDINAL; one more
+    chunk and keys stop sorting in ordinal order."""
+    assert _settings(max_chunks_per_document=MAX_CHUNK_ORDINAL + 1)
+    with pytest.raises(ValidationError, match="max_chunks_per_document"):
+        _settings(max_chunks_per_document=MAX_CHUNK_ORDINAL + 2)
+
+
+@pytest.mark.parametrize("field", ["content_external_prefix", "manifest_store_prefix"])
+@pytest.mark.parametrize("bad", ["content/", "/content", "a//b", "a/../b"])
+def test_a_malformed_key_prefix_is_refused_at_startup(
+    clean_env: None, field: str, bad: str
+) -> None:
+    with pytest.raises(ValidationError, match=field):
+        _settings(**{field: bad})
+
+
+def test_a_multi_segment_key_prefix_is_accepted(clean_env: None) -> None:
+    assert _settings(content_external_prefix="ckb/content").content_external_prefix
+
+
+def _set_llm_module_env(monkeypatch: pytest.MonkeyPatch, *, pinned: bool) -> None:
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    for name, value in _LLM_MODULE_MINIMUM.items():
+        if name != "chunk_profile" or pinned:
+            monkeypatch.setenv(name.upper(), value)
+
+
+def test_chunk_profile_from_the_environment_counts_as_pinned(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The pinning rule reads model_fields_set, so it depends on
+    pydantic-settings counting an env value as explicitly set — including
+    one that happens to equal the default."""
+    _set_llm_module_env(monkeypatch, pinned=True)
+    settings = load_settings()
+    assert settings.chunk_profile == DEFAULT_CHUNK_PROFILE
+    assert "chunk_profile" in settings.model_fields_set
+
+
+def test_llm_module_env_without_chunk_profile_refuses_to_start(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_llm_module_env(monkeypatch, pinned=False)
+    with pytest.raises(ConfigurationError) as excinfo:
+        load_settings()
+    assert "CHUNK_PROFILE" in str(excinfo.value)
+
+
+def test_config_echo_carries_the_chunk_geometry_and_fingerprint(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A profile name says which preset; only the numbers and the fingerprint
+    say whether two deployments would chunk a document identically."""
+    with caplog.at_level(logging.INFO, logger="exporter.api.config"):
+        log_redacted_config(_settings(chunk_profile="compact"))
+
+    message = caplog.records[-1].getMessage()
+    assert "chunk_profile=compact" in message
+    assert "chunk_geometry=target=450,overlap=80,min=120,max=700" in message
+    fingerprint = chunker_fingerprint(CHUNK_PROFILES["compact"])
+    assert f"chunker_fingerprint={fingerprint}" in message
+
+
+def test_compose_and_chart_pin_the_same_known_chunk_profile() -> None:
+    """compose alone passes local testing and silently leaves Kubernetes on
+    whatever the code default is, so both surfaces are checked together."""
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    values = (REPO_ROOT / "charts" / "ckb" / "values.yaml").read_text(encoding="utf-8")
+
+    in_compose = re.findall(r"^\s*-\s*CHUNK_PROFILE=(\S+)\s*$", compose, re.MULTILINE)
+    in_chart = re.findall(
+        r"-\s*name:\s*CHUNK_PROFILE\s*\n\s*value:\s*\"?([^\"\s]+)\"?", values
+    )
+    assert len(in_compose) == 1, in_compose
+    assert in_chart == in_compose
+    assert in_compose[0] in CHUNK_PROFILES
 
 
 # --------------------------------------------------------------------------

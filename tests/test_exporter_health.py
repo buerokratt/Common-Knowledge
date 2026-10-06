@@ -67,13 +67,15 @@ def test_health_reports_the_configured_sink(
     """content-external/README.md tells an operator to check GET /health for
     which sink this deployment runs. That promise, made executable.
 
-    The four extra variables are not noise: A12's matrix refuses
+    The extra variables are not noise: A12's matrix refuses
     CONTENT_SINK=llm_module without a manifest store and without a base URL
-    and credential path, so this is the minimum viable llm_module deployment.
+    and credential path, and B11 refuses it without an explicit
+    CHUNK_PROFILE, so this is the minimum viable llm_module deployment.
     Asserting the whole set here means a future relaxation of the matrix shows
     up as this test passing with fewer of them, rather than silently.
     """
     monkeypatch.setenv("CONTENT_SINK", "llm_module")
+    monkeypatch.setenv("CHUNK_PROFILE", "compact")
     monkeypatch.setenv("MANIFEST_STORE_BACKEND", "s3")
     monkeypatch.setenv("MANIFEST_STORE_ENDPOINT_URL", "https://store.example")
     monkeypatch.setenv("MANIFEST_STORE_BUCKET", "content-manifests")
@@ -83,6 +85,7 @@ def test_health_reports_the_configured_sink(
     with TestClient(app) as client:
         body = client.get("/health").json()
     assert body["sink"] == "llm_module"
+    assert body["chunk_profile"] == "compact"
 
 
 def test_health_last_run_is_null_before_any_run(work_dir_env: Path) -> None:

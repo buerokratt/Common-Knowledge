@@ -6,6 +6,7 @@ assertions over real cleaned Estonian documents are B14, not here.
 """
 
 import random
+import unicodedata
 
 import pytest
 
@@ -48,6 +49,15 @@ GUARDED_PHRASES = (
     "v.a. puhkepäevad",
     "lg. 2",
     "(vt. lisa",
+    # Markdown emphasis, as cleaned law text writes its section headings
+    "**§ 1. ****Seaduse",
+    "**3. detsember**",
+    "**2024.** aasta",
+    "_nt._ taotlus",
+    # ...and with the period outside the emphasis
+    "**2024**. aasta",
+    "**3**. detsember",
+    "_nt_. taotlus",
 )
 
 
@@ -72,6 +82,14 @@ def assert_invariants(
     assert spans[-1].end == len(text)
     for prev, cur in zip(spans, spans[1:], strict=False):
         assert prev.start < cur.start <= prev.end, (prev, cur)
+        # A chunk that ends where its predecessor does is a copy of part of
+        # it: published, and embedded, twice.
+        assert cur.end > prev.end, (prev, cur)
+        # _overlap_start reaches back at most one extra overlap for a clean
+        # word start, and never min_size or more, which is what keeps the
+        # next window's earliest end past this one's.
+        assert prev.end - cur.start <= 2 * chunker.overlap, (prev, cur)
+        assert prev.end - cur.start < chunker.min_size, (prev, cur)
     for i, span in enumerate(spans):
         length = span.end - span.start
         assert length <= chunker.max_size, span
@@ -284,6 +302,21 @@ def test_real_sentence_end_still_breaks() -> None:
         ("eKr.", True),
         ("pKr.", True),
         ("e.Kr.", True),
+        ("**§", True),
+        ("**3.", True),
+        ("_3.", True),
+        ("**2024.**", True),
+        ("*jne.", True),
+        ("(**nt.**", True),
+        ("**2024**.", True),
+        ("**3**.", True),
+        ("_nt_.", True),
+        ("**A**.", True),
+        ("**§**", True),
+        ("*.", False),
+        ("__.", False),
+        ("**Sissejuhatus.**", False),
+        ("**", False),
         ("DVD.", False),
         ("LCD.", False),
         ("IIII.", False),
@@ -353,6 +386,33 @@ def test_next_chunk_starts_at_a_word_start_near_the_overlap() -> None:
     for prev, cur in zip(spans, spans[1:], strict=False):
         assert text[cur.start - 1] == " "
         assert prev.end - 2 * SMALL.overlap <= cur.start < prev.end
+
+
+def test_no_chunk_is_contained_in_its_predecessor_under_azure_native() -> None:
+    """azure_native has overlap == min_size. Before the floor in
+    _overlap_start, a chunk ending at a line break let the next window end at
+    that same break: a 200-character chunk wholly inside the previous one.
+    One line break between two runs of words is the shape that found it."""
+    chunker = Chunker.from_profile(CHUNK_PROFILES["azure_native"])
+    rng = random.Random(18)
+    for _ in range(300):
+        text = (
+            words(rng, rng.randint(900, 2400))
+            + "\n"
+            + words(rng, rng.randint(1800, 4200))
+        )
+        assert_invariants(text, chunker.split(text), chunker)
+
+
+def test_hard_cut_never_orphans_a_combining_mark() -> None:
+    # "q" + COMBINING TILDE has no precomposed form, so NFC cannot fold it
+    # and a whitespace-free run of them forces pass-3 hard cuts.
+    text = "x" * 59 + "q̃" * 300
+    spans = SMALL.split(text)
+    assert_invariants(text, spans, SMALL, tidy=False)
+    for span in spans:
+        assert not unicodedata.combining(text[span.start]), span
+        assert span.end == len(text) or not unicodedata.combining(text[span.end]), span
 
 
 def test_long_word_in_overlap_reaches_back_to_its_start() -> None:

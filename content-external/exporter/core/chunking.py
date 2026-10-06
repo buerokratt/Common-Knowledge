@@ -24,7 +24,8 @@ before target beats a paragraph break just after it — chunks stay near
 target, and structure decides where in that range they end.
 
 Every chunk is text[span.start:span.end] exactly, spans start at 0, end at
-len(text), and each one starts no later than the previous one ends. So
+len(text), and each one starts no later than the previous one ends and ends
+strictly after it — no chunk is ever a copy of part of its predecessor. So
 dropping each chunk's overlap with its predecessor and concatenating
 reproduces the text byte for byte — the property B14 checks over a corpus.
 
@@ -35,6 +36,7 @@ on mixed geometry.
 """
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import NamedTuple
 
@@ -104,6 +106,11 @@ _ROMAN_NUMERAL = re.compile(
 )
 # Stripped from the front of a token so "(nt." still reads as "nt."
 _OPENING_PUNCTUATION = "([{„“«'\""
+# Markdown emphasis, removed wherever it sits in a token: the corpus is
+# cleaned Markdown, and a law's section headings arrive as
+# "**§ 1. ****Pealkiri**", so "**§", "**2024.**" and "**2024**." must read
+# as "§" and "2024.".
+_EMPHASIS = str.maketrans("", "", "*_")
 # A token longer than this is not an ordinal or an abbreviation; stop looking
 # rather than misread the tail of a URL as one.
 _MAX_TOKEN = 40
@@ -121,7 +128,7 @@ def _is_protected_break(text: str, end: int) -> bool:
         start -= 1
         if end - start > _MAX_TOKEN:
             return False
-    token = text[start:end].lstrip(_OPENING_PUNCTUATION)
+    token = text[start:end].translate(_EMPHASIS).lstrip(_OPENING_PUNCTUATION)
     if token in ("§", "§§"):
         return True
     if not token.endswith("."):
@@ -235,16 +242,24 @@ class Chunker:
             if after:
                 return after[0]
         # Pass 3: no usable whitespace anywhere in the window — a long URL or
-        # base64-encoded data. Cut at target.
-        return soft
+        # base64-encoded data. Cut at target, but never between a base
+        # character and a combining mark NFC could not compose onto it.
+        return _off_combining_mark(text, soft, lo)
 
     def _overlap_start(self, text: str, start: int, end: int) -> int:
         """Where the next chunk starts: `overlap` characters before `end`,
         moved to a word start so no chunk opens on half a word or on the
-        second half of a guarded pair ("3. |detsember")."""
+        second half of a guarded pair ("3. |detsember").
+
+        Never min_size or more before `end`. The next window's earliest end
+        is its start + min_size, so a start that far back would let it end
+        at or before `end` — a chunk wholly inside this one, published and
+        embedded twice. azure_native has overlap == min_size, so this caps
+        its effective overlap at min_size - 1."""
         if self.overlap == 0:
             return end
-        lo = max(end - self.overlap, start + 1)
+        floor = max(end - self.min_size + 1, start + 1)
+        lo = max(end - self.overlap, floor)
         first_protected: int | None = None
         for p in range(lo, end):
             if _is_word_start(text, p):
@@ -254,14 +269,25 @@ class Chunker:
                     first_protected = p
         # The overlap region is inside one long word, or every word start in
         # it follows an ordinal or an abbreviation. Reach back for a clean
-        # word start instead — at most one more overlap's worth, so the next
-        # chunk can never become a near-copy of this one.
-        for p in range(lo - 1, max(start, lo - self.overlap - 1), -1):
+        # word start instead — at most one more overlap's worth, and never
+        # past the floor, so the next chunk can never become a near-copy of
+        # this one.
+        for p in range(lo - 1, max(start, lo - self.overlap - 1, floor - 1), -1):
             if _is_word_start(text, p) and not _is_protected_break(text, p - 1):
                 return p
         # A run of guarded tokens, or one token, longer than that: open on a
         # whole word if there is one, else mid-token.
-        return lo if first_protected is None else first_protected
+        if first_protected is not None:
+            return first_protected
+        return _off_combining_mark(text, lo, floor)
+
+
+def _off_combining_mark(text: str, p: int, floor: int) -> int:
+    """`p`, moved back to the base character if it sits on a combining mark,
+    so a cut at p does not orphan the mark. Never below `floor`."""
+    while p > floor and unicodedata.combining(text[p]):
+        p -= 1
+    return p
 
 
 def _is_word_start(text: str, p: int) -> bool:

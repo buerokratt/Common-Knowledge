@@ -618,9 +618,20 @@ contentExternal:
   # MANIFEST_STORE_ALLOW_LOCAL=true. Never set it in a chart values file: a
   # re-provisioned PVC would read as a first run, republishing the corpus and
   # permanently orphaning every document CKB deleted while it was gone.
+  #
+  # CHUNK_PROFILE is pinned per deployment alongside the sink, because whoever
+  # embeds the chunks decides what fits. It must name a preset in
+  # content-external/exporter/core/constants.py CHUNK_PROFILES. There is
+  # deliberately no _helpers.tpl check: a copy of the preset list here would
+  # drift, and startup already refuses an unknown name. An llm_module
+  # deployment MUST set it explicitly — chosen from that embedder's token
+  # budget — and startup refuses one that relies on the default. Changing it
+  # re-chunks the whole corpus on the next run (on llm_module, re-embeds it).
   env:
     - name: CONTENT_SINK
       value: "object_store"
+    - name: CHUNK_PROFILE
+      value: "azure_native"
   # A16. Peak memory is a PRODUCT, and both of its factors are configured
   # elsewhere:
   #

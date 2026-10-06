@@ -17,19 +17,22 @@ from typing import NamedTuple
 
 # Mixed into make_chunk_id() alongside ID_VERSION, the document id and the
 # ordinal, so a chunk id from this service cannot collide with an id
-# produced by an unrelated system that happens to hash the same way.
+# produced by an unrelated system that happens to hash the same way. Also
+# part of chunker_fingerprint(): changing it re-keys every id.
 ID_NAMESPACE = "ckb-content-external"
 
 # Bump only to deliberately re-key every chunk id ever produced — e.g. if
 # make_chunk_id()'s hashing scheme itself changes. A bump makes every
-# existing chunk id look new, which is exactly the point: it forces a full
-# re-publish rather than silently colliding old ids with new ones.
+# existing chunk id look new, and because ID_VERSION is part of
+# chunker_fingerprint(), it also marks every document content_changed — so
+# the whole corpus is re-published on the new scheme rather than only the
+# documents that happened to change.
 ID_VERSION = 1
 
 # Bump when chunking.py's algorithm changes in a way that would move chunk
 # boundaries for existing documents (separator priority, the Estonian
 # ordinal guard, the overlap/termination logic, etc).
-CHUNKER_VERSION = 1
+CHUNKER_VERSION = 3
 
 # Bump when text_normaliser.py's normalisation rules change (e.g. a new
 # zero-width character added to the strip set).
@@ -81,4 +84,10 @@ DOCUMENT_METADATA_BLOB_KEY_TEMPLATE = (
 DOCUMENT_CHUNK_BLOB_KEY_TEMPLATE = (
     "{prefix}/agencies/{agency_id}/documents/{document_id}/chunks/{ordinal:05d}.json"
 )
-PENDING_DELETIONS_BLOB_KEY_TEMPLATE = "{prefix}/_control/deletions/pending-{run_id}.jsonl"
+# The largest ordinal {ordinal:05d} can write. Past it the key grows a sixth
+# digit and a store listing stops coming back in ordinal order, which the
+# orphan sweep relies on. MAX_CHUNKS_PER_DOCUMENT is capped from this.
+MAX_CHUNK_ORDINAL = 99_999
+PENDING_DELETIONS_BLOB_KEY_TEMPLATE = (
+    "{prefix}/_control/deletions/pending-{run_id}.jsonl"
+)

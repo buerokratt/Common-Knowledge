@@ -454,6 +454,12 @@ services:
       # left to the code default so `docker compose config` answers "which
       # sink is this running?" without anyone reading Python.
       - CONTENT_SINK=object_store
+      # Chunk geometry, pinned per deployment alongside the sink: whoever
+      # embeds the chunks decides what fits. One of the presets in
+      # content-external/exporter/core/constants.py CHUNK_PROFILES; an
+      # unknown name is refused at startup. Changing it re-chunks the whole
+      # corpus on the next run (and on llm_module, re-embeds it).
+      - CHUNK_PROFILE=azure_native
       # MANIFEST_STORE_* is deliberately unset. On the object_store sink an
       # empty MANIFEST_STORE_BACKEND means the manifest lives in the sink's
       # own store, bucket and prefix — endpoint, bucket AND prefix inherited
@@ -461,8 +467,10 @@ services:
       # and that deployment MUST, because an HTTP API has nowhere to hold a
       # manifest. Startup refuses every invalid combination by name.
       #
-      # For an llm_module deployment, uncomment and fill all five:
+      # For an llm_module deployment, uncomment and fill all of these:
       # - CONTENT_SINK=llm_module
+      # - CHUNK_PROFILE=                  # REQUIRED here, no default: choose
+      #                                   # from their embedder's token budget
       # - MANIFEST_STORE_BACKEND=s3
       # - MANIFEST_STORE_ENDPOINT_URL=
       # - MANIFEST_STORE_BUCKET=

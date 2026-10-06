@@ -26,6 +26,7 @@ from exporter.core.constants import (
     ID_NAMESPACE,
     ID_VERSION,
     MANIFEST_BLOB_KEY_TEMPLATE,
+    MAX_CHUNK_ORDINAL,
     NORMALISER_VERSION,
     PENDING_DELETIONS_BLOB_KEY_TEMPLATE,
     ChunkProfile,
@@ -69,15 +70,22 @@ def make_chunk_id(agency_id: str, document_id: str, ordinal: int) -> str:
 
 
 def chunker_fingerprint(profile: ChunkProfile) -> str:
-    """A single hash standing in for "how this run would chunk a document",
-    covering CHUNKER_VERSION, NORMALISER_VERSION and the four resolved size
-    params of the active profile — and nothing else.
+    """A single hash standing in for "how this run would chunk and id a
+    document", covering CHUNKER_VERSION, NORMALISER_VERSION, ID_NAMESPACE,
+    ID_VERSION and the four resolved size params of the active profile —
+    and nothing else.
 
     Stored in the manifest. If it differs from the value the manifest was
     last committed with, the diff treats every document as content_changed,
     which is what makes a chunking-logic or profile change re-chunk the
     whole corpus cleanly instead of leaving some documents on old geometry
     and some on new.
+
+    ID_NAMESPACE and ID_VERSION are here for the same reason: changing
+    either re-keys every chunk id,
+    and without it only documents whose content happened to change would
+    be re-published, leaving one corpus on two id schemes — and old-scheme
+    ids that no later run can compute, so can never delete.
 
     Must NOT include sink or store identity. Switching destination
     does not change how a document would be chunked, so it must not force
@@ -89,6 +97,8 @@ def chunker_fingerprint(profile: ChunkProfile) -> str:
         (
             str(CHUNKER_VERSION),
             str(NORMALISER_VERSION),
+            ID_NAMESPACE,
+            str(ID_VERSION),
             str(profile.target),
             str(profile.overlap),
             str(profile.min),
@@ -98,9 +108,46 @@ def chunker_fingerprint(profile: ChunkProfile) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+# The key builders validate what they are given rather than trust it: a key
+# is a path, and "../x", "" or "a/b" as an id would write somewhere the
+# orphan sweep and the manifest never look. Real ids are UUIDs, so these
+# only ever fire on a bug upstream — which is when they are wanted.
+
+
+def _segment(name: str, value: str) -> str:
+    """One path segment: non-empty, no "/", and not "." or ".."."""
+    if not isinstance(value, str) or not value or "/" in value:
+        raise ValueError(
+            f"{name} must be a non-empty string without '/', got {value!r}"
+        )
+    if value in (".", ".."):
+        raise ValueError(f"{name} must not be {value!r}")
+    return value
+
+
+def validate_prefix(prefix: str) -> str:
+    """The deployment prefix: may hold "/" between segments, but no empty,
+    "." or ".." segment and no leading or trailing "/"."""
+    if not isinstance(prefix, str) or not prefix:
+        raise ValueError(f"prefix must be a non-empty string, got {prefix!r}")
+    for part in prefix.split("/"):
+        _segment("prefix segment", part)
+    return prefix
+
+
+def _ordinal(ordinal: int) -> int:
+    if isinstance(ordinal, bool) or not isinstance(ordinal, int):
+        raise ValueError(f"ordinal must be an int, got {ordinal!r}")
+    if not 0 <= ordinal <= MAX_CHUNK_ORDINAL:
+        raise ValueError(f"ordinal must be in [0, {MAX_CHUNK_ORDINAL}], got {ordinal}")
+    return ordinal
+
+
 def manifest_key(prefix: str, agency_id: str) -> str:
     """The one manifest.json for this (prefix, agency)."""
-    return MANIFEST_BLOB_KEY_TEMPLATE.format(prefix=prefix, agency_id=agency_id)
+    return MANIFEST_BLOB_KEY_TEMPLATE.format(
+        prefix=validate_prefix(prefix), agency_id=_segment("agency_id", agency_id)
+    )
 
 
 def document_metadata_key(prefix: str, agency_id: str, document_id: str) -> str:
@@ -108,7 +155,9 @@ def document_metadata_key(prefix: str, agency_id: str, document_id: str) -> str:
     publish path and the chunk-publish path own disjoint key spaces and
     either can be replayed alone."""
     return DOCUMENT_METADATA_BLOB_KEY_TEMPLATE.format(
-        prefix=prefix, agency_id=agency_id, document_id=document_id
+        prefix=validate_prefix(prefix),
+        agency_id=_segment("agency_id", agency_id),
+        document_id=_segment("document_id", document_id),
     )
 
 
@@ -120,7 +169,10 @@ def document_chunk_key(
     prefix and drop every ordinal >= the current chunk_count with no
     manifest needed."""
     return DOCUMENT_CHUNK_BLOB_KEY_TEMPLATE.format(
-        prefix=prefix, agency_id=agency_id, document_id=document_id, ordinal=ordinal
+        prefix=validate_prefix(prefix),
+        agency_id=_segment("agency_id", agency_id),
+        document_id=_segment("document_id", document_id),
+        ordinal=_ordinal(ordinal),
     )
 
 
@@ -128,4 +180,6 @@ def pending_deletions_key(prefix: str, run_id: str) -> str:
     """The deferred-deletion journal for one run, written before a delete
     is attempted so an incident is recorded even if the destination that
     should have received it is what is broken."""
-    return PENDING_DELETIONS_BLOB_KEY_TEMPLATE.format(prefix=prefix, run_id=run_id)
+    return PENDING_DELETIONS_BLOB_KEY_TEMPLATE.format(
+        prefix=validate_prefix(prefix), run_id=_segment("run_id", run_id)
+    )

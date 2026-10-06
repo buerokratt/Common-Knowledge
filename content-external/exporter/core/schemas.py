@@ -10,7 +10,12 @@ function is still holding a reference to.
 
 Every one of these is serialised with json.dump, never pickled — the
 manifest and the run report are meant to be read by a human or another
-process, not only by this one.
+process, not only by this one. json.dump cannot take a dataclass, so
+to_json_dict() turns one into plain dicts and lists first.
+
+frozen=True only stops attribute rebinding; a dict field would still be
+mutable in place (`manifest.documents["x"] = ...`). So every mapping field
+is frozen on construction into a read-only view, nested values included.
 
 TextSpan and Chunk are the two shapes the design's own documents never spell
 out field-by-field (they are named once in a file listing and nowhere
@@ -23,7 +28,42 @@ each chunk to carry both its text and its position in the source. Flagged
 here rather than presented as a quoted spec.
 """
 
+import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Any
+
+
+def _freeze(value: object) -> object:
+    """A read-only copy: mappings become MappingProxyType over a fresh dict,
+    lists and tuples become tuples, recursively. Copying first means the
+    caller's own dict cannot change the frozen value behind its back."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return value
+
+
+def _freeze_fields(instance: object, *names: str) -> None:
+    for name in names:
+        object.__setattr__(instance, name, _freeze(getattr(instance, name)))
+
+
+def to_json_dict(value: object) -> object:
+    """`value` as plain dicts, lists and scalars, ready for json.dump: the
+    inverse of the freezing above, applied through nested dataclasses."""
+    if dataclasses.is_dataclass(value) and not isinstance(value, type):
+        return {
+            f.name: to_json_dict(getattr(value, f.name))
+            for f in dataclasses.fields(value)
+        }
+    if isinstance(value, Mapping):
+        return {key: to_json_dict(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_json_dict(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -45,8 +85,9 @@ class DocumentRef:
     is_deleted: bool
     updated_at: str  # ISO 8601, as returned by Resql
 
-    content_key: str | None  # edited_data_url, falling back to cleaned_data_url
-    metadata_key: str | None  # edited_metadata_url, falling back to cleaned_metadata_url
+    # edited_data_url / edited_metadata_url, falling back to the cleaned_* ones
+    content_key: str | None
+    metadata_key: str | None
     content_origin: str | None  # "edited" | "cleaned" | None when neither exists
     file_size: int | None
 
@@ -93,12 +134,16 @@ class DocumentRecord:
     document_id: str
     source_base_id: str
     content_origin: str  # "edited" | "cleaned"
-    source: dict  # the sidecar, verbatim, nested so upstream keys cannot collide with ours
+    # The sidecar, verbatim, nested so upstream keys cannot collide with ours.
+    source: Mapping[str, Any]
     raw_sha256: str
     content_sha256: str
     metadata_sha256: str
     chunk_count: int
     synced_at: str  # ISO 8601
+
+    def __post_init__(self) -> None:
+        _freeze_fields(self, "source")
 
 
 @dataclass(frozen=True)
@@ -135,7 +180,10 @@ class Manifest:
     document_count: int
     chunker_fingerprint: str
     committed_at: str
-    documents: dict[str, ManifestDocumentEntry] = field(default_factory=dict)
+    documents: Mapping[str, ManifestDocumentEntry] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        _freeze_fields(self, "documents")
 
 
 @dataclass(frozen=True)
@@ -167,5 +215,9 @@ class RunReport:
     deleted_count: int = 0
     skipped_count: int = 0
 
-    skipped_reasons: dict[str, str] = field(default_factory=dict)  # document_id -> reason
+    # document_id -> reason
+    skipped_reasons: Mapping[str, str] = field(default_factory=dict)
     deletions_recorded: int = 0
+
+    def __post_init__(self) -> None:
+        _freeze_fields(self, "skipped_reasons")
