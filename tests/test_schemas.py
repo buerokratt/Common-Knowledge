@@ -67,6 +67,7 @@ def record(source: dict[str, Any]) -> DocumentRecord:
         document_id="d1",
         source_base_id="s1",
         content_origin="cleaned",
+        source_url="https://www.example.ee/teenus",
         source=source,
         raw_sha256="r",
         content_sha256="c",

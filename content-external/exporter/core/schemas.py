@@ -134,6 +134,10 @@ class DocumentRecord:
     document_id: str
     source_base_id: str
     content_origin: str  # "edited" | "cleaned"
+    # The resolved citation: the sidecar's source_url, or source_file.url
+    # when the sidecar's is missing or invalid. Top-level rather than written
+    # back into `source`, which stays verbatim.
+    source_url: str
     # The sidecar, verbatim, nested so upstream keys cannot collide with ours.
     source: Mapping[str, Any]
     raw_sha256: str
@@ -144,6 +148,26 @@ class DocumentRecord:
 
     def __post_init__(self) -> None:
         _freeze_fields(self, "source")
+
+
+@dataclass(frozen=True)
+class ParsedSidecar:
+    """What metadata.parse_sidecar() hands back for a usable sidecar: the
+    sidecar itself, its canonical hash and the resolved citation. Carries no
+    content text."""
+
+    # The parsed JSON object, verbatim. {} when no sidecar exists and
+    # REQUIRE_METADATA_SIDECAR is off.
+    sidecar: Mapping[str, Any]
+    metadata_sha256: str
+    source_url: str  # the resolved citation
+    source_url_origin: str  # "sidecar" | "row"
+    # Both URLs valid and different; the sidecar's was kept. Counted, never
+    # logged per document.
+    source_url_mismatch: bool
+
+    def __post_init__(self) -> None:
+        _freeze_fields(self, "sidecar")
 
 
 @dataclass(frozen=True)
@@ -218,6 +242,12 @@ class RunReport:
     # document_id -> reason
     skipped_reasons: Mapping[str, str] = field(default_factory=dict)
     deletions_recorded: int = 0
+
+    # Citation cross-checks (C2): documents cited from source_file.url
+    # because the sidecar's source_url was unusable, and documents whose two
+    # valid URLs disagreed.
+    source_url_fallback_count: int = 0
+    source_url_mismatch_count: int = 0
 
     def __post_init__(self) -> None:
         _freeze_fields(self, "skipped_reasons")

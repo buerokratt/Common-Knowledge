@@ -26,7 +26,9 @@ CORE_DIR = Path(chunking.__file__).parent
 CORE_MODULES = sorted(CORE_DIR.glob("*.py"))
 
 # Pure standard-library modules: text, hashing and data shapes only. No os,
-# io, pathlib, socket, http, urllib, subprocess, tempfile, logging handlers.
+# io, pathlib, socket, http, subprocess, tempfile, logging handlers — and no
+# urllib except urllib.parse, which is string parsing (metadata.py validates
+# citation URLs with it). Names match exactly, so urllib.request stays out.
 _ALLOWED_STDLIB = frozenset(
     {
         "bisect",
@@ -37,11 +39,13 @@ _ALLOWED_STDLIB = frozenset(
         "functools",
         "hashlib",
         "itertools",
+        "json",
         "math",
         "re",
         "types",
         "typing",
         "unicodedata",
+        "urllib.parse",
     }
 )
 # Builtins that reach outside the process.
@@ -69,6 +73,7 @@ def test_core_has_modules_to_check() -> None:
         "ids",
         "text_normaliser",
         "chunking",
+        "metadata",
     }
 
 
@@ -96,10 +101,12 @@ def test_the_purity_check_catches_an_impure_import() -> None:
     the test above passing vacuously."""
     tree = ast.parse(
         "import os\nfrom exporter.sinks.object_store import X\nfrom . import ids\n"
+        "import urllib.request\nfrom urllib.parse import urlsplit\n"
     )
     assert sorted(m for m in _imports(tree) if _disallowed(m)) == [
         "exporter.sinks.object_store",
         "os",
+        "urllib.request",
     ]
 
 
