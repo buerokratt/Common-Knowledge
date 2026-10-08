@@ -54,8 +54,7 @@ spec:
           emptyDir: {}
         - name: scripts
           emptyDir: {}
-        # Same constants.ini as Ruuter Internal, so CKB_RUUTER_INTERNAL is defined in one place
         - name: constants-config
           configMap:
-            name: {{ .Values.ruuterInternal.nameOverride | default "ruuter-internal" }}-config
+            name: {{ .Values.cronManager.nameOverride | default "cron-manager" }}-config
 {{- end }}
