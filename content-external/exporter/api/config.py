@@ -43,6 +43,13 @@ from typing import Annotated, Literal
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from exporter.core.constants import (
+    CHUNK_PROFILES,
+    DEFAULT_CHUNK_PROFILE,
+    MAX_CHUNK_ORDINAL,
+    ChunkProfile,
+)
+from exporter.core.ids import chunker_fingerprint, validate_prefix
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
 
@@ -240,9 +247,9 @@ class Settings(BaseSettings):
     # chunk_profile is str, not Literal: CHUNK_PROFILES lives in
     # exporter/core/constants.py (B11) and is the single source of truth for
     # the preset list. A Literal here would be a second place to edit for
-    # every preset change and the two would drift. B11 adds the membership
-    # validator against CHUNK_PROFILES.
-    chunk_profile: str = Field(default="azure_native", min_length=1)
+    # every preset change and the two would drift. _check_chunk_profile
+    # validates membership against it instead.
+    chunk_profile: str = Field(default=DEFAULT_CHUNK_PROFILE, min_length=1)
     require_metadata_sidecar: bool = True
     diff_on_missing_manifest: Literal["first_run", "fail"] = "first_run"
     # le=16 enforces F16's documented cap, which makes A16's memory-product
@@ -250,7 +257,11 @@ class Settings(BaseSettings):
     export_concurrency: Annotated[int, Field(ge=1, le=16)] = 4
     bootstrap_checkpoint_every: Annotated[int, Field(ge=1)] = 250
     max_document_bytes: Annotated[int, Field(ge=1)] = 20_971_520
-    max_chunks_per_document: Annotated[int, Field(ge=1)] = 5_000
+    # Capped by the five-digit ordinal in a chunk's blob key (B6): one more
+    # chunk than that and the key grows a digit and stops sorting in order.
+    max_chunks_per_document: Annotated[int, Field(ge=1, le=MAX_CHUNK_ORDINAL + 1)] = (
+        5_000
+    )
 
     # --- CKB ---------------------------------------------------------------
     ruuter_internal: str = "http://ruuter-internal:8089"
@@ -283,6 +294,28 @@ class Settings(BaseSettings):
         normalised = normalise_container_path(value, variable="CONTENT_WORK_DIR")
         assert_not_under_scrapped_data(normalised, variable="CONTENT_WORK_DIR")
         return normalised
+
+    @field_validator("content_external_prefix", "manifest_store_prefix")
+    @classmethod
+    def _check_key_prefix(cls, value: str) -> str:
+        """The key builders refuse a malformed prefix ("content/", "a//b",
+        "../x"); refusing it here makes that a startup error, not a failure
+        at the first key a run builds."""
+        return validate_prefix(value)
+
+    @field_validator("chunk_profile")
+    @classmethod
+    def _check_chunk_profile(cls, value: str) -> str:
+        """B11. A preset name, matched exactly — `Compact` is a typo, and a
+        typo is a startup refusal, the same as on the Literal fields."""
+        if value not in CHUNK_PROFILES:
+            raise ValueError(
+                f"CHUNK_PROFILE={value!r} is not a known preset. Valid: "
+                f"{', '.join(sorted(CHUNK_PROFILES))}. Geometry is a reviewed "
+                "row in exporter/core/constants.py CHUNK_PROFILES, never four "
+                "separate settings — add a preset there if none fits."
+            )
+        return value
 
     # ----------------------------------------------------------------------
     # A12 — the startup validation matrix.
@@ -407,6 +440,40 @@ class Settings(BaseSettings):
                 "certificate verification is never disabled."
             )
         return self
+
+    @model_validator(mode="after")
+    def _check_llm_module_chunk_profile_is_pinned(self) -> "Settings":
+        """B11: `llm_module` refuses the default chunk profile.
+
+        On that sink the llm-module embeds our chunks and no longer chunks
+        itself, so the profile is the geometry of the corpus the assistant
+        answers from, and it has to fit their embedder's token budget. A
+        chunk that does not fit is truncated with no error and no log line.
+        So the profile is pinned per deployment alongside the sink, never
+        inherited from a default chosen for a different destination.
+
+        Last of the after-validators, so the matrix rows above report first.
+        """
+        if (
+            self.content_sink == "llm_module"
+            and "chunk_profile" not in self.model_fields_set
+        ):
+            raise ValueError(
+                "CONTENT_SINK=llm_module requires CHUNK_PROFILE to be set "
+                f"explicitly ({', '.join(sorted(CHUNK_PROFILES))}). On this "
+                "sink the llm-module embeds our chunks, so the profile must be "
+                "chosen from its embedder's token budget: a chunk larger than "
+                "that budget is silently truncated, with no error and no log "
+                "line. Changing it later re-chunks and re-embeds the whole "
+                "corpus, so choose it deliberately."
+            )
+        return self
+
+    @property
+    def resolved_chunk_profile(self) -> ChunkProfile:
+        """The geometry CHUNK_PROFILE names. The one place a name becomes
+        four numbers — build the Chunker and the fingerprint from this."""
+        return CHUNK_PROFILES[self.chunk_profile]
 
     @property
     def work_dir_path(self) -> Path:
@@ -687,8 +754,18 @@ def log_redacted_config(settings: Settings) -> None:
     One line rather than one per field so that
     `docker logs | grep 'content-external config'` yields a single complete
     record that can be diffed between two deployments.
+
+    The resolved chunk geometry and its fingerprint ride along: a profile
+    name says which preset, but only the numbers and the fingerprint say
+    whether two deployments would chunk a document the same way.
     """
     fields = redacted_settings(settings)
+    profile = settings.resolved_chunk_profile
+    fields["chunk_geometry"] = (
+        f"target={profile.target},overlap={profile.overlap},"
+        f"min={profile.min},max={profile.max}"
+    )
+    fields["chunker_fingerprint"] = chunker_fingerprint(profile)
     logger.info(
         "%s %s",
         CONFIG_LOG_PREFIX,
