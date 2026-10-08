@@ -98,6 +98,14 @@ class DocumentRef:
     content_sha256: str | None = None
     metadata_sha256: str | None = None
 
+    # Set by the document source when a read-time guard rejects the document
+    # (oversize, a SidecarRejection value). diff.classify() files it under
+    # `skipped` with this reason, and holds it if it was published before.
+    # None for every document nothing rejected. A guard that can only run
+    # after chunking, such as too many chunks, cannot use this field: it
+    # goes through DiffResult.demote_to_skipped() instead.
+    skip_reason: str | None = None
+
 
 @dataclass(frozen=True)
 class TextSpan:

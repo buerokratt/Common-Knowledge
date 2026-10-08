@@ -74,6 +74,7 @@ def test_core_has_modules_to_check() -> None:
         "text_normaliser",
         "chunking",
         "metadata",
+        "diff",
     }
 
 
