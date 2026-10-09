@@ -37,15 +37,15 @@ scheduler/
 The scheduler manages these recurring tasks (configured in `DSL/CronManager/scheduler.yml`):
 
 1. **Scheduler Check** (every 5 minutes): 
-   - URL: `http://ruuter-internal:8089/ckb/pipeline/scheduler-check-for-unscheduled-records`
+   - URL: `[CKB_RUUTER_INTERNAL]/pipeline/scheduler-check-for-unscheduled-records`
    - Purpose: Identifies sources that need scheduling
 
 2. **Pipeline Trigger** (every 5 minutes):
-   - URL: `http://ruuter-internal:8089/ckb/pipeline/trigger-pipeline-for-sceduled-sources`
+   - URL: `[CKB_RUUTER_INTERNAL]/pipeline/trigger-pipeline-for-sceduled-sources`
    - Purpose: Executes scheduled scraping tasks
 
 3. **Data Zipping** (hourly):
-   - URL: `http://ruuter-internal:8089/ckb/pipeline/zip`
+   - URL: `[CKB_RUUTER_INTERNAL]/pipeline/zip`
    - Purpose: Archives and compresses processed data
 
 ## API Endpoints
@@ -151,9 +151,10 @@ The scheduler service integrates with:
 
 Scheduled tasks are defined in `DSL/CronManager/scheduler.yml` with:
 - **Trigger**: Cron expression for execution timing
-- **Type**: HTTP request type
-- **Method**: HTTP method (GET/POST)
-- **URL**: Target endpoint for task execution
+- **Type**: `exec` — runs a shell script
+- **Command**: one script per job in `DSL/CronManagerScripts/` (e.g. `trigger_zipping.sh`), which sources `constants.ini` and calls `$CKB_RUUTER_INTERNAL/<path>`
+
+The Ruuter Internal base URL comes from `CKB_RUUTER_INTERNAL` in `constants.ini` (docker-compose mounts the root `constants.ini`; Helm mounts the `ruuter-internal-config` ConfigMap), so it is not hardcoded in `scheduler.yml`. CronManager does not substitute `[#...]` placeholders or env vars in job files, which is why a script is used. Keep scripts out of `DSL/CronManager/` — CronManager parses every file there as a job YAML.
 
 ## Use Cases
 

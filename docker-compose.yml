@@ -292,6 +292,8 @@ services:
     # user: root # This root user is only for local development due to multi container mounted volume permissions
     volumes:
       - ./DSL/CronManager:/DSL
+      - ./DSL/CronManagerScripts:/app/scripts
+      - ./constants.ini:/app/constants.ini
     environment:
       - server.port=9010
     ports:

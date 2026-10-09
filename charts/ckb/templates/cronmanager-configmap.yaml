@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.cronManager.nameOverride | default "cron-manager" }}-config
+data:
+  constants.ini: |-
+    CKB_RUUTER_INTERNAL=http://ruuter-internal:8089/ckb
