@@ -23,6 +23,9 @@ from exporter.core.metadata import (
     record_identity,
     resolve_source_url,
 )
+from exporter.core.constants import CHUNK_PROFILES
+from exporter.core.diff import classify, record
+from exporter.core.ids import chunker_fingerprint
 from exporter.core.schemas import (
     DocumentRecord,
     DocumentRef,
@@ -698,3 +701,37 @@ def test_ascii_identity_refuses_anything_off_shape(
     record = dataclasses.replace(estonian_record(), **overrides)  # type: ignore[arg-type]
     with pytest.raises(ValueError):
         ascii_identity(record)
+
+
+# --- the published record and the manifest entry agree ----------------------
+
+
+def test_the_published_record_and_the_manifest_entry_agree() -> None:
+    """Two shapes are built from one read row: the record the destination
+    receives and the entry the next diff compares against. Wherever they
+    share a field they must agree, or the next run diffs against something
+    that was never published."""
+    parsed = parsed_ok(encode(cleaned_sidecar()))
+    row = ref(metadata_sha256=parsed.metadata_sha256, file_size=48213)
+    fingerprint = chunker_fingerprint(CHUNK_PROFILES["azure_native"])
+    result = classify(None, [row], fingerprint).with_chunk_tails({row.document_id: 12})
+    entry = record(
+        result, {row.document_id}, tails_deleted=set(), processed_at=SYNCED_AT
+    )[row.document_id]
+    published = build_document_record(
+        row,
+        parsed,
+        chunk_count=result.chunk_counts[row.document_id],
+        synced_at=SYNCED_AT,
+    )
+    shared = (
+        "source_base_id",
+        "content_origin",
+        "raw_sha256",
+        "content_sha256",
+        "metadata_sha256",
+        "chunk_count",
+    )
+    assert {name: getattr(entry, name) for name in shared} == {
+        name: getattr(published, name) for name in shared
+    }

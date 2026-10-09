@@ -190,8 +190,13 @@ class ManifestDocumentEntry:
     raw_sha256: str
     content_sha256: str
     metadata_sha256: str
-    file_size: int
+    file_size: int | None  # source_file.file_size, audit only; may be absent
     chunk_count: int
+    # The geometry this document's live chunks were cut with. Per entry, not
+    # only per manifest: a document held or failed through a fingerprint
+    # change keeps its old chunks, and must still be re-chunked once it is
+    # read again.
+    chunker_fingerprint: str
     state: str  # e.g. "published"
     processed_at: str
 

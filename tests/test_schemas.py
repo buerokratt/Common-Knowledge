@@ -42,6 +42,7 @@ def entry(**overrides: str | int) -> ManifestDocumentEntry:
         "metadata_sha256": "m",
         "file_size": 10,
         "chunk_count": 2,
+        "chunker_fingerprint": "f",
         "state": "published",
         "processed_at": "2026-10-06T00:00:00Z",
     }

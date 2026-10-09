@@ -31,6 +31,7 @@ from exporter.core.diff import (
     classify,
     classify_document,
     needs_read,
+    record,
     tail_coordinates,
 )
 from exporter.core.ids import chunker_fingerprint
@@ -47,9 +48,9 @@ CONTENT = "b" * 64
 META = "c" * 64
 PUBLISHED_AT = "2026-10-01T09:00:00Z"
 MOVED_AT = "2026-10-08T09:00:00Z"
+LATER = "2026-10-09T10:00:00Z"  # when this run's publishes land
 
 DIFF_SOURCE = Path(diff.__file__).read_text(encoding="utf-8")
-CONTENT_EXTERNAL_DIR = Path(diff.__file__).parents[2]
 FULL_HEX = re.compile(r"[0-9a-f]{64}")
 
 DIFF_CLASSES = (ChunkCoordinate, DocumentDiff, DiffResult)
@@ -105,6 +106,7 @@ def entry(**overrides: object) -> ManifestDocumentEntry:
         "metadata_sha256": META,
         "file_size": 48213,
         "chunk_count": 5,
+        "chunker_fingerprint": FP,
         "state": "published",
         "processed_at": PUBLISHED_AT,
     }
@@ -116,7 +118,16 @@ def manifest(
     *,
     fingerprint: str = FP,
     sink_id: str = "object_store",
+    stamp: bool = True,
 ) -> Manifest:
+    """A committed manifest. With `stamp`, every entry carries the
+    manifest's fingerprint, which is what a manifest written in one run
+    looks like; pass stamp=False to keep each entry's own."""
+    if stamp:
+        documents = {
+            key: dataclasses.replace(value, chunker_fingerprint=fingerprint)
+            for key, value in documents.items()
+        }
     return Manifest(
         schema_version=1,
         manifest_schema_version=2,
@@ -178,7 +189,7 @@ def test_a_result_cannot_be_rebound_and_buckets_are_tuples() -> None:
 
 
 def test_lists_passed_in_are_frozen_into_tuples() -> None:
-    change = classify_document(None, ref(1), fingerprint_changed=False)
+    change = classify_document(None, ref(1), chunker_fingerprint=FP)
     assert change is not None
     result = DiffResult(
         first_run=True,
@@ -190,7 +201,7 @@ def test_lists_passed_in_are_frozen_into_tuples() -> None:
 
 
 def test_an_entry_in_the_wrong_bucket_is_refused() -> None:
-    change = classify_document(None, ref(1), fingerprint_changed=False)
+    change = classify_document(None, ref(1), chunker_fingerprint=FP)
     with pytest.raises(ValueError, match="sits in"):
         DiffResult(
             first_run=True,
@@ -281,7 +292,7 @@ def test_repr_shows_counts_only() -> None:
 
 
 def test_document_diff_repr_leaves_out_the_row_and_the_entry() -> None:
-    change = classify_document(entry(), ref(1), fingerprint_changed=False)
+    change = classify_document(entry(), ref(1), chunker_fingerprint=FP)
     text = repr(change)
     assert doc(1) in text
     assert not FULL_HEX.search(text)
@@ -328,7 +339,7 @@ def test_classify_and_classify_document_agree() -> None:
     result = classify(previous, rows, FP)
     for row in rows:
         change = classify_document(
-            previous.documents.get(row.document_id), row, fingerprint_changed=False
+            previous.documents.get(row.document_id), row, chunker_fingerprint=FP
         )
         assert change is not None
         assert bucket_of(result, int(row.document_id[-12:])) is change.bucket
@@ -435,7 +446,7 @@ def test_gate_2_does_not_spare_a_row_whose_published_fields_moved(
     """updated_at alone is not enough: a row whose content_origin or
     source_base_id moved must be read, even if updated_at did not."""
     row = unread(1, **overrides)
-    assert needs_read(entry(), row, fingerprint_changed=False)
+    assert needs_read(entry(), row, chunker_fingerprint=FP)
     with pytest.raises(ValueError, match="row moved"):
         classify(published(1), [row], FP)
     read = ref(1, updated_at=PUBLISHED_AT, **overrides)
@@ -470,12 +481,13 @@ def test_needs_read_is_exactly_what_classify_document_requires(
 ) -> None:
     """needs_read() False means the unread row classifies; True means the
     unread row is refused. So a caller that asks it can never drift."""
-    assert needs_read(previous, row, fingerprint_changed=fp_changed) is expected
+    current = OTHER_FP if fp_changed else FP  # entry() carries FP
+    assert needs_read(previous, row, chunker_fingerprint=current) is expected
     if expected:
         with pytest.raises(ValueError, match="not been read"):
-            classify_document(previous, row, fingerprint_changed=fp_changed)
+            classify_document(previous, row, chunker_fingerprint=current)
     else:
-        classify_document(previous, row, fingerprint_changed=fp_changed)
+        classify_document(previous, row, chunker_fingerprint=current)
 
 
 @pytest.mark.parametrize("state", ["pending", "failed", ""])
@@ -534,8 +546,7 @@ def test_a_signal_on_a_never_published_row_is_in_no_bucket() -> None:
     assert result.deleted_unpublished == 2
     assert sum(result.counts().values()) == 1
     assert (
-        classify_document(None, ref(2, is_deleted=True), fingerprint_changed=False)
-        is None
+        classify_document(None, ref(2, is_deleted=True), chunker_fingerprint=FP) is None
     )
 
 
@@ -803,7 +814,7 @@ def test_is_purge_only_when_everything_published_goes() -> None:
 def test_from_documents_counts_unpublished_deletions_itself() -> None:
     rows = [ref(1), ref(2, is_deleted=True), ref(3, status="not_found")]
     streamed = DiffResult.from_documents(
-        (classify_document(None, row, fingerprint_changed=False) for row in rows),
+        (classify_document(None, row, chunker_fingerprint=FP) for row in rows),
         first_run=True,
         fingerprint_changed=False,
         chunker_fingerprint=FP,
@@ -842,72 +853,506 @@ def test_a_coordinate_must_be_well_formed(document_id: str, ordinal: int) -> Non
         ChunkCoordinate(document_id, ordinal)
 
 
-# --- C10, C11, C12, C20 -------------------------------------------------------
+# --- chunk_counts: the counts the tails are derived from ---------------------
 
 
-def _code_words(path: Path) -> list[str]:
-    """Everything in a Python file a program could act on: names, imports,
-    attributes and string literals, but not docstrings or comments. Prose
-    may record that DVC was dropped; code may not use it."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    docstrings = {
-        id(node.body[0].value)
-        for node in ast.walk(tree)
-        if isinstance(
-            node, ast.Module | ast.ClassDef | ast.FunctionDef | ast.AsyncFunctionDef
-        )
-        and node.body
-        and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Constant)
+def test_with_chunk_tails_keeps_every_count_and_demotion_drops_one() -> None:
+    result = classify(
+        published(1), [ref(1, content_sha256="d" * 64), ref(2)], FP
+    ).with_chunk_tails({doc(1): 3, doc(2): 4})
+    assert dict(result.chunk_counts) == {doc(1): 3, doc(2): 4}
+    demoted = result.demote_to_skipped(doc(1), "too_many_chunks")
+    assert dict(demoted.chunk_counts) == {doc(2): 4}
+    assert doc(2) not in repr(result)
+
+
+def test_counts_can_be_added_in_steps_and_completeness_counts_them_all() -> None:
+    result = classify(
+        published(1, 2),
+        [ref(1, content_sha256="d" * 64), ref(2, content_sha256="d" * 64)],
+        FP,
+    )
+    step = result.with_chunk_tails({doc(1): 3}, require_complete=False)
+    done = step.with_chunk_tails({doc(2): 9})
+    assert dict(done.chunk_counts) == {doc(1): 3, doc(2): 9}
+    assert done.chunks_to_delete == (
+        ChunkCoordinate(doc(1), 3),
+        ChunkCoordinate(doc(1), 4),
+    )
+
+
+def test_counts_for_a_document_that_was_not_chunked_are_refused() -> None:
+    result = classify(published(1), [ref(1), ref(2)], FP)
+    with pytest.raises(ValueError, match="not new or content_changed"):
+        dataclasses.replace(result, chunk_counts={doc(1): 2})  # unchanged
+    with pytest.raises(ValueError, match="not new or content_changed"):
+        dataclasses.replace(result, chunk_counts={doc(9): 2})  # unknown
+    with pytest.raises(ValueError):
+        dataclasses.replace(result, chunk_counts={doc(2): -1})
+
+
+def test_tails_must_be_exactly_what_the_counts_imply() -> None:
+    result = classify(published(1), [ref(1, content_sha256="d" * 64)], FP)
+    with pytest.raises(ValueError, match="has no chunk count"):
+        dataclasses.replace(result, chunks_to_delete=(ChunkCoordinate(doc(1), 4),))
+    tailed = result.with_chunk_tails({doc(1): 3})
+    with pytest.raises(ValueError, match="does not match its chunk count"):
+        dataclasses.replace(tailed, chunk_counts={doc(1): 4})
+    with pytest.raises(ValueError, match="does not match its chunk count"):
+        dataclasses.replace(tailed, chunks_to_delete=(ChunkCoordinate(doc(1), 4),))
+
+
+# --- per-entry chunker fingerprint --------------------------------------------
+
+
+def test_an_entry_cut_with_an_old_fingerprint_is_rechunked() -> None:
+    """The manifest's fingerprint is current, but one document's chunks
+    predate it. It is read and re-chunked even though its row never moved;
+    the rest are left alone."""
+    previous = manifest(
+        {doc(1): entry(chunker_fingerprint=OTHER_FP), doc(2): entry()}, stamp=False
+    )
+    assert needs_read(previous.documents[doc(1)], unread(1), chunker_fingerprint=FP)
+    assert not needs_read(previous.documents[doc(2)], unread(2), chunker_fingerprint=FP)
+    result = classify(previous, [ref(1, updated_at=PUBLISHED_AT), unread(2)], FP)
+    assert result.fingerprint_changed is False
+    assert bucket_of(result, 1) is Bucket.CONTENT_CHANGED
+    assert bucket_of(result, 2) is Bucket.UNCHANGED
+
+
+def test_a_document_held_through_a_fingerprint_change_is_rechunked_once() -> None:
+    """The case a manifest-level fingerprint alone gets wrong: the document
+    is in review while the geometry changes, keeps its old chunks, and its
+    content never changes afterwards."""
+    finished_at = "2026-10-09T08:00:00Z"
+    previous = manifest({doc(1): entry(), doc(2): entry()}, fingerprint=OTHER_FP)
+
+    # The geometry changes while document 2 is in review.
+    run = classify(
+        previous, [ref(1), unread(2, status="in_review", updated_at=MOVED_AT)], FP
+    ).with_chunk_tails({doc(1): 5})
+    assert run.held[0].document_id == doc(2)
+    entries = record(run, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+    assert entries[doc(2)].chunker_fingerprint == OTHER_FP
+
+    # Document 2 finishes with the same content: re-chunked, not unchanged.
+    rows = [unread(1, updated_at=MOVED_AT), ref(2, updated_at=finished_at)]
+    run = classify(manifest(entries, stamp=False), rows, FP)
+    assert bucket_of(run, 1) is Bucket.UNCHANGED
+    assert bucket_of(run, 2) is Bucket.CONTENT_CHANGED
+    entries = record(
+        run.with_chunk_tails({doc(2): 5}),
+        {doc(2)},
+        tails_deleted=set(),
+        processed_at=LATER,
+    )
+
+    # And never again.
+    rows = [unread(1, updated_at=MOVED_AT), unread(2, updated_at=finished_at)]
+    run = classify(manifest(entries, stamp=False), rows, FP)
+    assert run.counts()["unchanged"] == 2
+
+
+@pytest.mark.parametrize("bad", ["", "f", FP.upper()])
+def test_a_malformed_entry_fingerprint_is_refused(bad: str) -> None:
+    previous = manifest({doc(1): entry(chunker_fingerprint=bad)}, stamp=False)
+    with pytest.raises(ValueError, match="malformed chunker_fingerprint"):
+        classify(previous, [ref(1)], FP)
+
+
+def test_classify_document_and_needs_read_refuse_a_malformed_fingerprint() -> None:
+    with pytest.raises(ValueError, match="chunker_fingerprint"):
+        classify_document(entry(), ref(1), chunker_fingerprint="f")
+    with pytest.raises(ValueError, match="chunker_fingerprint"):
+        needs_read(entry(), ref(1), chunker_fingerprint="f")
+
+
+# --- C17: record ---------------------------------------------------------------
+
+
+def test_record_signature_is_the_designed_one() -> None:
+    assert list(inspect.signature(record).parameters) == [
+        "diff",
+        "published",
+        "tails_deleted",
+        "processed_at",
+    ]
+    # Required, not defaulted: a forgotten tails_deleted must not compile
+    # into "no tail was ever confirmed" and re-publish shrunk documents
+    # every run.
+    assert inspect.signature(record).parameters["tails_deleted"].default is (
+        inspect.Parameter.empty
+    )
+
+
+def test_a_published_new_document_gets_a_fresh_entry() -> None:
+    result = classify(None, [ref(1, file_size=48213)], FP).with_chunk_tails({doc(1): 3})
+    assert record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER) == {
+        doc(1): entry(source_updated_at=MOVED_AT, chunk_count=3, processed_at=LATER)
     }
-    words: list[str] = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Name):
-            words.append(node.id)
-        elif isinstance(node, ast.Attribute):
-            words.append(node.attr)
-        elif isinstance(node, ast.alias):
-            words.append(node.name)
-        elif isinstance(node, ast.FunctionDef | ast.ClassDef):
-            words.append(node.name)
-        elif (
-            isinstance(node, ast.Constant)
-            and isinstance(node.value, str)
-            and id(node) not in docstrings
-        ):
-            words.append(node.value)
-    return words
 
 
-def test_nothing_in_the_service_uses_dvc() -> None:
-    """C10: no DVC functions, no DVC config and none of the ancestor's
-    direct-credential settings. Python files are checked by their code,
-    other files (Dockerfile, config) by their whole text; Markdown is prose."""
-    offenders: list[str] = []
-    for path in CONTENT_EXTERNAL_DIR.rglob("*"):
-        if not path.is_file() or "__pycache__" in path.parts or path.suffix == ".md":
-            continue
-        if path.suffix == ".py":
-            text = "\n".join(_code_words(path))
-        else:
-            text = path.read_text(encoding="utf-8", errors="ignore")
-        if "dvc" in text.lower():
-            offenders.append(path.relative_to(CONTENT_EXTERNAL_DIR).as_posix())
-    assert not offenders
+def test_the_entry_takes_file_size_as_it_is_even_when_absent() -> None:
+    result = classify(None, [ref(1)], FP).with_chunk_tails({doc(1): 3})
+    assert (
+        record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER)[
+            doc(1)
+        ].file_size
+        is None
+    )
 
 
-def test_the_dvc_check_sees_code_but_not_prose(tmp_path: Path) -> None:
-    """The check's own regression test, so it cannot pass vacuously."""
-    prose = tmp_path / "prose.py"
-    prose.write_text('"""No DVC here."""\n# nor dvc here\nx = 1\n', encoding="utf-8")
-    code = tmp_path / "code.py"
-    code.write_text("def initialize_dvc() -> None:\n    pass\n", encoding="utf-8")
-    assert not any("dvc" in w.lower() for w in _code_words(prose))
-    assert "initialize_dvc" in _code_words(code)
+def test_a_new_document_that_did_not_publish_is_absent() -> None:
+    result = classify(None, [ref(1)], FP).with_chunk_tails({doc(1): 3})
+    assert record(result, set(), tails_deleted=set(), processed_at=LATER) == {}
+
+
+def test_a_published_content_changed_document_records_its_new_count() -> None:
+    row = ref(1, content_sha256="d" * 64, file_size=48213)
+    result = classify(published(1), [row], FP).with_chunk_tails({doc(1): 3})
+    assert record(result, {doc(1)}, tails_deleted={doc(1)}, processed_at=LATER) == {
+        doc(1): entry(
+            source_updated_at=MOVED_AT,
+            content_sha256="d" * 64,
+            chunk_count=3,
+            processed_at=LATER,
+        )
+    }
+
+
+def test_a_grown_document_has_no_tail_to_confirm() -> None:
+    row = ref(1, content_sha256="d" * 64)
+    result = classify(published(1), [row], FP).with_chunk_tails({doc(1): 8})
+    entries = record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+    assert entries[doc(1)].chunk_count == 8
+
+
+def test_an_upserted_document_whose_tail_delete_failed_keeps_the_old_count() -> None:
+    """Review finding: recording the new, smaller count would leave nothing
+    that ever names the old tail again. Carried, the next run re-reads the
+    row, repeats the upsert and recomputes the same tail from the live
+    count, so the delete is retried."""
+    rows = [ref(1, content_sha256="d" * 64)]
+    result = classify(published(1), rows, FP).with_chunk_tails({doc(1): 3})
+    entries = record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+    assert entries == {doc(1): entry()}
+    again = classify(manifest(entries), rows, FP).with_chunk_tails({doc(1): 3})
+    assert again.chunks_to_delete == result.chunks_to_delete
+    # Once the delete is confirmed, the new count is recorded.
+    done = record(again, {doc(1)}, tails_deleted={doc(1)}, processed_at=LATER)
+    assert done[doc(1)].chunk_count == 3
+
+
+@pytest.mark.parametrize(
+    "rows",
+    [
+        [ref(1, content_sha256="d" * 64)],  # grown: no tail
+        [ref(1)],  # unchanged
+        [ref(1, metadata_sha256="e" * 64)],  # metadata_changed
+    ],
+    ids=["no-tail", "unchanged", "metadata_changed"],
+)
+def test_tails_deleted_may_only_name_a_document_with_a_tail(
+    rows: list[DocumentRef],
+) -> None:
+    result = classify(published(1), rows, FP)
+    if result.content_changed:
+        result = result.with_chunk_tails({doc(1): 9})
+    with pytest.raises(ValueError, match="had no tail"):
+        record(result, set(), tails_deleted={doc(1)}, processed_at=LATER)
+
+
+def test_a_content_changed_document_that_failed_keeps_what_is_live() -> None:
+    """Its previous entry is carried, so the next run re-reads it and works
+    out the tail from the five chunks still at the destination."""
+    rows = [ref(1, content_sha256="d" * 64)]
+    result = classify(published(1), rows, FP).with_chunk_tails({doc(1): 3})
+    entries = record(result, set(), tails_deleted=set(), processed_at=LATER)
+    assert entries == {doc(1): entry()}
+    assert needs_read(
+        entries[doc(1)], unread(1, updated_at=MOVED_AT), chunker_fingerprint=FP
+    )
+    again = classify(manifest(entries), rows, FP).with_chunk_tails({doc(1): 3})
+    assert again.chunks_to_delete == (
+        ChunkCoordinate(doc(1), 3),
+        ChunkCoordinate(doc(1), 4),
+    )
+
+
+def test_a_published_metadata_change_keeps_the_chunk_count() -> None:
+    row = ref(1, metadata_sha256="e" * 64, file_size=48213)
+    result = classify(published(1), [row], FP)
+    assert record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER) == {
+        doc(1): entry(
+            source_updated_at=MOVED_AT, metadata_sha256="e" * 64, processed_at=LATER
+        )
+    }
+
+
+def test_a_metadata_change_that_failed_keeps_the_previous_entry() -> None:
+    result = classify(published(1), [ref(1, metadata_sha256="e" * 64)], FP)
+    assert record(result, set(), tails_deleted=set(), processed_at=LATER) == {
+        doc(1): entry()
+    }
+
+
+def test_an_unread_unchanged_document_is_carried_verbatim() -> None:
+    result = classify(published(1), [unread(1)], FP)
+    assert record(result, set(), tails_deleted=set(), processed_at=LATER) == {
+        doc(1): entry()
+    }
+
+
+def test_a_read_unchanged_document_advances_so_gate_2_spares_it() -> None:
+    """Its row moved but nothing published did, a BOM change for instance.
+    Without advancing, it would be read again every run forever."""
+    row = ref(1, raw_sha256="f" * 64, file_size=50000)
+    entries = record(
+        classify(published(1), [row], FP),
+        set(),
+        tails_deleted=set(),
+        processed_at=LATER,
+    )
+    assert entries == {
+        doc(1): entry(source_updated_at=MOVED_AT, raw_sha256="f" * 64, file_size=50000)
+    }
+    assert not needs_read(
+        entries[doc(1)], unread(1, updated_at=MOVED_AT), chunker_fingerprint=FP
+    )
+
+
+@pytest.mark.parametrize(
+    "row",
+    [
+        unread(1, status="in_review", updated_at=MOVED_AT),
+        unread(1, content_key=None, content_origin=None, updated_at=MOVED_AT),
+        unread(1, skip_reason="sidecar_missing", updated_at=MOVED_AT),
+    ],
+    ids=["not-ready", "no-content", "reader-skip"],
+)
+def test_a_held_document_is_carried_verbatim_and_never_advanced(
+    row: DocumentRef,
+) -> None:
+    result = classify(published(1), [row], FP)
+    assert result.held
+    entries = record(result, set(), tails_deleted=set(), processed_at=LATER)
+    assert entries == {doc(1): entry()}
+    assert entries[doc(1)].source_updated_at == PUBLISHED_AT
+
+
+def test_a_never_published_skipped_document_is_absent() -> None:
+    result = classify(None, [unread(1, status="in_review")], FP)
+    assert record(result, set(), tails_deleted=set(), processed_at=LATER) == {}
+
+
+def test_deleted_documents_leave_the_manifest() -> None:
+    rows = [ref(1, is_deleted=True), ref(2, status="not_found")]
+    result = classify(published(1, 2, 3), rows, FP)
+    assert len(result.deleted) == 3
+    assert record(result, set(), tails_deleted=set(), processed_at=LATER) == {}
+
+
+def test_record_is_sorted_by_document_id() -> None:
+    rows = [ref(3), ref(1), ref(2)]
+    result = classify(None, rows, FP).with_chunk_tails({doc(n): 1 for n in (1, 2, 3)})
+    entries = record(
+        result, {doc(1), doc(2), doc(3)}, tails_deleted=set(), processed_at=LATER
+    )
+    assert list(entries) == [doc(1), doc(2), doc(3)]
+
+
+def test_a_manifest_built_from_record_classifies_as_nothing_to_do() -> None:
+    rows = [
+        ref(1),  # unchanged, read
+        ref(2, content_sha256="d" * 64),
+        ref(3, metadata_sha256="e" * 64),
+        unread(4, status="in_review", updated_at=MOVED_AT),  # held
+        ref(5),  # new
+        ref(6, is_deleted=True),  # never published
+    ]
+    result = classify(published(1, 2, 3, 4), rows, FP).with_chunk_tails(
+        {doc(2): 4, doc(5): 2}
+    )
+    entries = record(
+        result, {doc(2), doc(3), doc(5)}, tails_deleted={doc(2)}, processed_at=LATER
+    )
+    again = classify(manifest(entries), rows, FP)
+    assert again.counts() == {
+        "new": 0,
+        "content_changed": 0,
+        "metadata_changed": 0,
+        "unchanged": 4,
+        "deleted": 0,
+        "skipped": 1,
+    }
+
+
+def test_record_ignores_the_manifest_sink_id() -> None:
+    rows = [ref(1, metadata_sha256="e" * 64), ref(2)]
+
+    def entries_for(sink_id: str) -> dict[str, ManifestDocumentEntry]:
+        result = classify(manifest({doc(1): entry()}, sink_id=sink_id), rows, FP)
+        result = result.with_chunk_tails({doc(2): 1})
+        return record(result, {doc(1), doc(2)}, tails_deleted=set(), processed_at=LATER)
+
+    assert entries_for("object_store") == entries_for("llm_module")
+
+
+@pytest.mark.parametrize(
+    ("published_ids", "message"),
+    [
+        ({doc(1)}, "nothing to publish"),  # unchanged
+        ({doc(3)}, "nothing to publish"),  # held
+        ({doc(9)}, "nothing to publish"),  # unknown
+        ({doc(2)}, "no chunk count"),  # new, never counted
+    ],
+)
+def test_record_refuses_a_published_set_that_cannot_be_right(
+    published_ids: set[str], message: str
+) -> None:
+    rows = [ref(1), ref(2), unread(3, status="in_review")]
+    result = classify(published(1, 3), rows, FP)
+    with pytest.raises(ValueError, match=message):
+        record(result, published_ids, tails_deleted=set(), processed_at=LATER)
+
+
+@pytest.mark.parametrize("processed_at", ["", None])
+def test_record_needs_a_processed_at(processed_at: object) -> None:
+    with pytest.raises(ValueError, match="processed_at"):
+        record(
+            classify(None, [], FP),
+            set(),
+            tails_deleted=set(),
+            processed_at=processed_at,
+        )  # type: ignore[arg-type]
+
+
+def test_a_demoted_content_changed_document_is_carried_and_retried() -> None:
+    rows = [ref(1, content_sha256="d" * 64)]
+    result = classify(published(1), rows, FP).with_chunk_tails({doc(1): 3})
+    demoted = result.demote_to_skipped(doc(1), "too_many_chunks")
+    entries = record(demoted, set(), tails_deleted=set(), processed_at=LATER)
+    assert entries == {doc(1): entry()}
+    # Nothing about it was published, so the next run reads it again.
+    again = classify(manifest(entries), rows, FP)
+    assert only(again).bucket is Bucket.CONTENT_CHANGED
+
+
+def test_a_demoted_new_document_is_absent_and_cannot_be_published() -> None:
+    demoted = (
+        classify(None, [ref(1)], FP)
+        .with_chunk_tails({doc(1): 3})
+        .demote_to_skipped(doc(1), "too_many_chunks")
+    )
+    assert record(demoted, set(), tails_deleted=set(), processed_at=LATER) == {}
+    with pytest.raises(ValueError, match="nothing to publish"):
+        record(demoted, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+
+
+def test_a_failed_publish_across_a_fingerprint_change_keeps_the_old_geometry() -> None:
+    """The manifest moves to the new fingerprint; the failed document's
+    entry does not, so the next run re-chunks it even with an unmoved row."""
+    previous = manifest({doc(1): entry(), doc(2): entry()}, fingerprint=OTHER_FP)
+    rows = [ref(1, updated_at=PUBLISHED_AT), ref(2, updated_at=PUBLISHED_AT)]
+    result = classify(previous, rows, FP).with_chunk_tails({doc(1): 5, doc(2): 5})
+    assert result.fingerprint_changed
+    entries = record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+    assert entries[doc(1)].chunker_fingerprint == FP
+    assert entries[doc(2)] == previous.documents[doc(2)]
+    assert entries[doc(2)].chunker_fingerprint == OTHER_FP
+    unmoved = [unread(1), unread(2)]
+    again = classify(manifest(entries, stamp=False), unmoved[:1] + [rows[1]], FP)
+    assert again.fingerprint_changed is False
+    assert bucket_of(again, 1) is Bucket.UNCHANGED
+    assert bucket_of(again, 2) is Bucket.CONTENT_CHANGED
+    assert needs_read(entries[doc(2)], unmoved[1], chunker_fingerprint=FP)
+
+
+def test_a_first_run_checkpoint_records_only_what_published() -> None:
+    """F15: a first-run checkpoint commits a partial manifest. The next run
+    finds the checkpointed documents unchanged at zero reads and the rest
+    still new."""
+    rows = [ref(n) for n in (1, 2, 3, 4)]
+    result = classify(None, rows, FP).with_chunk_tails(
+        {doc(n): 2 for n in (1, 2, 3, 4)}
+    )
+    checkpoint = record(
+        result, {doc(1), doc(2)}, tails_deleted=set(), processed_at=LATER
+    )
+    assert set(checkpoint) == {doc(1), doc(2)}
+    resumed = [unread(1, updated_at=MOVED_AT), unread(2, updated_at=MOVED_AT)]
+    again = classify(manifest(checkpoint), resumed + rows[2:], FP)
+    assert [e.document_id for e in again.unchanged] == [doc(1), doc(2)]
+    assert [e.document_id for e in again.new] == [doc(3), doc(4)]
+    assert not again.deleted
+
+
+def test_record_after_a_partial_count_refuses_an_uncounted_publish() -> None:
+    rows = [ref(1, content_sha256="d" * 64), ref(2, content_sha256="d" * 64)]
+    partial = classify(published(1, 2), rows, FP).with_chunk_tails(
+        {doc(1): 7}, require_complete=False
+    )
+    entries = record(partial, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+    assert entries[doc(1)].chunk_count == 7
+    assert entries[doc(2)] == entry()  # uncounted and unpublished: carried
+    with pytest.raises(ValueError, match="no chunk count"):
+        record(partial, {doc(1), doc(2)}, tails_deleted=set(), processed_at=LATER)
+
+
+def test_a_forced_read_of_an_unmoved_row_refreshes_only_the_raw_side() -> None:
+    row = ref(1, updated_at=PUBLISHED_AT, raw_sha256="f" * 64, file_size=1)
+    result = classify(published(1), [row], FP)
+    assert only(result).bucket is Bucket.UNCHANGED
+    entries = record(result, set(), tails_deleted=set(), processed_at=LATER)
+    assert entries == {doc(1): entry(raw_sha256="f" * 64, file_size=1)}
+
+
+def test_a_bool_is_not_a_chunk_count() -> None:
+    result = classify(published(1), [ref(1, content_sha256="d" * 64)], FP)
+    with pytest.raises(ValueError, match="chunk count"):
+        result.with_chunk_tails({doc(1): True})
+    with pytest.raises(ValueError, match="chunk count"):
+        dataclasses.replace(result, chunk_counts={doc(1): False})
+    with pytest.raises(ValueError, match="ordinal"):
+        ChunkCoordinate(doc(1), True)
+
+
+def test_a_row_with_no_content_origin_is_held_before_anything_publishes() -> None:
+    """Review finding: without this, the missing origin surfaced only in
+    record(), after the destination had been written."""
+    row = ref(1, content_origin=None, content_sha256="d" * 64)
+    change = only(classify(published(1), [row], FP))
+    assert (change.bucket, change.reason, change.held) == (
+        Bucket.SKIPPED,
+        SkipReason.NO_CONTENT_ORIGIN,
+        True,
+    )
+    assert not needs_read(entry(), row, chunker_fingerprint=FP)
+    assert only(classify(None, [row], FP)).bucket is Bucket.SKIPPED
+    with pytest.raises(ValueError, match="content_origin"):
+        DocumentDiff(doc(1), Bucket.NEW, None, row, None)
+
+
+def test_record_refuses_a_hand_built_verdict_that_was_never_read() -> None:
+    change = DocumentDiff(doc(1), Bucket.NEW, None, unread(1), None)
+    result = DiffResult(
+        first_run=True,
+        fingerprint_changed=False,
+        chunker_fingerprint=FP,
+        new=(change,),
+        chunk_counts={doc(1): 1},
+    )
+    with pytest.raises(ValueError, match="not been read"):
+        record(result, {doc(1)}, tails_deleted=set(), processed_at=LATER)
+
+
+# --- C11, C12, C18, C20 (C10's no-DVC check is in test_core_purity.py) -------
 
 
 @pytest.mark.parametrize("word", ["sink", "store", "blob", "http"])
 def test_the_diff_names_no_destination_or_transport(word: str) -> None:
+    """Stricter than test_core_purity: not even the prose of this module
+    names a destination."""
     assert word not in DIFF_SOURCE.lower()
 
 
@@ -917,6 +1362,23 @@ def test_the_module_header_records_the_keying_decision() -> None:
     assert "files_map[file_hash]" in header
 
 
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "RAG-Module-Internal/src/vector_indexer/diff_identifier/",
+        "does not flow back",
+        "mark_files_processed()",  # C17: no re-read, no re-hash
+        "force_metadata_update",
+        "document_hash",  # the hash-convention divergence
+        "per manifest entry",
+    ],
+)
+def test_the_module_header_records_the_fork_provenance(phrase: str) -> None:
+    """C18: the origin, that the fork is one-way, and every divergence."""
+    header = " ".join((ast.get_docstring(ast.parse(DIFF_SOURCE)) or "").split())
+    assert phrase in header
+
+
 def test_error_messages_carry_no_hash_or_url() -> None:
     changed = classify(published(1), [ref(1, content_sha256="d" * 64)], FP)
     cases = [
@@ -924,6 +1386,9 @@ def test_error_messages_carry_no_hash_or_url() -> None:
         lambda: classify(published(1), [ref(1, agency_id="x")], FP),
         lambda: classify(None, [ref(1), ref(1)], FP),
         lambda: changed.with_chunk_tails({doc(7): 1}),
+        lambda: record(changed, {doc(1)}, tails_deleted=set(), processed_at=LATER),
+        lambda: record(changed, {doc(7)}, tails_deleted=set(), processed_at=LATER),
+        lambda: dataclasses.replace(changed, chunk_counts={doc(7): 1}),
     ]
     for case in cases:
         with pytest.raises(ValueError) as caught:
