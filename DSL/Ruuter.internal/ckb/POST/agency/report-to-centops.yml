@@ -32,14 +32,14 @@ getAgencyZipStatus:
 
 checkAgencyReady:
   switch:
-    - condition: ${agencyRes.response.body.length > 0 && agencyRes.response.body[0].zipped_data_url && agencyRes.response.body[0].data_hash && !agencyRes.response.body[0].is_zipping}
+    - condition: ${agencyRes.response.body.length > 0 && agencyRes.response.body[0].zippedDataUrl && agencyRes.response.body[0].dataHash && !agencyRes.response.body[0].isZipping}
       next: assignAgencyData
   next: returnSkipped
 
 assignAgencyData:
   assign:
-    data_hash: ${agencyRes.response.body[0].data_hash}
-    zipped_data_url: ${agencyRes.response.body[0].zipped_data_url}
+    data_hash: ${agencyRes.response.body[0].dataHash}
+    zipped_data_url: ${agencyRes.response.body[0].zippedDataUrl}
 
 createPresignedUrl:
   call: http.post
