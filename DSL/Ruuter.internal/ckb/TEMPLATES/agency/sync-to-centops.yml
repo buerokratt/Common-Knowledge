@@ -55,6 +55,7 @@ sendToCentops:
       presigned_url: ${presigned_url}
       presigned_url_etag: ${presigned_url_etag}
   result: centopsRes
+  timeout: 10000
   logging:
     request: false
     response: false
