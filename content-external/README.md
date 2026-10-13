@@ -295,3 +295,30 @@ not a fault in this run.
 So: on the `llm_module` sink, `list`-dependent operations (reconcile,
 orphan sweep) are expected to report degraded results. That is the sink's
 contract, not a bug in this service.
+
+### Destinations in code — two layers
+
+- **`exporter/sinks/base.py` — `ContentSink`.** The coordinator's only
+  destination interface: `upsert_document`, `delete_documents`,
+  `delete_chunks`, `delete_agency`, `sweep_stale`, `read_document`, plus
+  declared `SinkCapabilities`. A sink is bound to one agency when it is
+  built. Any capability a sink has not declared raises `NotSupported`; it
+  never silently does nothing.
+- **`exporter/stores/base.py` — `ExternalStoreClient`.** A key-value view of
+  an object store (put / get / exists / list / delete). Only the object-store
+  sink and the manifest store use it, never the coordinator.
+
+Two rules an operator reading a report should know:
+
+- **A delete reports per item**: `deleted`, `missing`, `deferred` or
+  `failed`. `missing` means "already gone" and counts as success, so a
+  replayed delete never fails. `deferred` and `failed` are what the
+  deferred-deletion journal keeps.
+- **"Absent" and "error" are never confused.** A store read returns nothing
+  only when the object definitively does not exist. Every other failure,
+  including a 403 that looks like a missing object, is an error, and the run
+  fails having committed nothing.
+
+`exporter/sinks/factory.py` is the only place `CONTENT_SINK` is resolved. In
+this build it is a skeleton and is not yet called at startup: the
+object-store sink arrives with D14, the S3 backend with D6/D7.
