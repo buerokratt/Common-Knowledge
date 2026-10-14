@@ -1491,7 +1491,7 @@ def clean_file_task(entity: EntityToClean) -> None:
             f.write(cleaned_text)
 
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+            f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
             json={"source_file_path": cleaned_text_filename.as_posix()},
             timeout=ruuter_timeout,
         )
@@ -1521,7 +1521,7 @@ def clean_file_task(entity: EntityToClean) -> None:
             json.dump(metadata, f)
 
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+            f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
             json={"source_file_path": cleaned_metadata_filename.as_posix()},
             timeout=ruuter_timeout,
         )
@@ -1549,7 +1549,7 @@ def clean_file_task(entity: EntityToClean) -> None:
         for img_path in extracted_images:
             try:
                 r = requests.post(
-                    f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                    f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
                     json={"source_file_path": img_path.as_posix()},
                     timeout=ruuter_timeout,
                 )
@@ -1575,7 +1575,7 @@ def clean_file_task(entity: EntityToClean) -> None:
         # NOTE: Ruuter's update-cleaned-file endpoint must be extended to
         # accept the image_urls field so images are persisted in the DB.
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/source-file/update-cleaned-file",
+            f"{settings.ckb_ruuter_internal}/source-file/update-cleaned-file",
             json={
                 "base_id": entity.source_file_id,
                 "cleaned_data_url": uploaded_cleaned_text_url,
@@ -1609,7 +1609,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     for file in task.files:
         try:
             requests.post(
-                f"{settings.ruuter_internal}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                f"{settings.ckb_ruuter_internal}/source-file/update-scrapped-file-stop-scrapping",
                 json={"base_id": file.base_id, "status": "cleaning"},
                 timeout=30,
             )
@@ -1661,7 +1661,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     if logs_path.exists():
         try:
             upload_result = requests.post(
-                f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
                 json={"source_file_path": logs_path.as_posix()},
                 timeout=30,
             )
@@ -1673,7 +1673,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     # Update the run report
     try:
         response = requests.post(
-            f"{settings.ruuter_internal}/ckb/reports/update",
+            f"{settings.ckb_ruuter_internal}/reports/update",
             json={
                 "baseId": task.source_run_report_base_id,
                 "scrapingFinishedAt": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -1690,7 +1690,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     # so a failure on the first does not prevent the second from running.
     try:
         requests.post(
-            f"{settings.ruuter_internal}/ckb/source/update-status",
+            f"{settings.ckb_ruuter_internal}/source/update-status",
             json={"source_id": task.source_base_id, "status": "finished"},
             timeout=30,
         )
@@ -1699,7 +1699,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
 
     try:
         requests.post(
-            f"{settings.ruuter_internal}/ckb/agency/update-zip-dirty",
+            f"{settings.ckb_ruuter_internal}/agency/update-zip-dirty",
             json={"sourceId": task.source_base_id, "agencyId": task.agency_base_id},
             timeout=30,
         )
@@ -1708,7 +1708,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
 
     try:
         requests.get(
-            f"{settings.ruuter_internal}/ckb/pipeline/zip",
+            f"{settings.ckb_ruuter_internal}/pipeline/zip",
             timeout=300,
         )
     except requests.exceptions.RequestException as e:

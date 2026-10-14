@@ -154,7 +154,7 @@ Scheduled tasks are defined in `DSL/CronManager/scheduler.yml` with:
 - **Type**: `exec` — runs a shell script
 - **Command**: one script per job in `DSL/CronManagerScripts/` (e.g. `trigger_zipping.sh`), which sources `constants.ini` and calls `$CKB_RUUTER_INTERNAL/<path>`
 
-The Ruuter Internal base URL comes from `CKB_RUUTER_INTERNAL` in `constants.ini` (docker-compose mounts the root `constants.ini`; Helm mounts the `ruuter-internal-config` ConfigMap), so it is not hardcoded in `scheduler.yml`. CronManager does not substitute `[#...]` placeholders or env vars in job files, which is why a script is used. Keep scripts out of `DSL/CronManager/` — CronManager parses every file there as a job YAML.
+The Ruuter Internal base URL comes from `CKB_RUUTER_INTERNAL` in `constants.ini` (docker-compose mounts the root `constants.ini`; Helm mounts the `cron-manager-config` ConfigMap, which is rendered from the same file via the `charts/ckb/constants.ini` symlink), so it is not hardcoded in `scheduler.yml`. CronManager does not substitute `[#...]` placeholders or env vars in job files, which is why a script is used. Keep scripts out of `DSL/CronManager/` — CronManager parses every file there as a job YAML.
 
 ## Use Cases
 
