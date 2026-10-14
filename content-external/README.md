@@ -59,6 +59,10 @@ it — see the note in the table below.
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
 | `CHUNK_PROFILE` | required for `llm_module`; optional for `object_store` (default `azure_native`) | Chunk geometry preset: `azure_native` (target 1200 / overlap 200 / min 200 / max 2000 chars) or `compact` (450 / 80 / 120 / 700). Overlap is capped at min − 1 so no chunk can fall wholly inside the one before it, which makes `azure_native`'s effective overlap 199. Pinned per deployment alongside the sink, because whoever embeds the chunks decides what fits: on `llm_module` a chunk over the embedder's token budget is silently truncated. An unknown name is refused at startup. Changing it re-chunks the whole corpus on the next run via the chunker fingerprint — and on `llm_module` re-embeds it, so do it as an announced, operator-driven run. A new preset is a reviewed row in `exporter/core/constants.py`, never four separate settings |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
+| `EXTERNAL_S3_ENDPOINT_URL` / `EXTERNAL_S3_BUCKET_NAME` | for a run on `object_store` + `s3` | The destination: any S3-compatible endpoint (SeaweedFS, MinIO, AWS), chosen by URL alone. Path-style addressing. Not checked at startup, so `/health` comes up before a destination exists. A run refuses and names every missing variable |
+| `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` | for a run on `object_store` + `s3` | The destination's **own** credentials. They are passed to boto3 explicitly and never come from its default chain, which would pick up `AWS_*`: those are CKB's read-only keys and are never used to write (rule 6). A blank value is refused rather than defaulted. They need `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and `s3:ListBucket` on the destination bucket: every delete first HEADs the key to tell `deleted` from `missing`, and HEAD is authorised as a GET. Without `ListBucket`, a missing key answers 403 and is reported as an error, never as absent. The bucket must not be CKB's own (`S3_BUCKET_NAME` on `S3_ENDPOINT_URL`), and no prefix may contain a `scrapped-data` segment (rule 1). In the chart the credentials come from a Secret (`contentExternal.externalStore.secret`) |
+| `EXTERNAL_S3_REGION` | no (default `us-east-1`) | Region to sign with. S3-compatible stores ignore the value |
+| `EXTERNAL_S3_SUPPORTS_BATCH_DELETE` | no (default `true`) | Set `false` for a store whose `DeleteObjects` is missing or partial. Deletes then go one key at a time, with the same per-key outcome |
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
@@ -319,6 +323,43 @@ Two rules an operator reading a report should know:
   including a 403 that looks like a missing object, is an error, and the run
   fails having committed nothing.
 
-`exporter/sinks/factory.py` is the only place `CONTENT_SINK` is resolved. In
-this build it is a skeleton and is not yet called at startup: the
-object-store sink arrives with D14, the S3 backend with D6/D7.
+`exporter/sinks/factory.py` is the only place `CONTENT_SINK` is resolved, and
+`exporter/stores/factory.py` the only place a store backend is. Startup does
+not call either yet; Stage F wires them into the run. `object_store` builds
+`ObjectStoreSink` over the `s3` backend (`exporter/stores/s3_store.py`).
+`llm_module` (Stage L), `azure_blob` (Stage H) and a `local` manifest store
+(D19) each refuse, naming the task that builds them.
+
+What the object-store sink does and doesn't touch:
+
+- **It writes `metadata.json` before any chunk.** It deletes a document's
+  chunks before its `metadata.json`, and keeps the `metadata.json` whenever a
+  chunk delete fails.
+- **It parses listings and never counts them.** A pseudo-directory entry
+  from a gateway is ignored.
+- **`delete_agency` removes `documents/` only.** When the manifest store is
+  inherited, `manifest.json` and `_control/` share this prefix. They belong
+  to the manifest store and survive a purge.
+- **`sweep_stale` is not supported.** On a listable store, orphans are swept
+  by the ordinal tail rule; the `synced_at` sweep is for the llm-module sink.
+
+### Does this store work? — the conformance suites
+
+`tests/test_store_conformance.py` asserts the store contract, and
+`tests/test_sink_conformance.py` the sink contract. Both always run against
+in-memory fakes. Point them at a real S3-compatible endpoint, with an
+existing bucket, to accept a new store:
+
+```bash
+docker run -d -p 9000:9000 minio/minio server /data          # or:
+docker run -d -p 8333:8333 chrislusf/seaweedfs server -s3
+export CONFORMANCE_S3_ENDPOINT_URL=http://localhost:9000
+export CONFORMANCE_S3_BUCKET=conformance
+export CONFORMANCE_S3_ACCESS_KEY_ID=...
+export CONFORMANCE_S3_SECRET_ACCESS_KEY=...
+uv run pytest tests/test_store_conformance.py tests/test_sink_conformance.py -v
+```
+
+Without those variables the live variants skip. `s3-batch` and `s3-per-key`
+run the same endpoint with and without `DeleteObjects`. A store is accepted
+when every variant passes.

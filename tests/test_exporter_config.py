@@ -84,6 +84,16 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.vault_token_path == "/agent/out/token"
     assert settings.vault_secret_path == ""
     assert settings.azure_storage_container == "agency-content"
+    assert settings.external_s3_region == "us-east-1"
+    assert settings.external_s3_supports_batch_delete is True
+
+
+def test_the_destination_store_is_not_required_at_startup(clean_env: None) -> None:
+    """EXTERNAL_S3_* is refused by stores/factory.py when a run builds the
+    store, not here: /health must come up before the destination is set."""
+    settings = _settings()
+    assert settings.external_s3_endpoint_url == ""
+    assert settings.external_s3_access_key_id.get_secret_value() == ""
 
 
 def test_work_dir_is_required(clean_env: None) -> None:
@@ -402,6 +412,30 @@ def test_malformed_paths_are_rejected(work_dir: str) -> None:
 )
 def test_rule_one_accepts_and_normalises(work_dir: str, expected: str) -> None:
     assert _settings(work_dir).content_work_dir == expected
+
+
+@pytest.mark.parametrize(
+    "variable", ["content_external_prefix", "manifest_store_prefix"]
+)
+@pytest.mark.parametrize(
+    "prefix", ["scrapped-data", "uploads/scrapped-data", "content/SCRAPPED-DATA/x"]
+)
+def test_rule_one_rejects_a_key_prefix_inside_the_scraped_tree(
+    variable: str, prefix: str
+) -> None:
+    """The destination bucket is not CKB's, but rule 1 is about the path
+    component, and a key prefix is where every external write lands."""
+    with pytest.raises(ValidationError, match="rule 1"):
+        _settings(**{variable: prefix})
+
+
+def test_rule_one_allows_a_key_prefix_that_only_resembles_the_scraped_tree() -> None:
+    assert (
+        _settings(
+            content_external_prefix="scrapped-data-archive"
+        ).content_external_prefix
+        == "scrapped-data-archive"
+    )
 
 
 @pytest.mark.skipif(
@@ -732,6 +766,19 @@ def test_redaction_never_emits_a_secret(clean_env: None) -> None:
     assert "AKIAEXAMPLE" not in repr(fields)
     assert fields["aws_secret_access_key"] == "[set]"
     assert fields["aws_access_key_id"] == "[set]"
+
+
+def test_destination_credentials_are_redacted(clean_env: None) -> None:
+    settings = _settings(
+        external_s3_access_key_id=SecretStr("EXTKEYEXAMPLE"),
+        external_s3_secret_access_key=SecretStr("ext-s3cr3t-never-log-me"),
+    )
+    fields = redacted_settings(settings)
+
+    assert "ext-s3cr3t-never-log-me" not in repr(fields)
+    assert "EXTKEYEXAMPLE" not in repr(fields)
+    assert fields["external_s3_access_key_id"] == "[set]"
+    assert fields["external_s3_secret_access_key"] == "[set]"
 
 
 def test_unset_secrets_report_unset(clean_env: None) -> None:

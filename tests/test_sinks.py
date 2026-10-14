@@ -18,6 +18,7 @@ from exporter_fakes import (
     InMemoryStore,
     RecordingSink,
 )
+from pydantic import SecretStr
 
 from exporter.api.config import ConfigurationError, Settings
 from exporter.core.ids import make_chunk_id
@@ -33,7 +34,9 @@ from exporter.sinks.base import (
     UpsertStatus,
 )
 from exporter.sinks.factory import build_sink
+from exporter.sinks.object_store_sink import ObjectStoreSink
 from exporter.stores.base import UNREPORTED_DELETE_REASON, StoreCapabilities
+from exporter.stores.s3_store import S3Store
 
 EXPORTER_ROOT = Path(__file__).resolve().parents[1] / "content-external" / "exporter"
 AGENCY = "agency-1"
@@ -516,13 +519,50 @@ def test_read_document_reports_what_the_destination_holds() -> None:
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("sink", "task"), [("object_store", "D14"), ("llm_module", "L1")]
-)
-def test_the_factory_names_the_task_that_builds_each_sink(sink: str, task: str) -> None:
-    """Until D14 and L1 land, a request for a sink is a clear refusal."""
-    settings = Settings.model_construct(content_sink=sink)
-    with pytest.raises(ConfigurationError, match=f"task {task}"):
+def test_the_factory_names_the_task_that_builds_the_llm_module_sink() -> None:
+    """Until L1 lands, a request for that sink is a clear refusal."""
+    settings = Settings.model_construct(content_sink="llm_module")
+    with pytest.raises(ConfigurationError, match="task L1"):
+        build_sink(settings, agency_id=AGENCY)
+
+
+def test_the_factory_builds_the_object_store_sink() -> None:
+    """Building it makes no network call: boto3 connects on first request."""
+    settings = Settings.model_construct(
+        content_sink="object_store",
+        content_external_store_backend="s3",
+        content_external_prefix="content",
+        external_s3_endpoint_url="http://store.invalid:9000",
+        external_s3_bucket_name="agency-content",
+        external_s3_access_key_id=SecretStr("key"),
+        external_s3_secret_access_key=SecretStr("secret"),
+        external_s3_region="us-east-1",
+        external_s3_supports_batch_delete=True,
+        export_concurrency=4,
+    )
+
+    sink = build_sink(settings, agency_id=AGENCY)
+
+    assert isinstance(sink, ObjectStoreSink)
+    assert sink.sink_id == "object_store"
+    assert sink.agency_id == AGENCY
+    assert isinstance(sink.store, S3Store)
+
+
+def test_the_object_store_sink_refuses_an_unconfigured_store() -> None:
+    settings = Settings.model_construct(
+        content_sink="object_store",
+        content_external_store_backend="s3",
+        content_external_prefix="content",
+        external_s3_endpoint_url="",
+        external_s3_bucket_name="",
+        external_s3_access_key_id=SecretStr(""),
+        external_s3_secret_access_key=SecretStr(""),
+        external_s3_region="us-east-1",
+        external_s3_supports_batch_delete=True,
+        export_concurrency=4,
+    )
+    with pytest.raises(ConfigurationError, match="EXTERNAL_S3_ENDPOINT_URL"):
         build_sink(settings, agency_id=AGENCY)
 
 
@@ -544,11 +584,29 @@ def test_the_store_layer_does_not_import_the_sink_layer() -> None:
     )
 
 
-@pytest.mark.parametrize("relative", ["sinks/base.py", "stores/base.py"])
+@pytest.mark.parametrize(
+    "relative", ["sinks/base.py", "stores/base.py", "sinks/object_store_sink.py"]
+)
 def test_the_interfaces_import_no_transport(relative: str) -> None:
-    """The ABCs are transport-free; boto3 arrives in D6, requests in L."""
+    """The ABCs and the object-store sink are transport-free; boto3 lives in
+    the s3 backend only, requests arrives in L."""
     roots = {name.split(".")[0] for name in _imports(relative)}
     assert not roots & {"boto3", "botocore", "azure", "requests", "httpx"}
+
+
+def test_boto3_is_imported_only_by_the_s3_backend() -> None:
+    """One file speaks S3, so D10's five-operation surface has one place to
+    audit, and the coordinator cannot reach a store client by accident."""
+    importers = {
+        path.relative_to(EXPORTER_ROOT).as_posix()
+        for path in EXPORTER_ROOT.rglob("*.py")
+        if {
+            name.split(".")[0]
+            for name in _imports(path.relative_to(EXPORTER_ROOT).as_posix())
+        }
+        & {"boto3", "botocore"}
+    }
+    assert importers == {"stores/s3_store.py"}
 
 
 def test_the_app_does_not_build_a_sink_yet() -> None:

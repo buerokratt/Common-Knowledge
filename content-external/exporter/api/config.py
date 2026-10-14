@@ -47,6 +47,7 @@ from exporter.core.constants import (
     CHUNK_PROFILES,
     DEFAULT_CHUNK_PROFILE,
     MAX_CHUNK_ORDINAL,
+    SCRAPPED_DATA_COMPONENT,
     ChunkProfile,
 )
 from exporter.core.ids import chunker_fingerprint, validate_prefix
@@ -59,11 +60,6 @@ logger = logging.getLogger(__name__)
 # can be diffed line-for-line. A15's per-run terminal line follows the same
 # convention.
 CONFIG_LOG_PREFIX = "content-external config"
-
-# Rule 1. The scraped tree is /scrapped-data in every container that mounts it
-# and uploads/scrapped-data/ in S3. Both end in the same path component, so
-# the component is what we forbid — that one predicate covers both shapes.
-SCRAPPED_DATA_COMPONENT = "scrapped-data"
 
 # A16. Peak memory is EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × ~3, and both
 # factors are documented separately (F16 and E9) with their product nowhere.
@@ -275,8 +271,20 @@ class Settings(BaseSettings):
     aws_region: str = ""
 
     # --- the external destination — a DIFFERENT bucket and credentials ------
+    # Not required at startup: nothing builds the destination store until a
+    # run does, and stores/factory.py refuses there, naming every missing
+    # variable. The credentials are passed to boto3 explicitly so it can never
+    # fall back to its default chain — which would find AWS_ACCESS_KEY_ID
+    # above, CKB's own read-only keys, and write with them (rule 6).
     external_s3_endpoint_url: str = ""
     external_s3_bucket_name: str = ""
+    external_s3_access_key_id: SecretStr = SecretStr("")
+    external_s3_secret_access_key: SecretStr = SecretStr("")
+    # SigV4 needs a region to sign with; S3-compatible stores ignore its value.
+    external_s3_region: str = "us-east-1"
+    # D11. Declared, never probed: a store whose DeleteObjects is missing or
+    # partial sets this false and gets per-key deletes with the same outcome.
+    external_s3_supports_batch_delete: bool = True
 
     # --- Vault -------------------------------------------------------------
     # No default for vault_secret_path: the documented value names the Azure

@@ -81,7 +81,19 @@ class StoreError(RuntimeError):
     a malformed response. Backends wrap the SDK exception `from exc`, with a
     message that has been through sanitize_sensitive_text and that names keys
     and error codes only — never an object body, never a signed URL.
+
+    `permanent` says whether retrying can help. True for a configuration-class
+    fault — bad credentials, a missing bucket, a refused request — which will
+    fail identically for every document; False for an outage, a throttle or a
+    timeout. The object-store sink maps it to FAILED_PERMANENT versus
+    FAILED_RETRYABLE, which is what lets F19's consecutive-permanent-failure
+    abort fire on a rotated-away key instead of failing the corpus one
+    document at a time.
     """
+
+    def __init__(self, message: str, *, permanent: bool = False) -> None:
+        super().__init__(message)
+        self.permanent = permanent
 
 
 # Named as the design names it (D0, D15, L13) rather than NotSupportedError.
