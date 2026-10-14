@@ -4,4 +4,4 @@ metadata:
   name: {{ .Values.cronManager.nameOverride | default "cron-manager" }}-config
 data:
   constants.ini: |-
-    CKB_RUUTER_INTERNAL=http://ruuter-internal:8089/ckb
+{{ .Files.Get "constants.ini" | indent 4 }}

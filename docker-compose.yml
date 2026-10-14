@@ -387,8 +387,8 @@ services:
     volumes:
       - ./scrapped-data:/scrapped-data
       - ./scrapper:/app
+      - ./constants.ini:/constants.ini:ro
     environment:
-      - RUUTER_INTERNAL=http://ruuter-internal:8089
       - BROKER_URL=pyamqp://admin:admin@rabbit-scrapper/scrapper
     depends_on:
       - rabbit-scrapper
@@ -403,8 +403,8 @@ services:
     volumes:
       - ./scrapped-data:/scrapped-data
       - ./scrapper:/app
+      - ./constants.ini:/constants.ini:ro
     environment:
-      - RUUTER_INTERNAL=http://ruuter-internal:8089
       - BROKER_URL=pyamqp://admin:admin@rabbit-scrapper/scrapper
     depends_on:
       - rabbit-scrapper
@@ -421,9 +421,8 @@ services:
     volumes:
       - ./scrapped-data:/scrapped-data
       - vault-agent-token:/agent/out:ro
+      - ./constants.ini:/app/constants.ini:ro
     environment:
-      - RUUTER_INTERNAL=http://ruuter-internal:8089
-      - VAULT_ADDR=http://vault:8200
       - VAULT_TOKEN_PATH=/agent/out/token
       - VAULT_SECRET_PATH=llm/connections/azure_openai/cleaner
     networks:
