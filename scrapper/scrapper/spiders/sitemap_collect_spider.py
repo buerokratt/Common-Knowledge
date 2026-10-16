@@ -128,7 +128,7 @@ class SitemapCollectSpider(BaseSpider):
             # removed on purpose stays excluded on future refreshes instead
             # of silently reappearing as a new record.
             already_exists = requests.get(
-                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/get-source-file-exists-by-url",
+                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/get-source-file-exists-by-url",
                 params={"source_id": self.task.source_id, "url": response.url},
             ).json()["response"]
 

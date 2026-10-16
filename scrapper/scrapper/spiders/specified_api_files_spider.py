@@ -7,7 +7,6 @@ from scrapy import Request
 from scrapy.http import Response
 
 from api.models import SpecifiedApiFilesScrapeTask
-from scrapper.settings import CKB_EESTI_BASE_URL
 from scrapper.items import FileItem, Metadata, MetadataItem, ScrappedItem
 from scrapper.spiders.specified_pages_spider import SpecifiedPagesSpider
 
@@ -22,7 +21,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
 
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         # Set API config first, before calling super()
-        self.base_url = CKB_EESTI_BASE_URL
+        self.base_url = "https://www.eesti.ee"
         self.article_api = f"{self.base_url}/api/article/v2"
 
         super().__init__(name, **kwargs)
@@ -96,7 +95,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
             self.logger.error(f"Failed to fetch article {external_id} from API")
             if base_id:
                 requests.post(
-                    f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
+                    f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
                     json={"base_id": base_id, "status": "failed"},
                 )
             return
@@ -130,7 +129,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
                 f"Skipping article {external_id} because hash did not change and it contains same data"
             )
             requests.post(
-                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
+                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
                 json={"base_id": base_id, "status": "finished"},
             )
             return
@@ -143,7 +142,7 @@ class SpecifiedApiFilesSpider(SpecifiedPagesSpider):
                 f"is {file_extension} and it is not allowed"
             )
             requests.post(
-                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
+                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
                 json={"base_id": base_id, "status": "failed"},
             )
             return

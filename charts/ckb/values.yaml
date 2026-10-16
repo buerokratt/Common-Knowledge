@@ -534,8 +534,9 @@ scrapperServer:
   service:
     type: ClusterIP
     port: 8080
-  # Endpoints come from constants.ini (scrapper-configmap.yaml)
   env:
+    - name: RUUTER_INTERNAL
+      value: "http://ruuter-internal:8089"
     - name: BROKER_URL
       value: "pyamqp://admin:admin@rabbit-scrapper/scrapper"
   volumes:
@@ -552,8 +553,9 @@ scrapperCelery:
     repository: ghcr.io/buerokratt/common-knowledge
     tag: scrapper-server-dev-1-1-1
     pullPolicy: IfNotPresent
-  # Endpoints come from constants.ini (scrapper-configmap.yaml)
   env:
+    - name: RUUTER_INTERNAL
+      value: "http://ruuter-internal:8089"
     - name: BROKER_URL
       value: "pyamqp://admin:admin@rabbit-scrapper/scrapper"
   volumes:
@@ -572,8 +574,11 @@ cleaningServer:
   service:
     type: ClusterIP
     port: 8123
-  # Endpoints come from constants.ini (cleaning-server-configmap.yaml)
-  env: []
+  env:
+    - name: RUUTER_INTERNAL
+      value: "http://ruuter-internal:8089"
+    - name: BROKER_URL
+      value: "pyamqp://admin:admin@rabbit-scrapper/scrapper"
   volumes:
     enabled: true
   extraVolumes: []

@@ -39,19 +39,12 @@ spec:
             {{- end }}
           ports:
             - containerPort: {{ .Values.cleaningServer.service.port }}
-          volumeMounts:
-            - name: constants-config
-              mountPath: /app/constants.ini
-              subPath: constants.ini
-          {{- if .Values.cleaningServer.volumes.enabled }}
+          volumeMounts: {{- if .Values.cleaningServer.volumes.enabled }}
             - name: dsl2
               mountPath: scrapped-data
           {{- end }}
-      volumes:
-        - name: constants-config
-          configMap:
-            name: {{ .Values.cleaningServer.nameOverride }}-config
-      {{- if .Values.cleaningServer.volumes.enabled }}
+      volumes: {{- if .Values.cleaningServer.volumes.enabled }}
+
         - name: dsl2
           emptyDir: {}
       {{- end }}

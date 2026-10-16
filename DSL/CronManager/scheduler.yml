@@ -1,14 +1,17 @@
 trigger_scheduler:
   trigger: "0 */5 * * * ?"
-  type: exec
-  command: "/bin/bash ../app/scripts/trigger_scheduler_for_unscheduled_records.sh"
+  type: http
+  method: GET
+  url: http://ruuter-internal:8089/ckb/pipeline/scheduler-check-for-unscheduled-records
 
 trigger_pipeline_for_scheduled_entities:
   trigger: "0 */5 * * * ?"
-  type: exec
-  command: "/bin/bash ../app/scripts/trigger_pipeline_for_scheduled_sources.sh"
+  type: http
+  method: GET
+  url: http://ruuter-internal:8089/ckb/pipeline/trigger-pipeline-for-sceduled-sources
 
 trigger_zipping:
   trigger: "0 0 */1 * * ?"
-  type: exec
-  command: "/bin/bash ../app/scripts/trigger_zipping.sh"
+  type: http
+  method: GET
+  url: http://ruuter-internal:8089/ckb/pipeline/zip

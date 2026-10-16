@@ -1,7 +1,0 @@
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ .Values.cronManager.nameOverride | default "cron-manager" }}-config
-data:
-  constants.ini: |-
-{{ .Files.Get "constants.ini" | indent 4 }}

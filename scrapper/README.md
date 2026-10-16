@@ -167,15 +167,9 @@ Generate metadata for edited files.
 }
 ```
 
-## Configuration
-
-Service endpoints are read from the repo-root `constants.ini` (shared with Ruuter, CronManager and the cleaning service), not from environment variables. docker-compose mounts it at `/constants.ini` (because `./scrapper` is bind-mounted over `/app`); Helm mounts the `scrapper-config` ConfigMap at `/app/constants.ini`, rendered from the same file via the `charts/ckb/constants.ini` symlink. When running locally from the repo, the root `constants.ini` is picked up automatically. An environment variable with the same name overrides the file value.
-
-- `CKB_RUUTER_INTERNAL`: Internal Ruuter base URL including the project path (e.g. `http://ruuter-internal:8089/ckb`)
-- `CKB_EESTI_BASE_URL`: Base URL of the eesti.ee API used by the Eesti and specified-API-files spiders
-
 ## Environment Variables
 
+- `RUUTER_INTERNAL`: Internal Ruuter service URL for database operations
 - `SCRAPY_SETTINGS_MODULE`: Scrapy settings module (default: scrapper.settings)
 - `CELERY_BROKER_URL`: Celery broker URL for task queue
 - `CELERY_RESULT_BACKEND`: Celery result backend URL
@@ -212,7 +206,7 @@ docker build -t scrapper .
 
 # Run the container
 docker run -p 8000:8000 \
-  -v "$(pwd)/constants.ini:/app/constants.ini:ro" \
+  -e RUUTER_INTERNAL="http://ruuter-internal:8080" \
   -e CELERY_BROKER_URL="redis://redis:6379/0" \
   scrapper
 ```

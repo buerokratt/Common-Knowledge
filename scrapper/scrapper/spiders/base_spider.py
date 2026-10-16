@@ -41,7 +41,7 @@ class BaseSpider(Spider):
 
         try:
             is_stopping = requests.get(
-                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source/get",
+                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
                 params={"baseId": self.task.source_id},
             ).json()["response"][0]["isStopping"]
         except Exception as e:
@@ -102,7 +102,7 @@ class BaseSpider(Spider):
         self.logger.error(f"[{error_type}] {url}: {error_message}")
 
         send_error(
-            self.settings.get("CKB_RUUTER_INTERNAL"),
+            self.settings.get("RUUTER_INTERNAL"),
             url,
             error_type,
             error_message,

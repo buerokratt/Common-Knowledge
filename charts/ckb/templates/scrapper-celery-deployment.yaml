@@ -24,19 +24,11 @@ spec:
             - name: {{ .name }}
               value: {{ .value | quote }}
             {{- end }}
-          volumeMounts:
-            - name: constants-config
-              mountPath: /app/constants.ini
-              subPath: constants.ini
-          {{- if .Values.scrapperCelery.volumes.enabled }}
+          volumeMounts: {{- if .Values.scrapperCelery.volumes.enabled }}
             - name: data
               mountPath: /data
           {{- end }}
-      volumes:
-        - name: constants-config
-          configMap:
-            name: scrapper-config
-      {{- if .Values.scrapperCelery.volumes.enabled }}
+      volumes: {{- if .Values.scrapperCelery.volumes.enabled }}
         - name: data
           emptyDir: {}
       {{- end }}

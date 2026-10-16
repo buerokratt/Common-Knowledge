@@ -109,9 +109,8 @@ services:
       - ./test-scrapped-data:/scrapped-data
       - ./test-vault/agent-out:/agent/out:ro
     environment:
-      # Test-only overrides of constants.ini endpoints (mock services)
-      - CKB_RUUTER_INTERNAL=http://mock-ruuter-test:8089/ckb
-      - CKB_VAULT=http://vault-test:8200
+      - RUUTER_INTERNAL=http://mock-ruuter-test:8089
+      - VAULT_ADDR=http://vault-test:8200
       - VAULT_TOKEN_PATH=/agent/out/token
       - VAULT_SECRET_PATH=llm/connections/azure_openai/cleaner
       - LANGUAGES=["est","rus","eng"]

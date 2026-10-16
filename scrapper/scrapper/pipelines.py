@@ -62,7 +62,7 @@ class MetadataPipeline:
         item.metadata_path = full_path
 
         r = requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/pipeline/upload-file-sync",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
                 "source_file_path": full_path,
             },
@@ -89,7 +89,7 @@ class FilePipeline:
         item.file_path = full_path
 
         r = requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/pipeline/upload-file-sync",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
                 "source_file_path": full_path,
             },
@@ -127,7 +127,7 @@ class TriggerCleaningPipeline:
         path = get_logs_path_for_cleaning(spider)
 
         requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/pipeline/clean-scraped-file",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/clean-scraped-file",
             json={
                 "logs_path": path,
                 "file_path": item.file_path,
@@ -162,7 +162,7 @@ class CreateSourceFile:
         task: BaseObject = spider.task
 
         res = requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/source-file/add-scrapped-file",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/add-scrapped-file",
             json={
                 "agency_id": task.agency_id,
                 "source_id": task.source_id,
@@ -192,7 +192,7 @@ class UpdateSourceFile:
             file_status = "in_review"
 
         requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file",
             json={
                 "base_id": item.source_file_id,
                 "url": item.metadata.source_url,
@@ -218,7 +218,7 @@ class ScrappingFinishedPipeline:
 
         # Check if the source was manually stopped
         source_resp = requests.get(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/source/get",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
             params={"baseId": task.source_id},
         ).json()
 
@@ -228,7 +228,7 @@ class ScrappingFinishedPipeline:
         # If stopped manually, force status to 'finished' regardless of initial/refresh state
         if is_stopping:
             requests.post(
-                f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/agency/update-zip-dirty",
+                f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty",
                 json={
                     "sourceId": task.source_id,
                     "agencyId": task.agency_id,
@@ -239,7 +239,7 @@ class ScrappingFinishedPipeline:
         # After all files are scraped, update source status to in_review for initial scrape
         if hasattr(task, "is_initial_scrape") and task.is_initial_scrape:
             requests.post(
-                f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/source/update-status",
+                f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status",
                 json={
                     "source_id": task.source_id,
                     "status": "in_review",
@@ -248,7 +248,7 @@ class ScrappingFinishedPipeline:
             return
 
         requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/agency/update-zip-dirty",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/update-zip-dirty",
             json={
                 "sourceId": task.source_id,
                 "agencyId": task.agency_id,
@@ -270,7 +270,7 @@ class SetSourceStatusRunningPipeline:
             return
 
         requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/source/update-status",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/update-status",
             json={
                 "source_id": task.source_id,
                 "status": "running",
@@ -287,13 +287,13 @@ class CreateSourceRunReportPipeline:
         task: BaseObject = spider.task
 
         agency_name = requests.get(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/agency/get",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/agency/get",
             params={"baseId": task.agency_id},
         ).json()["response"][0]["name"]
         spider.logger.info(f"agency_name: {agency_name}")
 
         source_data = requests.get(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/source/get",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/source/get",
             params={"baseId": task.source_id},
         ).json()["response"][0]
         url = source_data["url"]
@@ -306,7 +306,7 @@ class CreateSourceRunReportPipeline:
         )
 
         report_id = requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/reports/add",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/add",
             json={
                 "agencyBaseId": task.agency_id,
                 "sourceBaseId": task.source_id,
@@ -368,7 +368,7 @@ class UploadLogsPipeline:
 
         path = get_logs_path_for_scraper(spider)
         r = requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/pipeline/upload-file-sync",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
                 "source_file_path": path,
             },
@@ -385,7 +385,7 @@ class UploadLogsPipeline:
         if is_initial_scrape:
             # Only send scrapingLogUrl in report update
             requests.post(
-                f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/reports/update",
+                f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update",
                 json={
                     "baseId": spider.report_id,
                     "scrapingFinishedAt": datetime.datetime.now(
@@ -399,7 +399,7 @@ class UploadLogsPipeline:
 
         path = get_logs_path_for_cleaning(spider)
         r = requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/pipeline/upload-file-sync",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/upload-file-sync",
             json={
                 "source_file_path": path,
             },
@@ -408,7 +408,7 @@ class UploadLogsPipeline:
         os.remove(path)
 
         requests.post(
-            f"{spider.settings.get('CKB_RUUTER_INTERNAL')}/reports/update",
+            f"{spider.settings.get('RUUTER_INTERNAL')}/ckb/reports/update",
             json={
                 "baseId": spider.report_id,
                 "scrapingFinishedAt": datetime.datetime.now(datetime.UTC).isoformat(),
