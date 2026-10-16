@@ -1,9 +1,10 @@
+import { coordinateAuthenticatedRequests } from './authenticatedAdapter';
 import axios, { AxiosError } from 'axios';
 import { useTranslation } from 'react-i18next';
 import { useEffect } from 'react';
 
 const api = axios.create({
-  baseURL: import.meta.env.BASE_URL,
+  baseURL: import.meta.env.REACT_APP_CKB_API_URL,
   headers: {
     Accept: 'application/json',
     'Content-Type': 'application/json',
@@ -102,3 +103,6 @@ apiDev.interceptors.request.use(
 );
 
 export { api, apiDev, notificationApiDev, AxiosInterceptor };
+
+coordinateAuthenticatedRequests(api);
+coordinateAuthenticatedRequests(apiDev);

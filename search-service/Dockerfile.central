@@ -1,0 +1,13 @@
+# Local qualification layer. Build tooling must verify BASE_IMAGE's identity.
+# The retained base contains the exact original source/dependency build. It is
+# not a published remotely pullable image; export/rebuild/publish is separate.
+ARG BASE_IMAGE=upstream-ckb:30fd342
+FROM ${BASE_IMAGE}
+ARG SOURCE_COMMIT=30fd3425c8af3be57bc1b141589777b34f485302
+ARG PATCH_SHA256
+LABEL org.opencontainers.image.revision=${SOURCE_COMMIT}
+LABEL ee.buerokratt.integration.patch-sha256=${PATCH_SHA256}
+WORKDIR /app
+COPY --chown=1001:1001 index.js central-contract.js ./
+USER 1001:1001
+CMD ["node", "index.js"]

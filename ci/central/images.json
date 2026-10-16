@@ -1,0 +1,10 @@
+{
+  "ckb-gui": {
+    "dockerfile": "ci/central/ckb-gui.Dockerfile",
+    "context": "."
+  },
+  "knowledge": {
+    "dockerfile": "ci/central/knowledge.Dockerfile",
+    "context": "."
+  }
+}

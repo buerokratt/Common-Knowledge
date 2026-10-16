@@ -10,21 +10,14 @@ app.use(express.json({ limit: "10mb" })); // Support large bulk requests
 
 console.log("🚀 Starting Search Service...");
 
-// Configuration
-const config = {
-  opensearch: {
-    node: process.env.OPENSEARCH_URL || "http://opensearch-node:9200",
-  },
-  dataPath: process.env.DATA_PATH || "/app/data",
-};
-
-console.log("📋 Configuration:", config);
-
-// Initialize OpenSearch client
-const opensearch = new Client({
-  node: config.opensearch.node,
-  requestTimeout: 30000,
-  pingTimeout: 10000,
+// Central integration: fail closed rather than falling back to another engine.
+const { loadConfig, sourceIndex, readContent, bulkResults } = require("./central-contract");
+const config = loadConfig(process.env);
+console.log("Search configuration loaded (credentials omitted)");
+const opensearch = new Client(config.client);
+app.param("sourceId", (req, res, next, value) => {
+  try { sourceIndex(config, value); next(); }
+  catch { res.status(400).json({ error: "Invalid source ID" }); }
 });
 
 // Test OpenSearch connection
@@ -33,13 +26,13 @@ async function testConnection() {
     const health = await opensearch.cluster.health();
     console.log("✅ OpenSearch connected:", health.body.status);
   } catch (error) {
-    console.error("❌ OpenSearch connection failed:", error.message);
+    console.error("❌ OpenSearch connection failed:", "Search operation failed");
   }
 }
 
 // Create index for a source
 async function createSourceIndex(sourceId) {
-  const indexName = `source_${sourceId}`;
+  const indexName = sourceIndex(config, sourceId);
 
   try {
     const exists = await opensearch.indices.exists({ index: indexName });
@@ -79,27 +72,15 @@ async function createSourceIndex(sourceId) {
 
     return indexName;
   } catch (error) {
-    console.error(`❌ Error creating index ${indexName}:`, error.message);
+    console.error(`❌ Error creating index ${indexName}:`, "Search operation failed");
     throw error;
   }
 }
 
 // Read file content from volume
 function readFileContent(filePath) {
-  try {
-    const fullPath = path.join(config.dataPath, filePath);
-
-    if (!fs.existsSync(fullPath)) {
-      console.warn(`⚠️  File not found: ${fullPath}`);
-      return null;
-    }
-
-    const content = fs.readFileSync(fullPath, "utf8");
-    return content;
-  } catch (error) {
-    console.error(`❌ Error reading file ${filePath}:`, error.message);
-    return null;
-  }
+  try { return readContent(config.dataPath, filePath); }
+  catch { return null; }
 }
 
 // Bulk index documents
@@ -162,7 +143,7 @@ app.post("/index/:sourceId/bulk", async (req, res) => {
       } catch (error) {
         results.failed++;
         results.errors.push(
-          `Error processing ${doc.source_file_id}: ${error.message}`
+          `Error processing ${doc.source_file_id}: ${"Search operation failed"}`
         );
       }
     }
@@ -173,35 +154,26 @@ app.post("/index/:sourceId/bulk", async (req, res) => {
         body: bulkOperations,
       });
 
-      // Process results
-      if (bulkResponse.body.errors) {
-        bulkResponse.body.items.forEach((item, index) => {
-          if (item.index?.error) {
-            results.failed++;
-            results.errors.push(`Bulk error: ${item.index.error.reason}`);
-          } else {
-            results.indexed++;
-          }
-        });
-      } else {
-        results.indexed = bulkOperations.length / 2; // Each doc has 2 operations
-      }
+      const processed = bulkResults(bulkResponse.body, bulkOperations.length / 2);
+      results.indexed += processed.indexed;
+      results.failed += processed.failed;
+      results.errors.push(...processed.errors);
     }
 
     console.log(
       `✅ Bulk indexing completed: ${results.indexed} indexed, ${results.failed} failed`
     );
 
-    res.json({
-      success: true,
+    res.status(results.failed ? 207 : 200).json({
+      success: results.failed === 0,
       source_id: sourceId,
       results: results,
     });
   } catch (error) {
-    console.error("❌ Bulk indexing error:", error.message);
+    console.error("❌ Bulk indexing error:", "Search operation failed");
     res
       .status(500)
-      .json({ error: "Bulk indexing failed", details: error.message });
+      .json({ error: "Bulk indexing failed", details: "Search operation failed" });
   }
 });
 
@@ -211,7 +183,7 @@ app.get("/search/:sourceId", async (req, res) => {
     const { sourceId } = req.params;
     const { q = "", page = 1, size = 10, onlyIds = false } = req.query;
 
-    const indexName = `source_${sourceId}`;
+    const indexName = sourceIndex(config, sourceId);
 
     // Check if index exists
     const exists = await opensearch.indices.exists({ index: indexName });
@@ -370,8 +342,8 @@ app.get("/search/:sourceId", async (req, res) => {
       });
     }
   } catch (error) {
-    console.error("❌ Search error:", error.message);
-    res.status(500).json({ error: "Search failed", details: error.message });
+    console.error("❌ Search error:", "Search operation failed");
+    res.status(500).json({ error: "Search failed", details: "Search operation failed" });
   }
 });
 
@@ -379,7 +351,7 @@ app.get("/search/:sourceId", async (req, res) => {
 app.get("/document/:sourceId/:documentId", async (req, res) => {
   try {
     const { sourceId, documentId } = req.params;
-    const indexName = `source_${sourceId}`;
+    const indexName = sourceIndex(config, sourceId);
 
     const response = await opensearch.get({
       index: indexName,
@@ -395,7 +367,7 @@ app.get("/document/:sourceId/:documentId", async (req, res) => {
       return res.status(404).json({ error: "Document not found" });
     }
 
-    console.error("❌ Get document error:", error.message);
+    console.error("❌ Get document error:", "Search operation failed");
     res.status(500).json({ error: "Failed to retrieve document" });
   }
 });
@@ -404,7 +376,7 @@ app.get("/document/:sourceId/:documentId", async (req, res) => {
 app.delete("/index/:sourceId", async (req, res) => {
   try {
     const { sourceId } = req.params;
-    const indexName = `source_${sourceId}`;
+    const indexName = sourceIndex(config, sourceId);
 
     const exists = await opensearch.indices.exists({ index: indexName });
 
@@ -415,7 +387,7 @@ app.delete("/index/:sourceId", async (req, res) => {
 
     res.json({ success: true, message: `Index ${indexName} deleted` });
   } catch (error) {
-    console.error(`❌ Error deleting index:`, error.message);
+    console.error(`❌ Error deleting index:`, "Search operation failed");
     res.status(500).json({ error: "Failed to delete index" });
   }
 });
@@ -424,7 +396,7 @@ app.delete("/index/:sourceId", async (req, res) => {
 app.delete("/documents/:sourceId/:sourceFileId", async (req, res) => {
   try {
     const { sourceId, sourceFileId } = req.params;
-    const indexName = `source_${sourceId}`;
+    const indexName = sourceIndex(config, sourceId);
 
     // Check if index exists
     const exists = await opensearch.indices.exists({ index: indexName });
@@ -469,10 +441,10 @@ app.delete("/documents/:sourceId/:sourceFileId", async (req, res) => {
       took: deleteResponse.body.took,
     });
   } catch (error) {
-    console.error("❌ Delete by source_file_id error:", error.message);
+    console.error("❌ Delete by source_file_id error:", "Search operation failed");
     res.status(500).json({
       error: "Failed to delete documents",
-      details: error.message,
+      details: "Search operation failed",
     });
   }
 });
@@ -494,6 +466,12 @@ app.post("/documents/bulk-delete", async (req, res) => {
     const results = [];
     let totalDeleted = 0;
 
+    // Validate every source before any deletion is attempted.
+    if (deleteRequests.some(item => !item || typeof item.source_file_id !== "string" || !item.source_file_id)) {
+      return res.status(400).json({ error: "Invalid delete request" });
+    }
+    try { deleteRequests.forEach(item => sourceIndex(config, item.source_id)); }
+    catch { return res.status(400).json({ error: "Invalid source ID" }); }
     // Group requests by source_id to minimize index lookups
     const groupedBySource = deleteRequests.reduce((acc, req) => {
       const { source_id, source_file_id } = req;
@@ -502,11 +480,11 @@ app.post("/documents/bulk-delete", async (req, res) => {
       }
       acc[source_id].push(source_file_id);
       return acc;
-    }, {});
+    }, Object.create(null));
 
     // Process each source
     for (const [sourceId, sourceFileIds] of Object.entries(groupedBySource)) {
-      const indexName = `source_${sourceId}`;
+      const indexName = sourceIndex(config, sourceId);
 
       // Check if index exists
       const exists = await opensearch.indices.exists({ index: indexName });
@@ -555,10 +533,10 @@ app.post("/documents/bulk-delete", async (req, res) => {
       results: results,
     });
   } catch (error) {
-    console.error("❌ Bulk delete error:", error.message);
+    console.error("❌ Bulk delete error:", "Search operation failed");
     res.status(500).json({
       error: "Failed to bulk delete documents",
-      details: error.message,
+      details: "Search operation failed",
     });
   }
 });
@@ -575,7 +553,7 @@ app.get("/health", async (req, res) => {
   } catch (error) {
     res.status(500).json({
       status: "unhealthy",
-      error: error.message,
+      error: "Search operation failed",
       timestamp: new Date().toISOString(),
     });
   }
@@ -585,7 +563,7 @@ app.get("/health", async (req, res) => {
 app.get("/stats/:sourceId", async (req, res) => {
   try {
     const { sourceId } = req.params;
-    const indexName = `source_${sourceId}`;
+    const indexName = sourceIndex(config, sourceId);
 
     const exists = await opensearch.indices.exists({ index: indexName });
     if (!exists.body) {
@@ -617,7 +595,7 @@ app.get("/stats/:sourceId", async (req, res) => {
       subsectors: response.body.aggregations.subsectors.buckets,
     });
   } catch (error) {
-    console.error("❌ Stats error:", error.message);
+    console.error("❌ Stats error:", "Search operation failed");
     res.status(500).json({ error: "Failed to get statistics" });
   }
 });
@@ -633,7 +611,7 @@ async function start() {
       console.log(`📁 Data path: ${config.dataPath}`);
     });
   } catch (error) {
-    console.error("❌ Failed to start service:", error);
+    console.error("Search service startup failed");
     process.exit(1);
   }
 }

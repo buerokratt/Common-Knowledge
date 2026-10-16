@@ -1,4 +1,55 @@
 databaseChangeLog:
-  - includeAll:
-      path: changelog/
-      errorIfMissingOrEmpty: true
+- include:
+    file: changelog/20250424191943-add-copy-row-with-modifications-function.sql
+- include:
+    file: changelog/20250424191943-add-copy-row-with-modifications-function.xml
+- include:
+    file: changelog/20250424191943-rollback.sql
+- include:
+    file: changelog/20250624225925-initial_schema.sql
+- include:
+    file: changelog/20250624225925-initial_schema.xml
+- include:
+    file: changelog/20250624225925-rollback.sql
+- include:
+    file: changelog/20250806202019-add-indexes.sql
+- include:
+    file: changelog/20250806202019-add-indexes.xml
+- include:
+    file: changelog/20250806202019-rollback.sql
+- include:
+    file: changelog/20250821160758-implement-schema-001.sql
+- include:
+    file: changelog/20250821160758-implement-schema-001.xml
+- include:
+    file: changelog/20251021071904-add-uploaded-by-and-file-size.sql
+- include:
+    file: changelog/20251021071904-add-uploaded-by-and-file-size.xml
+- include:
+    file: changelog/20251021071904-rollback.sql
+- include:
+    file: changelog/20260225-in_review-cleaning_status.sql
+- include:
+    file: changelog/20260312182956-add-quality-control.sql
+- include:
+    file: changelog/20260312182956-add-quality-control.xml
+- include:
+    file: changelog/20260312182956-rollback.sql
+- include:
+    file: changelog/20260318054000-add-pre-selected-urls-source-type-rollback.sql
+- include:
+    file: changelog/20260318054000-add-pre-selected-urls-source-type.sql
+- include:
+    file: changelog/20260318054000-add-pre-selected-urls-source-type.xml
+- include:
+    file: changelog/20260518120000-remove-agency-external-id.sql
+- include:
+    file: changelog/20260518120000-remove-agency-external-id.xml
+- include:
+    file: changelog/20260518120000-rollback.sql
+- include:
+    file: changelog/20260519000000-add-extract-images.sql
+- include:
+    file: changelog/20260519000000-add-extract-images.xml
+- include:
+    file: changelog/20260519000000-rollback.sql

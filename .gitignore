@@ -21,3 +21,12 @@ scrapped-data
 .venv/
 .ruff_cache/
 .mypy_cache/
+
+# Private operator state and generated CI artifacts
+/.central-build/
+/.central-release/
+/installation-state/
+/operator-bindings.json
+/published-images.json
+/rit-byrokratt.yaml
+*.kubeconfig
