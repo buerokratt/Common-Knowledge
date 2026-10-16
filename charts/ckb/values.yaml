@@ -612,7 +612,9 @@ contentExternal:
   # configuration at all. An llm_module deployment MUST set it — an HTTP API
   # has nowhere to hold a manifest — along with LLM_MODULE_BASE_URL (https://
   # only; the body is Estonian government document text) and
-  # LLM_MODULE_VAULT_SECRET_PATH.
+  # LLM_MODULE_VAULT_SECRET_PATH. An s3 manifest store authenticates with the
+  # EXTERNAL_S3_* keys from contentExternal.externalStore.secret, and startup
+  # refuses it without them.
   #
   # MANIFEST_STORE_BACKEND=local is development only and additionally needs
   # MANIFEST_STORE_ALLOW_LOCAL=true. Never set it in a chart values file: a

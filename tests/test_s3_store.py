@@ -553,14 +553,16 @@ def test_a_connection_never_prints_its_credentials() -> None:
     assert BUCKET in repr(connection)
 
 
-@pytest.mark.parametrize(
-    ("backend", "task"), [("azure_blob", "Stage H"), ("local", "D19")]
-)
-def test_the_factory_names_the_task_that_builds_each_backend(
-    backend: str, task: str
-) -> None:
-    with pytest.raises(ConfigurationError, match=task):
-        build_store(backend, _CONNECTION)
+def test_the_factory_names_the_task_that_builds_azure_blob() -> None:
+    with pytest.raises(ConfigurationError, match="Stage H"):
+        build_store("azure_blob", _CONNECTION)
+
+
+def test_the_factory_never_builds_local_as_a_destination() -> None:
+    """`local` exists for the manifest store only (D19). A destination on the
+    work volume would be a corpus that vanishes with a re-provisioned PVC."""
+    with pytest.raises(ConfigurationError, match="manifest-store only"):
+        build_store("local", _CONNECTION)
 
 
 def test_the_factory_refuses_an_unknown_backend() -> None:

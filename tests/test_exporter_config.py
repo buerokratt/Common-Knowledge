@@ -141,6 +141,9 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     "manifest_store_backend": "s3",
     "manifest_store_endpoint_url": "https://store.example",
     "manifest_store_bucket": "content-manifests",
+    # D18: an explicit s3 manifest store authenticates with these.
+    "external_s3_access_key_id": "manifest-key-id",
+    "external_s3_secret_access_key": "manifest-secret",
     "llm_module_base_url": "https://llm.example/ingest",
     "llm_module_vault_secret_path": "llm/connections/ingest",
 }
@@ -254,15 +257,53 @@ def test_an_explicitly_set_manifest_store_must_be_complete(
     assert expected in str(excinfo.value)
 
 
-def test_azure_manifest_store_does_not_require_an_endpoint_url() -> None:
-    """Azure Blob addresses its container through the account, not an
-    endpoint URL, so requiring one would be a refusal with no remedy."""
+def test_an_explicit_s3_manifest_store_needs_the_external_keys_at_startup() -> None:
+    """D18: refused at startup, naming both, not at first commit — by which
+    point a run has published documents it then cannot record."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            external_s3_access_key_id="", external_s3_secret_access_key=""
+        )
+    message = str(excinfo.value)
+    assert "EXTERNAL_S3_ACCESS_KEY_ID" in message
+    assert "EXTERNAL_S3_SECRET_ACCESS_KEY" in message
+    # And never a suggestion to use CKB's own read-only keys (rule 6).
+    assert "never CKB's own AWS_* keys" in message
+
+
+def test_an_explicit_s3_manifest_store_on_ckbs_own_bucket_is_refused() -> None:
+    """Rule 1's bucket twin: CKB's bucket holds the scraped tree the Global
+    Classifier zips. The trailing slash must not be a way around it."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            s3_endpoint_url="https://store.example/",
+            s3_bucket_name="content-manifests",
+        )
+    assert "CKB's own bucket" in str(excinfo.value)
+
+
+def test_the_same_bucket_name_on_another_endpoint_is_not_ckbs_bucket() -> None:
     settings = _llm_module_settings(
-        manifest_store_backend="azure_blob",
-        manifest_store_endpoint_url="",
-        manifest_store_bucket="content-manifests",
+        s3_endpoint_url="https://ckb-store.internal",
+        s3_bucket_name="content-manifests",
     )
     assert settings.resolved_manifest_store_bucket == "content-manifests"
+
+
+def test_an_azure_manifest_store_is_refused_at_startup_until_stage_h() -> None:
+    """Otherwise it passes startup and fails at the first run — the exact
+    failure A12's matrix exists to pull forward. It is refused for being
+    unbuilt, not for lacking an endpoint URL: Azure addresses its container
+    through the account, so Stage H must not start requiring one."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            manifest_store_backend="azure_blob",
+            manifest_store_endpoint_url="",
+            manifest_store_bucket="content-manifests",
+        )
+    message = str(excinfo.value)
+    assert "Stage H" in message
+    assert "ENDPOINT_URL" not in message
 
 
 def test_local_manifest_store_needs_no_bucket() -> None:
@@ -350,6 +391,40 @@ def test_setting_only_a_manifest_prefix_does_not_count_as_configured(
     settings = _settings(manifest_store_prefix="somewhere-else")
     assert settings.manifest_store_is_inherited is True
     assert settings.resolved_manifest_store_prefix == "content"
+
+
+def test_an_ignored_manifest_store_setting_is_warned_about(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The operator who set a bucket and forgot the backend believes the
+    manifest moved. It did not, and startup says so."""
+    settings = _settings(manifest_store_bucket="manifests")
+
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        log_redacted_config(settings)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "MANIFEST_STORE_BUCKET is set" in message
+    assert "MANIFEST_STORE_BACKEND is empty" in message
+
+
+def test_default_manifest_store_settings_are_not_warned_about(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The documented MANIFEST_STORE_PREFIX default is not an operator act."""
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        log_redacted_config(_settings())
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_an_explicit_manifest_store_is_never_warned_about(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        log_redacted_config(_llm_module_settings())
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
 
 
 # --------------------------------------------------------------------------
@@ -718,6 +793,18 @@ def test_llm_module_env_without_chunk_profile_refuses_to_start(
     with pytest.raises(ConfigurationError) as excinfo:
         load_settings()
     assert "CHUNK_PROFILE" in str(excinfo.value)
+
+
+def test_llm_module_env_without_a_manifest_store_refuses_to_start(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D18 through the startup path itself, not only the model: the lifespan
+    calls load_settings, so this is the refusal a crashed container shows."""
+    _set_llm_module_env(monkeypatch, pinned=True)
+    monkeypatch.delenv("MANIFEST_STORE_BACKEND")
+    with pytest.raises(ConfigurationError) as excinfo:
+        load_settings()
+    assert "MANIFEST_STORE_BACKEND" in str(excinfo.value)
 
 
 def test_config_echo_carries_the_chunk_geometry_and_fingerprint(

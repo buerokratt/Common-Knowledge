@@ -6,15 +6,20 @@ tests/test_exporter_sink_resolution.py enforces that: this file, sinks/factory.p
 and api/config.py are the only ones allowed to compare against a backend name
 or key a dispatch table on one.
 
-TWO ENTRY POINTS, ONE TABLE. `build_store` maps a backend name plus explicit
+THREE ENTRY POINTS, ONE TABLE. `build_store` maps a backend name plus explicit
 connection values to a client, and knows nothing about which role the store
 plays. `build_destination_store` reads the object-store sink's settings and
-calls it. The manifest store (D16) is the second caller: it passes the
-`resolved_manifest_store_*` values to the same `build_store`, so there is one
-dispatch table for both roles and no second factory to drift from this one.
+calls it. `build_manifest_store_client` (D16, D17) is the manifest store's
+entry point: inherited, it IS `build_destination_store`; explicit, it passes
+the `resolved_manifest_store_*` values to the same `build_store`. So there is
+one dispatch table for both roles and no second factory to drift from this one.
+
+`local` is the one backend outside the table. It addresses a directory, not a
+bucket, and it exists only for the manifest store (D19), so it is built only by
+`build_manifest_store_client` and `build_store` refuses it by name.
 
 Backends that do not exist yet refuse with the task that builds them, the
-same convention as sinks/factory.py: `azure_blob` is Stage H, `local` is D19.
+same convention as sinks/factory.py: `azure_blob` is Stage H.
 """
 
 from collections.abc import Callable
@@ -22,9 +27,20 @@ from dataclasses import dataclass, field
 
 from exporter.api.config import ConfigurationError, Settings
 from exporter.stores.base import ExternalStoreClient
+from exporter.stores.local_store import LocalFileStore
 from exporter.stores.s3_store import S3Store
 
-__all__ = ["StoreConnection", "build_destination_store", "build_store"]
+__all__ = [
+    "LOCAL_MANIFEST_STORE_DIRNAME",
+    "StoreConnection",
+    "build_destination_store",
+    "build_manifest_store_client",
+    "build_store",
+]
+
+# Where `local` keeps the manifest, under CONTENT_WORK_DIR. Beside the run lock
+# and the `_deferred/` journal, never inside either.
+LOCAL_MANIFEST_STORE_DIRNAME = "_manifest_store"
 
 # A pool smaller than the number of documents in flight makes F16's
 # concurrency queue on connections instead of on the store.
@@ -70,8 +86,9 @@ _BACKENDS: dict[str, Callable[[StoreConnection], ExternalStoreClient]] = {
 # Backend name -> the task that will register a builder.
 _NOT_YET_BUILT: dict[str, str] = {
     "azure_blob": "Stage H",
-    "local": "D19",
 }
+
+_LOCAL = "local"
 
 
 def build_store(backend: str, connection: StoreConnection) -> ExternalStoreClient:
@@ -79,6 +96,11 @@ def build_store(backend: str, connection: StoreConnection) -> ExternalStoreClien
     builder = _BACKENDS.get(backend)
     if builder is not None:
         return builder(connection)
+    if backend == _LOCAL:
+        raise ConfigurationError(
+            "store backend 'local' is manifest-store only (D19) and is built by "
+            "build_manifest_store_client, never as a destination."
+        )
     task = _NOT_YET_BUILT.get(backend)
     if task is not None:
         raise ConfigurationError(
@@ -141,5 +163,48 @@ def build_destination_store(settings: Settings) -> ExternalStoreClient:
             max_pool_connections=max(
                 _MIN_POOL_CONNECTIONS, settings.export_concurrency * 2
             ),
+        ),
+    )
+
+
+def build_manifest_store_client(settings: Settings) -> ExternalStoreClient:
+    """The client manifest.json and the journal mirror go through (D16).
+
+    INHERITED (D17) — no MANIFEST_STORE_BACKEND — is the object-store sink's
+    own store, built by the same function with the same guards. Paired with
+    `resolved_manifest_store_prefix` (CONTENT_EXTERNAL_PREFIX when inherited),
+    the manifest lands on the same bucket at the same key as before the two-
+    sink change, byte for byte (verification 20).
+
+    EXPLICIT `s3` authenticates with the EXTERNAL_S3_* keys and region. On an
+    llm_module deployment there is no object-store destination for those keys
+    to address, so they are the manifest store's; on an object-store
+    deployment with a separate manifest bucket the one key pair serves both.
+    Never AWS_*: those are CKB's read-only keys (rule 6). api/config.py has
+    already refused, at startup, an explicit store with no keys or one that
+    names CKB's own bucket (D18).
+
+    EXPLICIT `local` is a directory under CONTENT_WORK_DIR, and refuses itself
+    without MANIFEST_STORE_ALLOW_LOCAL (D19).
+    """
+    if settings.manifest_store_is_inherited:
+        return build_destination_store(settings)
+
+    backend = settings.resolved_manifest_store_backend
+    if backend == _LOCAL:
+        return LocalFileStore(
+            settings.work_dir_path / LOCAL_MANIFEST_STORE_DIRNAME,
+            allow_local=settings.manifest_store_allow_local,
+        )
+    return build_store(
+        backend,
+        StoreConnection(
+            endpoint_url=settings.resolved_manifest_store_endpoint_url,
+            bucket=settings.resolved_manifest_store_bucket,
+            access_key_id=settings.external_s3_access_key_id.get_secret_value(),
+            secret_access_key=settings.external_s3_secret_access_key.get_secret_value(),
+            region=settings.external_s3_region,
+            # The manifest has a single writer, the coordinator (F16), so the
+            # default pool is ample.
         ),
     )

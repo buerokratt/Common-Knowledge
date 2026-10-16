@@ -63,7 +63,7 @@ it — see the note in the table below.
 | `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` | for a run on `object_store` + `s3` | The destination's **own** credentials. They are passed to boto3 explicitly and never come from its default chain, which would pick up `AWS_*`: those are CKB's read-only keys and are never used to write (rule 6). A blank value is refused rather than defaulted. They need `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and `s3:ListBucket` on the destination bucket: every delete first HEADs the key to tell `deleted` from `missing`, and HEAD is authorised as a GET. Without `ListBucket`, a missing key answers 403 and is reported as an error, never as absent. The bucket must not be CKB's own (`S3_BUCKET_NAME` on `S3_ENDPOINT_URL`), and no prefix may contain a `scrapped-data` segment (rule 1). In the chart the credentials come from a Secret (`contentExternal.externalStore.secret`) |
 | `EXTERNAL_S3_REGION` | no (default `us-east-1`) | Region to sign with. S3-compatible stores ignore the value |
 | `EXTERNAL_S3_SUPPORTS_BATCH_DELETE` | no (default `true`) | Set `false` for a store whose `DeleteObjects` is missing or partial. Deletes then go one key at a time, with the same per-key outcome |
-| `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit |
+| `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
 
@@ -80,12 +80,13 @@ so, which is indistinguishable from never having run.
 | `llm_module`, no manifest store | **refuses to start** — names `MANIFEST_STORE_BACKEND` |
 | `llm_module`, no `LLM_MODULE_BASE_URL` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
 | `MANIFEST_STORE_BACKEND=local` without `MANIFEST_STORE_ALLOW_LOCAL=true` | **refuses to start** |
+| `MANIFEST_STORE_BACKEND=azure_blob` | **refuses to start** — names Stage H, which builds that backend |
 | `llm_module` with no explicit `CHUNK_PROFILE` | **refuses to start** — names `CHUNK_PROFILE`; the default was chosen for a destination that embeds its own chunks |
 | `CHUNK_PROFILE` not a known preset (any sink) | **refuses to start** — lists the valid presets |
 
 One more check is implied by the second row: an explicitly-set manifest store must
-be **complete** (`s3` needs a bucket and an endpoint URL, `azure_blob` needs a
-container), or `MANIFEST_STORE_BACKEND=s3` on its own would satisfy the matrix
+be **complete** (`s3` needs a bucket, an endpoint URL and the `EXTERNAL_S3_*`
+keys, `azure_blob` needs a container), or `MANIFEST_STORE_BACKEND=s3` on its own would satisfy the matrix
 while naming a store that cannot be addressed.
 
 ### Manifest-store inheritance is all-or-nothing

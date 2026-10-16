@@ -337,22 +337,21 @@ _DESTINATIONS: dict[str, dict[str, str]] = {
         "manifest_store_backend": "s3",
         "manifest_store_endpoint_url": "https://store.example",
         "manifest_store_bucket": "content-manifests",
+        "external_s3_access_key_id": "k",
+        "external_s3_secret_access_key": "s",
     },
     "llm_module-s3-manifest": {
         "content_sink": "llm_module",
         "manifest_store_backend": "s3",
         "manifest_store_endpoint_url": "https://store.example",
         "manifest_store_bucket": "content-manifests",
+        "external_s3_access_key_id": "k",
+        "external_s3_secret_access_key": "s",
         "llm_module_base_url": "https://llm.example/ingest",
         "llm_module_vault_secret_path": "llm/connections/ingest",
     },
-    "llm_module-azure_blob-manifest": {
-        "content_sink": "llm_module",
-        "manifest_store_backend": "azure_blob",
-        "manifest_store_bucket": "content-manifests",
-        "llm_module_base_url": "https://llm.example/ingest",
-        "llm_module_vault_secret_path": "llm/connections/ingest",
-    },
+    # An azure_blob manifest store is refused at startup until Stage H, so it
+    # is not a shape a deployment can configure yet. Stage H adds it back.
 }
 
 

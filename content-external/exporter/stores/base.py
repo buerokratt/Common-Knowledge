@@ -61,7 +61,9 @@ __all__ = [
     "StoreCapabilities",
     "StoreError",
     "StoreObject",
+    "JSON_CONTENT_TYPE",
     "account_for_requested",
+    "encode_json",
     "validate_object_metadata",
 ]
 
@@ -257,6 +259,20 @@ def account_for_requested[T: Hashable](
     )
 
 
+def encode_json(value: object) -> bytes:
+    """`value` as the deterministic UTF-8 JSON `put_json` writes (D5).
+
+    Public so a caller can validate the exact bytes it is about to write — the
+    manifest store parses its own commit before the PUT.
+    """
+    return json.dumps(
+        to_json_dict(value),
+        sort_keys=True,
+        ensure_ascii=False,
+        allow_nan=False,
+    ).encode("utf-8")
+
+
 def validate_object_metadata(metadata: Mapping[str, str] | None) -> dict[str, str]:
     """Object metadata as a plain dict, or ValueError if any of it is not ASCII.
 
@@ -378,14 +394,8 @@ class ExternalStoreClient(ABC):
         hold MappingProxyType fields (`DocumentRecord.source`,
         `Manifest.documents`), which json.dumps cannot serialise.
         """
-        payload = json.dumps(
-            to_json_dict(value),
-            sort_keys=True,
-            ensure_ascii=False,
-            allow_nan=False,
-        ).encode("utf-8")
         return self.put_bytes(
-            key, payload, content_type=JSON_CONTENT_TYPE, metadata=metadata
+            key, encode_json(value), content_type=JSON_CONTENT_TYPE, metadata=metadata
         )
 
     def get_bytes(self, key: str) -> bytes | None:

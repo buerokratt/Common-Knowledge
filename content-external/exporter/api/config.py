@@ -18,8 +18,11 @@ content-external-pipeline.md#config-and-secrets.
 MANIFEST-STORE RESOLUTION IS ALL-OR-NOTHING (A12, D17). The switch is whether
 MANIFEST_STORE_BACKEND is set. When it is empty the manifest store IS the
 object-store sink's own store — endpoint, bucket AND prefix all inherited —
-and MANIFEST_STORE_* is ignored in its entirety, including
-MANIFEST_STORE_PREFIX's non-empty default.
+and MANIFEST_STORE_* is not used for resolution at all, including
+MANIFEST_STORE_PREFIX's non-empty default. (MANIFEST_STORE_PREFIX is still
+validated, because a malformed value is a typo worth refusing either way, and
+a non-default MANIFEST_STORE_* value left beside an empty backend is warned
+about at startup — see warn_on_ignored_manifest_store_settings.)
 
 That last clause is the non-obvious one, so it is spelled out. The design's env
 block documents `MANIFEST_STORE_PREFIX=content-manifests`, which reads like a
@@ -372,14 +375,27 @@ class Settings(BaseSettings):
 
         `local` needs nothing: it resolves to CONTENT_WORK_DIR, which is
         already required and already asserted.
+
+        D18: an explicit `s3` store authenticates with the EXTERNAL_S3_* keys
+        — on an llm_module deployment there is no object-store destination,
+        so those keys are the manifest store's. They are checked here, at
+        startup, unlike the inherited case, where the destination store's
+        own keys are checked when a run first builds it: an explicit
+        manifest store is required configuration, and a missing key found at
+        first commit is a corpus published with no record.
         """
         if not self.manifest_store_backend or self.manifest_store_backend == "local":
             return self
         missing = []
         if not self.manifest_store_bucket:
             missing.append("MANIFEST_STORE_BUCKET")
-        if self.manifest_store_backend == "s3" and not self.manifest_store_endpoint_url:
-            missing.append("MANIFEST_STORE_ENDPOINT_URL")
+        if self.manifest_store_backend == "s3":
+            if not self.manifest_store_endpoint_url:
+                missing.append("MANIFEST_STORE_ENDPOINT_URL")
+            if not self.external_s3_access_key_id.get_secret_value():
+                missing.append("EXTERNAL_S3_ACCESS_KEY_ID")
+            if not self.external_s3_secret_access_key.get_secret_value():
+                missing.append("EXTERNAL_S3_SECRET_ACCESS_KEY")
         if missing:
             raise ValueError(
                 f"MANIFEST_STORE_BACKEND={self.manifest_store_backend} is set "
@@ -387,6 +403,31 @@ class Settings(BaseSettings):
                 f"{'are' if len(missing) > 1 else 'is'} empty. A manifest "
                 "store that cannot be addressed is worse than none: the run "
                 "would publish documents and then fail to record that it had."
+                " (An s3 manifest store authenticates with the EXTERNAL_S3_* "
+                "keys, never CKB's own AWS_* keys.)"
+            )
+        if self.manifest_store_backend == "azure_blob":
+            # After the completeness check, so a missing container is still
+            # named. Remove when Stage H registers the backend: until then it
+            # would pass startup and fail at the first run, which is exactly
+            # what this matrix exists to prevent.
+            raise ValueError(
+                "MANIFEST_STORE_BACKEND=azure_blob has no implementation in this "
+                "build yet (Stage H). Use s3 for the manifest store until it lands."
+            )
+        if (
+            self.manifest_store_backend == "s3"
+            and self.manifest_store_bucket == self.s3_bucket_name
+            and self.manifest_store_endpoint_url.rstrip("/")
+            == self.s3_endpoint_url.rstrip("/")
+        ):
+            # Rule 1's bucket-level twin, as stores/factory.py applies it to
+            # the destination: CKB's own bucket holds the scraped tree.
+            raise ValueError(
+                f"MANIFEST_STORE_BUCKET={self.manifest_store_bucket!r} on "
+                "MANIFEST_STORE_ENDPOINT_URL is CKB's own bucket (S3_BUCKET_NAME "
+                "on S3_ENDPOINT_URL). The manifest store must be a different "
+                "bucket."
             )
         return self
 
@@ -779,3 +820,43 @@ def log_redacted_config(settings: Settings) -> None:
         CONFIG_LOG_PREFIX,
         " ".join(f"{name}={value}" for name, value in sorted(fields.items())),
     )
+    warn_on_ignored_manifest_store_settings(settings)
+
+
+# The MANIFEST_STORE_* fields that only take effect once a backend is set.
+_MANIFEST_STORE_ADDRESS_FIELDS = (
+    "manifest_store_endpoint_url",
+    "manifest_store_bucket",
+    "manifest_store_prefix",
+)
+
+
+def ignored_manifest_store_settings(settings: Settings) -> list[str]:
+    """MANIFEST_STORE_* variables set to a non-default value and then ignored,
+    because MANIFEST_STORE_BACKEND is empty and the manifest store is
+    inherited (D17)."""
+    if not settings.manifest_store_is_inherited:
+        return []
+    return [
+        name.upper()
+        for name in _MANIFEST_STORE_ADDRESS_FIELDS
+        if getattr(settings, name) != Settings.model_fields[name].default
+    ]
+
+
+def warn_on_ignored_manifest_store_settings(settings: Settings) -> None:
+    """Warn, not refuse: inheritance is all-or-nothing by design, and refusing
+    would break a values file that sets the recommended prefix ahead of the
+    backend. But an operator who set MANIFEST_STORE_BUCKET and forgot the
+    backend believes the manifest moved, and it did not — that must be said."""
+    ignored = ignored_manifest_store_settings(settings)
+    if ignored:
+        logger.warning(
+            "%s %s %s set but MANIFEST_STORE_BACKEND is empty, so %s ignored: "
+            "the manifest stays in the object-store sink's own store under "
+            "CONTENT_EXTERNAL_PREFIX. Set MANIFEST_STORE_BACKEND to move it.",
+            CONFIG_LOG_PREFIX,
+            ", ".join(ignored),
+            "are" if len(ignored) > 1 else "is",
+            "they are" if len(ignored) > 1 else "it is",
+        )

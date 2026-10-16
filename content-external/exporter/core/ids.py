@@ -126,6 +126,15 @@ def _segment(name: str, value: str) -> str:
     return value
 
 
+def validate_segment(name: str, value: str) -> str:
+    """The key builders' segment rule, for a caller that must refuse an id
+    before it ever reaches one — the manifest parser, whose ids feed every
+    delete and sweep key a run builds. A ValueError there would escape the
+    coordinator's `except StoreError`; refusing at load keeps it a
+    fail-closed StoreError."""
+    return _segment(name, value)
+
+
 def validate_prefix(prefix: str) -> str:
     """The deployment prefix: may hold "/" between segments, but no empty,
     "." or ".." segment and no leading or trailing "/".

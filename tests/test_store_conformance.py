@@ -30,17 +30,24 @@ import pytest
 from exporter_fakes import InMemoryStore, empty_prefix, live_s3_store_or_skip
 
 from exporter.stores.base import ExternalStoreClient, NotSupported
+from exporter.stores.local_store import LocalFileStore
 
 # A page size small enough that five keys need three pages, so pagination is
 # exercised on every endpoint rather than only on a large corpus.
 _PAGE_SIZE = 2
 
-_VARIANTS: dict[str, Callable[[], ExternalStoreClient]] = {
-    "in-memory": InMemoryStore,
-    "s3-batch": lambda: live_s3_store_or_skip(
+_VARIANTS: dict[str, Callable[[pytest.FixtureRequest], ExternalStoreClient]] = {
+    "in-memory": lambda _request: InMemoryStore(),
+    # D19's manifest-store backend. Development only, but it still has to
+    # meet every rule a store meets, or a manifest that works locally would
+    # behave differently from the same manifest on S3.
+    "local": lambda request: LocalFileStore(
+        request.getfixturevalue("tmp_path") / "store", allow_local=True
+    ),
+    "s3-batch": lambda _request: live_s3_store_or_skip(
         supports_batch_delete=True, list_page_size=_PAGE_SIZE
     ),
-    "s3-per-key": lambda: live_s3_store_or_skip(
+    "s3-per-key": lambda _request: live_s3_store_or_skip(
         supports_batch_delete=False, list_page_size=_PAGE_SIZE
     ),
 }
@@ -48,7 +55,7 @@ _VARIANTS: dict[str, Callable[[], ExternalStoreClient]] = {
 
 @pytest.fixture(params=sorted(_VARIANTS))
 def store(request: pytest.FixtureRequest) -> ExternalStoreClient:
-    return _VARIANTS[request.param]()
+    return _VARIANTS[request.param](request)
 
 
 @pytest.fixture

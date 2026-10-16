@@ -486,6 +486,8 @@ services:
       # - MANIFEST_STORE_ENDPOINT_URL=
       # - MANIFEST_STORE_BUCKET=
       # - MANIFEST_STORE_PREFIX=content-manifests
+      #   (an s3 manifest store authenticates with EXTERNAL_S3_ACCESS_KEY_ID /
+      #   EXTERNAL_S3_SECRET_ACCESS_KEY above — required at startup here)
       # - LLM_MODULE_BASE_URL=            # https:// only — the body is
       #                                   # Estonian government document text
       # - LLM_MODULE_VAULT_SECRET_PATH=   # fetched per task, never cached
