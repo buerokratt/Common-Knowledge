@@ -1,0 +1,83 @@
+{{- if .Values.contentExternal.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.contentExternal.nameOverride }}
+  labels:
+    app: {{ .Values.contentExternal.nameOverride }}
+spec:
+  # A14: F2's flock is the only defence against an export and a drain
+  # overlapping, and flock is only sound within one kernel. replicas must
+  # stay 1 — never scale this deployment.
+  replicas: 1
+  strategy:
+    # A14: never RollingUpdate. It runs two pods at once, which on an RWX
+    # volume (flock advisory, not honoured across nodes) means two
+    # concurrent exports with no error, and on RWO means a stalled rollout.
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ .Values.contentExternal.nameOverride }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.contentExternal.nameOverride }}
+    spec:
+      containers:
+        - name: {{ .Values.contentExternal.nameOverride }}
+          image: "{{ .Values.contentExternal.image.repository }}:{{ .Values.contentExternal.image.tag }}"
+          imagePullPolicy: {{ .Values.contentExternal.image.pullPolicy }}
+          env:
+            # CONTENT_WORK_DIR and the volumeMount below are templated from
+            # the same guarded value on purpose. If they drift, the run lock
+            # and the deletion journal land on the pod's ephemeral filesystem
+            # and nothing reports it until a restart. The service requires
+            # this variable and refuses to start without it.
+            - name: CONTENT_WORK_DIR
+              value: {{ include "ckb.contentExternal.workDir" . | quote }}
+            {{- range .Values.contentExternal.env }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+          ports:
+            - containerPort: {{ .Values.contentExternal.service.port }}
+          # A16: limits.memory is sized from EXPORT_CONCURRENCY x
+          # MAX_DOCUMENT_BYTES x 3 plus overhead — see the comment on this
+          # block in values.yaml. The service asserts that product against
+          # the container's own limit at startup and refuses to start if it
+          # does not fit, so a concurrency raised without raising the limit
+          # is a crashed container rather than an hourly OOMKill that never
+          # converges.
+          resources:
+            {{- toYaml .Values.contentExternal.resources | nindent 12 }}
+          # Safe with replicas: 1 + strategy: Recreate — there is no rolling
+          # update for readiness to stall. /health is a sync handler, so a
+          # long-running export cannot starve it, and it stays 200 even after
+          # a failed run: restarting the pod does not fix a wrong URL or a
+          # rotated credential, and the CrashLoopBackOff would hide the log
+          # line that says why. A startup refusal (bad config, or A14's flock
+          # self-test) leaves no listener at all, which these do surface.
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.contentExternal.service.port }}
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 3
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: {{ .Values.contentExternal.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+          volumeMounts:
+            - name: content-external-work
+              mountPath: {{ include "ckb.contentExternal.workDir" . }}
+      volumes:
+        - name: content-external-work
+          persistentVolumeClaim:
+            claimName: "{{ .Values.contentExternal.nameOverride }}-work-pvc"
+{{- end }}
