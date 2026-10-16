@@ -91,3 +91,18 @@ MAX_CHUNK_ORDINAL = 99_999
 PENDING_DELETIONS_BLOB_KEY_TEMPLATE = (
     "{prefix}/_control/deletions/pending-{run_id}.jsonl"
 )
+
+# The manifest's two version stamps (Key Design #5). `schema_version` versions
+# the per-document entry shape; `manifest_schema_version` versions the
+# envelope, and moved to 2 when `sink_id` was added, so a manifest written
+# before the two-sink change is a detectable migration rather than a manifest
+# with a field silently absent (F17). The manifest store refuses to load any
+# other value: an unreadable manifest aborts the agency, never degrades.
+MANIFEST_DOCUMENT_SCHEMA_VERSION = 1
+MANIFEST_SCHEMA_VERSION = 2
+
+# Rule 1. The scraped tree is /scrapped-data in every container that mounts it
+# and uploads/scrapped-data/ in S3. Both end in the same path component, so
+# the component is what is forbidden — in CONTENT_WORK_DIR and in every key
+# prefix alike.
+SCRAPPED_DATA_COMPONENT = "scrapped-data"
