@@ -56,7 +56,7 @@ createPresignedUrl:
 
 checkPresignedUrl:
   switch:
-    - condition: ${200 <= downloadRes.response.statusCodeValue && downloadRes.response.statusCodeValue < 300 && downloadRes.response.body.download_urls[0].download_url}
+    - condition: ${200 <= downloadRes.response.statusCodeValue && downloadRes.response.statusCodeValue < 300 && !!downloadRes.response.body.download_urls[0].download_url}
       next: syncToCentops
   next: logPresignedUrlFailure
 
