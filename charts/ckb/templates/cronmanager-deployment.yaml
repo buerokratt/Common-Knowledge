@@ -21,15 +21,12 @@ spec:
           volumeMounts:
             - name: dsl
               mountPath: /DSL
-            - name: scripts
-              mountPath: /scripts
           command:
             - sh
             - -c
             - |
                 git clone --single-branch --depth 1 --branch dev https://github.com/buerokratt/Common-Knowledge.git /tmp/ckb &&
-                cp -r /tmp/ckb/DSL/CronManager/* /DSL &&
-                cp -r /tmp/ckb/DSL/CronManagerScripts/* /scripts
+                cp -r /tmp/ckb/DSL/CronManager/* /DSL
       containers:
         - name: {{ .Values.cronManager.nameOverride | default "cron-manager" }}
           image: "{{ .Values.cronManager.image.repository }}:{{ .Values.cronManager.image.tag }}"
@@ -44,17 +41,7 @@ spec:
           volumeMounts:
             - name: dsl
               mountPath: /DSL
-            - name: scripts
-              mountPath: /app/scripts
-            - name: constants-config
-              mountPath: /app/constants.ini
-              subPath: constants.ini
       volumes:
         - name: dsl
-          emptyDir: {}
-        - name: scripts
-          emptyDir: {}
-        - name: constants-config
-          configMap:
-            name: {{ .Values.cronManager.nameOverride | default "cron-manager" }}-config
+          emptyDir: {} 
 {{- end }}

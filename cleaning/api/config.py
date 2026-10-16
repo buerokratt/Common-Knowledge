@@ -1,17 +1,6 @@
-from pathlib import Path
-
 import requests
 from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
-
-_SERVICE_DIR = Path(__file__).resolve().parent.parent
-
-# Service endpoints live in the shared constants.ini, not in code.
-# Docker mounts it at /app/constants.ini; locally it is read from the repo root.
-CONSTANTS_FILES = (
-    _SERVICE_DIR.parent / "constants.ini",
-    _SERVICE_DIR / "constants.ini",
-)
+from pydantic_settings import BaseSettings
 
 
 class Settings(BaseSettings):
@@ -20,17 +9,14 @@ class Settings(BaseSettings):
     Secrets are fetched fresh from Vault on every call to get_vault_secrets()
     so that token rotation by Vault Agent is always respected.
 
-    Endpoints (CKB_RUUTER_INTERNAL, CKB_VAULT) come from constants.ini.
     """
 
-    model_config = SettingsConfigDict(env_file=CONSTANTS_FILES, extra="ignore")
-
-    ckb_ruuter_internal: str = ""
+    ruuter_internal: str = ""
     languages: list[str] = ["est", "rus", "eng"]
 
     # Vault settings — optional so the service starts fine without them
     # when use_llm is never True.
-    ckb_vault: str = ""
+    vault_addr: str = ""
     vault_secret_path: str = ""
     vault_token_path: str = "/agent/out/token"
 
@@ -76,13 +62,13 @@ def get_vault_secrets() -> VaultSecrets:
     Raises RuntimeError on any misconfiguration — callers must handle this
     and must NOT call this function when use_llm is False.
     """
-    if not settings.ckb_vault or not settings.vault_secret_path:
+    if not settings.vault_addr or not settings.vault_secret_path:
         raise RuntimeError(
-            "CKB_VAULT and VAULT_SECRET_PATH must be set when use_llm is True"
+            "VAULT_ADDR and VAULT_SECRET_PATH must be set when use_llm is True"
         )
 
     token = _read_token()
-    url = f"{settings.ckb_vault}/v1/secret/data/{settings.vault_secret_path}"
+    url = f"{settings.vault_addr}/v1/secret/data/{settings.vault_secret_path}"
 
     try:
         response = requests.get(url, headers={"X-Vault-Token": token}, timeout=10)

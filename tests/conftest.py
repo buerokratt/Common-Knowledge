@@ -41,6 +41,23 @@ from loguru import logger
 
 
 # ---------------------------------------------------------------------------
+# Early environment setup — runs before any module is imported/collected
+# ---------------------------------------------------------------------------
+
+
+def pytest_configure(config: "pytest.Config") -> None:
+    """
+    Set required env vars before pytest collects any modules.
+    'api/config.py' instantiates Settings() at module level, which requires
+    RUUTER_INTERNAL.  Without this hook every test_tasks.py import fails with
+    a ValidationError before any fixture has a chance to run.
+    The value is a placeholder — unit tests mock all outbound HTTP calls, and
+    integration tests override it via the real docker-compose env vars.
+    """
+    os.environ.setdefault("RUUTER_INTERNAL", "http://localhost:8089")
+
+
+# ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 

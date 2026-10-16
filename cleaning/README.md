@@ -215,21 +215,12 @@ The `reason` field is recorded in the job log so failures can be inspected after
 
 The default `use_llm=false` mode is cheap and good enough for the bulk of public-sector content. Turn on `use_llm=true` for sources where extraction quality has been a problem; turn on `use_llm_correction=true` only after observing that the evaluation step is regularly rejecting trafilatura *and* BeautifulSoup is not producing a meaningful improvement on those specific pages.
 
-## Configuration
-
-Service endpoints are read from the repo-root `constants.ini` (the same file Ruuter and CronManager use), not from environment variables. docker-compose mounts it at `/app/constants.ini`; Helm mounts the `cleaning-server-config` ConfigMap there, rendered from the same file via the `charts/ckb/constants.ini` symlink. When running locally from the repo, the root `constants.ini` is picked up automatically.
-
-| Constant              | Required       | Description                                                                             |
-| --------------------- | -------------- | --------------------------------------------------------------------------------------- |
-| `CKB_RUUTER_INTERNAL` | yes            | Internal Ruuter base URL including the project path (e.g. `http://ruuter-internal:8089/ckb`) |
-| `CKB_VAULT`           | when using LLM | HashiCorp Vault address                                                                 |
-
-An environment variable with the same name overrides the `constants.ini` value (used by `docker-compose-test.yml` to point at mock services).
-
 ## Environment Variables
 
 | Variable              | Required       | Description                                                                             |
 | --------------------- | -------------- | --------------------------------------------------------------------------------------- |
+| `RUUTER_INTERNAL`   | yes            | URL of the internal Ruuter API                                                          |
+| `VAULT_ADDR`        | when using LLM | HashiCorp Vault address                                                                 |
 | `VAULT_SECRET_PATH` | when using LLM | Vault path for Azure OpenAI credentials                                                 |
 | `VAULT_TOKEN_PATH`  | no             | Path to the Vault Agent token file (default: `/agent/out/token`)                      |
 | `LANGUAGES`         | no             | JSON array of language codes (default: `["est","rus","eng"]`)                         |
@@ -268,7 +259,7 @@ uvicorn api.app:app --host 0.0.0.0 --port 8123 --reload
 docker build -t cleaning .
 
 docker run -p 8123:8123 \
-  -v "$(pwd)/constants.ini:/app/constants.ini:ro" \
+  -e RUUTER_INTERNAL="http://ruuter-internal:8089" \
   -v /scrapped-data:/scrapped-data \
   cleaning
 ```
@@ -336,7 +327,7 @@ The workflow at [`.github/workflows/test-cleaning.yml`](../.github/workflows/tes
 
 ## Ruuter API Calls
 
-Ruuter integration calls use `POST`, and most use a 30-second timeout. Core pipeline calls (file upload, cleaned-file record update) raise on non-2xx responses so failures surface immediately. Status-update and cleanup calls (`update-scrapped-file-stop-scrapping`, `update-status`, `update-zip-dirty`) are handled on a best-effort basis and log failures instead of raising exceptions. The base URL comes from `CKB_RUUTER_INTERNAL` in `constants.ini`, which already includes the `/ckb` prefix shown in the paths below.
+Ruuter integration calls use `POST`, and most use a 30-second timeout. Core pipeline calls (file upload, cleaned-file record update) raise on non-2xx responses so failures surface immediately. Status-update and cleanup calls (`update-scrapped-file-stop-scrapping`, `update-status`, `update-zip-dirty`) are handled on a best-effort basis and log failures instead of raising exceptions. The base URL comes from the `RUUTER_INTERNAL` environment variable.
 
 ### Upload file
 
