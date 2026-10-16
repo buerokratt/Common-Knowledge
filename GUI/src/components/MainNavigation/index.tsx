@@ -1,3 +1,4 @@
+import { rolesFromResponse } from 'services/requestRouting';
 import { FC, MouseEvent, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { NavLink, useLocation } from 'react-router-dom';
@@ -196,7 +197,7 @@ const MainNavigation: FC = () => {
     onSuccess: (res: any) => {
       const filteredItems =
         items.filter((item) => {
-          const role = res.data.get_user[0].authorities[0];
+          const role = rolesFromResponse(res)[0];
           switch (role) {
             case 'ROLE_ADMINISTRATOR':
               return item.id;

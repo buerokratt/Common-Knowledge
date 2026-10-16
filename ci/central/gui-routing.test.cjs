@@ -1,0 +1,17 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const vm = require('node:vm');
+const ts = require('/app/node_modules/typescript');
+const output = ts.transpileModule(fs.readFileSync('/app/src/services/requestRouting.ts','utf8'), {compilerOptions:{module:ts.ModuleKind.CommonJS}}).outputText;
+const sandbox={exports:{}};
+vm.runInNewContext(output,sandbox);
+const r=sandbox.exports;
+assert.equal(r.isAccountRequest('/accounts/user-role'), true);
+assert.equal(r.isAccountRequest('accounts/customer-support-activity'), true);
+assert.equal(r.isAccountRequest('auth/jwt/userinfo'), true);
+assert.equal(r.isAccountRequest('/agency/all'), false);
+assert.equal(r.isAccountRequest('/services/overview'), false);
+assert.deepEqual(Array.from(r.rolesFromResponse({response:['ROLE_ADMINISTRATOR']})), ['ROLE_ADMINISTRATOR']);
+assert.deepEqual(Array.from(r.rolesFromResponse({response:[]})), []);
+assert.deepEqual(Array.from(r.rolesFromResponse({data:{get_user:[{authorities:['ROLE_ADMINISTRATOR']}]}})), ['ROLE_ADMINISTRATOR']);
+console.log('GUI routing contracts PASS');

@@ -14,13 +14,19 @@ const api = axios.create({
 });
 
 const apiDev = axios.create({
-  baseURL: import.meta.env.REACT_APP_RUUTER_API_URL,
+  baseURL: import.meta.env.REACT_APP_CKB_API_URL || import.meta.env.REACT_APP_RUUTER_API_URL,
   headers: {
     Accept: 'application/json',
     'Content-Type': 'application/json',
     'Cache-Control': 'no-cache, no-store, must-revalidate',
   },
   withCredentials: true,
+});
+
+const accountApi = axios.create({
+  withCredentials: true,
+  headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'Cache-Control': 'no-cache, no-store, must-revalidate' },
+  baseURL: import.meta.env.REACT_APP_AUTH_BASE_URL || import.meta.env.REACT_APP_RUUTER_PRIVATE_API_URL,
 });
 
 const notificationApiDev = axios.create({
@@ -102,7 +108,9 @@ apiDev.interceptors.request.use(
   handleRequestError
 );
 
-export { api, apiDev, notificationApiDev, AxiosInterceptor };
+export { api, apiDev, accountApi, notificationApiDev, AxiosInterceptor };
 
 coordinateAuthenticatedRequests(api);
 coordinateAuthenticatedRequests(apiDev);
+
+coordinateAuthenticatedRequests(accountApi);

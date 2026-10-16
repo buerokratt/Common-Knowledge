@@ -3,6 +3,8 @@ WORKDIR /app
 COPY GUI/package*.json ./
 RUN npm ci --legacy-peer-deps --ignore-scripts --no-audit --no-fund
 COPY GUI/ ./
+COPY ci/central/gui-routing.test.cjs /app/central-routing.test.cjs
+RUN node /app/central-routing.test.cjs
 COPY ci/central/ckb.env /app/.env.development
 RUN NODE_OPTIONS=--max-old-space-size=1536 ./node_modules/.bin/vite build --mode=development
 FROM nginx:1.25.4-alpine@sha256:a8b39bd9cf0f83869a2162827a0caf6137ddf759d50a171451b335cecc87d236 AS runtime

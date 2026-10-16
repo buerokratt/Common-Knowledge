@@ -1,3 +1,4 @@
+import { isAccountRequest } from './services/requestRouting';
 import { coordinateAuthenticatedRequests } from './services/authenticatedAdapter';
 import headerApi from '@buerokratt-ria/header/src/services/api';
 import headerPrivateApi from '@buerokratt-ria/header/src/services/api-dev';
@@ -11,7 +12,7 @@ import {
 } from '@tanstack/react-query';
 
 import App from './App';
-import { api, apiDev, AxiosInterceptor } from 'services/api';
+import { api, apiDev, accountApi, AxiosInterceptor } from 'services/api';
 import apigeneric from 'services/apigeneric';
 import { ToastProvider } from 'context/ToastContext';
 import 'styles/main.scss';
@@ -33,7 +34,8 @@ const defaultQueryFn: QueryFunction | undefined = async ({ queryKey }) => {
   }
 
   if (queryKey.includes('prod')) {
-    const { data } = await apiDev.get(queryKey[0] as string);
+    const path = queryKey[0] as string;
+    const { data } = await (isAccountRequest(path) ? accountApi : apiDev).get(path);
     return data;
   }
 

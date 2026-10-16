@@ -14,3 +14,5 @@ The cluster pull identity also needs read access to every resulting package.
 
 NoOps locks these exact source commits and assembles the operator package. Build
 outputs and credentials are ignored; keep local operator bindings outside Git.
+
+Run-2 acceptance fixes: Keep CKB agency/data calls on the private CKB API; route account/auth queries to real backoffice, not generic mock routes. Accept real role-array responses. Routing contracts run before the production asset build.
