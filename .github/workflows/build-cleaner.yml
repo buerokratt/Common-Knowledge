@@ -2,7 +2,7 @@ name: Build and publish GUI
 
 on:
   push:
-    branches: [ wip ]
+    branches: [ v1.0.0 ]
     paths:
       - '.env.cleaner'
 
