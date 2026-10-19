@@ -60,7 +60,7 @@ class SpecifiedPagesSpider(BaseSpider):
                     f"Skipping {obj.metadata.source_url} because hash did not changed and it contains same data"
                 )
                 requests.post(
-                    f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                    f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
                     json={"base_id": base_id, "status": "finished"},
                 )
                 continue
@@ -71,7 +71,7 @@ class SpecifiedPagesSpider(BaseSpider):
                     f"is {obj.metadata.file_type} and it is not allowed"
                 )
                 requests.post(
-                    f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                    f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
                     json={"base_id": base_id, "status": "failed"},
                 )
                 self.log_error_to_source_run_page(
@@ -88,7 +88,7 @@ class SpecifiedPagesSpider(BaseSpider):
                 f"{request.url} Not found with status code {response.status}"
             )
             requests.post(
-                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
                 json={"base_id": base_id, "status": "not_found"},
             )
             self.log_error_to_source_run_page(

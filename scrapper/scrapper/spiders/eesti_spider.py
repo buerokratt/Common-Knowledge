@@ -8,6 +8,7 @@ import requests
 from scrapy import Request
 from scrapy.http import Response
 
+from scrapper.settings import CKB_EESTI_BASE_URL
 from scrapper.items import FileItem, Metadata, MetadataItem, ScrappedItem
 from scrapper.spiders.base_spider import BaseSpider
 
@@ -24,7 +25,7 @@ class EestiSpider(BaseSpider):
     def __init__(self, name: str | None = None, **kwargs: object) -> None:
         super().__init__(name, **kwargs)
 
-        self.base_url = "https://www.eesti.ee"
+        self.base_url = CKB_EESTI_BASE_URL
         self.menu_api = f"{self.base_url}/api/menu/et"
         self.article_api = f"{self.base_url}/api/article/v2"
         self.start_urls = []
@@ -84,7 +85,7 @@ class EestiSpider(BaseSpider):
             while True:
                 # Use same endpoint as EntireSourceSpider
                 result = requests.get(
-                    f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/get-one-source-file-to-scrape",
+                    f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/get-one-source-file-to-scrape",
                     params={
                         "source_id": self.task.source_id,
                         "reference_time": scrapped_before,
@@ -176,7 +177,7 @@ class EestiSpider(BaseSpider):
         else:
             self.logger.info(f"Article {external_id} unchanged - skipping")
             requests.post(
-                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/update-scrapped-file-stop-scrapping",
                 json={
                     "base_id": existing_articles[external_id].get("id"),
                     "status": "finished",
@@ -205,7 +206,7 @@ class EestiSpider(BaseSpider):
             )
 
             response = requests.post(
-                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/add-scrapped-file",
+                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/add-scrapped-file",
                 json={
                     "agency_id": self.task.agency_id,
                     "source_id": self.task.source_id,

@@ -5,6 +5,29 @@ https://docs.scrapy.org/en/latest/topics/settings.html
 """
 
 import os
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+_SERVICE_DIR = Path(__file__).resolve().parent.parent
+
+# Service endpoints live in the shared constants.ini, never in code or env.
+# docker-compose mounts it at /constants.ini (./scrapper is bind-mounted over
+# /app), Helm at /app/constants.ini; locally it is read from the repo root.
+CONSTANTS_FILES = (
+    _SERVICE_DIR.parent / "constants.ini",
+    _SERVICE_DIR / "constants.ini",
+)
+
+
+class _Constants(BaseSettings):
+    model_config = SettingsConfigDict(env_file=CONSTANTS_FILES, extra="ignore")
+
+    ckb_ruuter_internal: str = ""
+    ckb_eesti_base_url: str = ""
+
+
+_constants = _Constants()
 
 BOT_NAME = "scrapper"
 
@@ -46,7 +69,8 @@ ALLOWED_FILETYPES = [
     if filetype.strip()
 ]
 SCRAPED_DIRECTORY = os.environ.get("SCRAPED_DIRECTORY", "/scrapped-data")
-RUUTER_INTERNAL = os.environ.get("RUUTER_INTERNAL", "http://ruuter-internal:8089")
+CKB_RUUTER_INTERNAL = _constants.ckb_ruuter_internal
+CKB_EESTI_BASE_URL = _constants.ckb_eesti_base_url
 DOWNLOAD_DELAY = 0.2
 
 DOWNLOAD_HANDLERS = {
