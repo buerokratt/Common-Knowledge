@@ -42,6 +42,7 @@ def entry(**overrides: str | int) -> ManifestDocumentEntry:
         "metadata_sha256": "m",
         "file_size": 10,
         "chunk_count": 2,
+        "chunker_fingerprint": "f",
         "state": "published",
         "processed_at": "2026-10-06T00:00:00Z",
     }
@@ -67,6 +68,7 @@ def record(source: dict[str, Any]) -> DocumentRecord:
         document_id="d1",
         source_base_id="s1",
         content_origin="cleaned",
+        source_url="https://www.example.ee/teenus",
         source=source,
         raw_sha256="r",
         content_sha256="c",

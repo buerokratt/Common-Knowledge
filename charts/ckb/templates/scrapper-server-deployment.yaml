@@ -26,11 +26,19 @@ spec:
             {{- end }}
           ports:
             - containerPort: {{ .Values.scrapperServer.service.port }}
-          volumeMounts: {{- if .Values.scrapperServer.volumes.enabled }}
+          volumeMounts:
+            - name: constants-config
+              mountPath: /app/constants.ini
+              subPath: constants.ini
+          {{- if .Values.scrapperServer.volumes.enabled }}
             - name: data
               mountPath: /data
           {{- end }}
-      volumes: {{- if .Values.scrapperServer.volumes.enabled }}
+      volumes:
+        - name: constants-config
+          configMap:
+            name: scrapper-config
+      {{- if .Values.scrapperServer.volumes.enabled }}
         - name: data
           emptyDir: {}
       {{- end }}
