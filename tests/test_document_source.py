@@ -22,7 +22,7 @@ from botocore.response import StreamingBody
 from botocore.stub import Stubber
 
 from exporter.api.config import Settings
-from exporter.core.diff import classify
+from exporter.core.diff import SkipReason, classify, needs_read
 from exporter.core.ids import chunker_fingerprint
 from exporter.core.metadata import MAX_SIDECAR_BYTES, SidecarRejection
 from exporter.core.schemas import (
@@ -194,23 +194,34 @@ def test_empty_enumeration_is_a_list(
 
 
 @pytest.mark.parametrize(
-    "overrides, bucket",
+    "overrides, bucket, reason",
     [
-        ({"isDeleted": True}, "deleted"),
-        ({"isExcluded": True}, "deleted"),
-        ({"status": "not_found"}, "deleted"),
-        ({"status": "scraping"}, "skipped"),
-        ({"status": "cleaning"}, "skipped"),
-        ({"status": "in_review"}, "skipped"),
-        ({"status": "failed"}, "skipped"),
-        ({"status": "scraped", "cleanedDataUrl": None}, "skipped"),
+        ({"isDeleted": True}, "deleted", None),
+        ({"isExcluded": True}, "deleted", None),
+        ({"status": "not_found"}, "deleted", None),
+        ({"status": "scraping"}, "skipped", SkipReason.NOT_READY),
+        ({"status": "cleaning"}, "skipped", SkipReason.NOT_READY),
+        ({"status": "in_review"}, "skipped", SkipReason.NOT_READY),
+        ({"status": "failed"}, "skipped", SkipReason.NOT_READY),
+        (
+            {"status": "cleaning", "cleanedDataUrl": None},
+            "skipped",
+            SkipReason.NOT_READY,
+        ),
+        (
+            {"status": "finished", "cleanedDataUrl": None, "editedDataUrl": None},
+            "skipped",
+            SkipReason.NO_CONTENT,
+        ),
     ],
 )
 def test_all_signals_reach_the_real_diff(
     monkeypatch: pytest.MonkeyPatch,
     source: CkbDocumentSource,
+    published_entry: ManifestDocumentEntry,
     overrides: dict[str, object],
     bucket: str,
+    reason: SkipReason | None,
 ) -> None:
     row = ROW | overrides
     _stub(monkeypatch, [row])
@@ -224,23 +235,7 @@ def test_all_signals_reach_the_real_diff(
         row["cleanedDataUrl"],
     )
     assert ref.skip_reason is None
-    fingerprint = chunker_fingerprint(
-        Settings(content_work_dir="/var/lib/content-external").resolved_chunk_profile
-    )
-    entry = ManifestDocumentEntry(
-        source_base_id="source-1",
-        content_origin="cleaned",
-        source_updated_at=TIMESTAMP,
-        source_status="finished",
-        raw_sha256="a" * 64,
-        content_sha256="b" * 64,
-        metadata_sha256="c" * 64,
-        file_size=42,
-        chunk_count=1,
-        chunker_fingerprint=fingerprint,
-        state="published",
-        processed_at=TIMESTAMP,
-    )
+    fingerprint = published_entry.chunker_fingerprint
     previous = Manifest(
         schema_version=1,
         manifest_schema_version=1,
@@ -250,11 +245,14 @@ def test_all_signals_reach_the_real_diff(
         document_count=1,
         chunker_fingerprint=fingerprint,
         committed_at=TIMESTAMP,
-        documents={"document-1": entry},
+        documents={"document-1": published_entry},
     )
     result = classify(previous, refs, fingerprint)
     assert [change.document_id for change in getattr(result, bucket)] == ["document-1"]
     assert sum(result.counts().values()) == 1
+    if bucket == "skipped":
+        assert result.skipped[0].reason == reason
+        assert result.skipped[0].held
 
 
 @pytest.mark.parametrize("column", ROW)
@@ -420,6 +418,24 @@ def reader(read_settings: Settings) -> CkbDocumentSource:
 
 
 @pytest.fixture
+def published_entry(read_settings: Settings) -> ManifestDocumentEntry:
+    return ManifestDocumentEntry(
+        source_base_id="source-1",
+        content_origin="cleaned",
+        source_updated_at=TIMESTAMP,
+        source_status="finished",
+        raw_sha256="a" * 64,
+        content_sha256="b" * 64,
+        metadata_sha256="c" * 64,
+        file_size=42,
+        chunk_count=1,
+        chunker_fingerprint=chunker_fingerprint(read_settings.resolved_chunk_profile),
+        state="published",
+        processed_at=TIMESTAMP,
+    )
+
+
+@pytest.fixture
 def unread_ref() -> DocumentRef:
     return DocumentRef(
         document_id="document-1",
@@ -497,6 +513,36 @@ def _assert_skip(result: ReadDocument, ref: DocumentRef, reason: str) -> None:
         ),
         text=None,
         sidecar=None,
+    )
+
+
+@pytest.mark.parametrize(
+    "updated_at, expected_read",
+    [(TIMESTAMP, False), ("2026-10-20T13:00:00.000+00:00", True)],
+    ids=["unchanged", "moved"],
+)
+def test_needs_read_gates_s3_fetches_for_enumerated_timestamps(
+    monkeypatch: pytest.MonkeyPatch,
+    reader: CkbDocumentSource,
+    published_entry: ManifestDocumentEntry,
+    s3: Stubber,
+    client_factory: Mock,
+    updated_at: str,
+    expected_read: bool,
+) -> None:
+    _stub(monkeypatch, [ROW | {"updatedAt": updated_at}])
+    if expected_read:
+        _object(s3, "uploads/cleaned.txt", b"text")
+        _object(s3, "uploads/cleaned.meta.json", b"{}")
+    fingerprint = published_entry.chunker_fingerprint
+    results = [
+        reader.read(ref)
+        for ref in reader.list_documents(AGENCY)
+        if needs_read(published_entry, ref, chunker_fingerprint=fingerprint)
+    ]
+    assert [result.text for result in results] == (["text"] if expected_read else [])
+    assert client_factory.return_value.get_object.call_count == (
+        2 if expected_read else 0
     )
 
 

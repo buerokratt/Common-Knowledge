@@ -155,7 +155,7 @@ into `data_collection.source_file`. Remove the data afterwards with
   exporter had already disconnected.
 - **Postgres**: `pg_stat_activity` shows the export query still `active`
   after more than 30 s, usually waiting on `BufFileRead` (the Sort spilling to
-  disk). Abandoned queries keep running, so each tick adds load for the next
+  disk). Abandoned queries keep running, so each run adds load for the next
   one.
 
 **What to do:**
@@ -192,7 +192,7 @@ Resql does not cancel the query when the client disconnects. A retry
 straight after a timeout therefore runs alongside the abandoned query, and
 back-to-back calls stack: in the 50k measurement, 7 of 9 back-to-back
 `list_documents()` calls hit the 30 s timeout, while single calls on an idle
-database took 8.5–9.9 s. After a timeout, wait for the next tick, or cancel
+database took 8.5–9.9 s. After a timeout, wait for the next run, or cancel
 the running export queries first (step 2 above).
 
 ## Index
