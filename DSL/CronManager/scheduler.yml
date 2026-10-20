@@ -12,3 +12,8 @@ trigger_zipping:
   trigger: "0 0 */1 * * ?"
   type: exec
   command: "/bin/bash ../app/scripts/trigger_zipping.sh"
+
+trigger_presigned_url_refresh:
+  trigger: "0 30 */1 * * ?"
+  type: exec
+  command: "/bin/bash ../app/scripts/trigger_presigned_url_refresh.sh"

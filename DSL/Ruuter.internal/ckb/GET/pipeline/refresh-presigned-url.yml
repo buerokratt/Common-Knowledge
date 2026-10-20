@@ -1,0 +1,40 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Send a fresh presigned url to CentOps when the current one expires soon or the last send failed"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body: []
+
+getAgencyNeedingReport:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/get_agency_needing_centops_report"
+    contentType: json
+  result: agency
+
+checkIfAgencyFound:
+  switch:
+    - condition: ${agency.response.body.length > 0}
+      next: reportToCentops
+  next: returnSuccess
+
+reportToCentops:
+  call: http.post
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/report-to-centops"
+    headers:
+      type: json
+    body:
+      agencyId: ${agency.response.body[0].baseId}
+  timeout: 25000
+  result: reportRes
+  error: returnSuccess
+  next: returnSuccess
+
+returnSuccess:
+  return: "OK"
+  next: end
