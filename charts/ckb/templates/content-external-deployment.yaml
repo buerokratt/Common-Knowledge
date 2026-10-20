@@ -39,6 +39,30 @@ spec:
             - name: {{ .name }}
               value: {{ .value | quote }}
             {{- end }}
+            # The external destination: a different bucket and different
+            # credentials from CKB's own (rule 6). The keys come from a Secret.
+            {{- with .Values.contentExternal.externalStore }}
+            - name: EXTERNAL_S3_ENDPOINT_URL
+              value: {{ .endpointUrl | quote }}
+            - name: EXTERNAL_S3_BUCKET_NAME
+              value: {{ .bucket | quote }}
+            - name: EXTERNAL_S3_REGION
+              value: {{ .region | quote }}
+            - name: EXTERNAL_S3_SUPPORTS_BATCH_DELETE
+              value: {{ .supportsBatchDelete | quote }}
+            {{- if .secret.name }}
+            - name: EXTERNAL_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secret.name | quote }}
+                  key: {{ .secret.accessKeyIdKey | quote }}
+            - name: EXTERNAL_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secret.name | quote }}
+                  key: {{ .secret.secretAccessKeyKey | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - containerPort: {{ .Values.contentExternal.service.port }}
           # A16: limits.memory is sized from EXPORT_CONCURRENCY x

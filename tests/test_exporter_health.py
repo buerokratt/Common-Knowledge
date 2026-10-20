@@ -79,6 +79,9 @@ def test_health_reports_the_configured_sink(
     monkeypatch.setenv("MANIFEST_STORE_BACKEND", "s3")
     monkeypatch.setenv("MANIFEST_STORE_ENDPOINT_URL", "https://store.example")
     monkeypatch.setenv("MANIFEST_STORE_BUCKET", "content-manifests")
+    # D18: an s3 manifest store authenticates with the EXTERNAL_S3_* keys.
+    monkeypatch.setenv("EXTERNAL_S3_ACCESS_KEY_ID", "manifest-key-id")
+    monkeypatch.setenv("EXTERNAL_S3_SECRET_ACCESS_KEY", "manifest-secret")
     monkeypatch.setenv("LLM_MODULE_BASE_URL", "https://llm.example/ingest")
     monkeypatch.setenv("LLM_MODULE_VAULT_SECRET_PATH", "llm/connections/ingest")
 

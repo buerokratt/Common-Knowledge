@@ -84,6 +84,16 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.vault_token_path == "/agent/out/token"
     assert settings.vault_secret_path == ""
     assert settings.azure_storage_container == "agency-content"
+    assert settings.external_s3_region == "us-east-1"
+    assert settings.external_s3_supports_batch_delete is True
+
+
+def test_the_destination_store_is_not_required_at_startup(clean_env: None) -> None:
+    """EXTERNAL_S3_* is refused by stores/factory.py when a run builds the
+    store, not here: /health must come up before the destination is set."""
+    settings = _settings()
+    assert settings.external_s3_endpoint_url == ""
+    assert settings.external_s3_access_key_id.get_secret_value() == ""
 
 
 def test_work_dir_is_required(clean_env: None) -> None:
@@ -131,6 +141,9 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     "manifest_store_backend": "s3",
     "manifest_store_endpoint_url": "https://store.example",
     "manifest_store_bucket": "content-manifests",
+    # D18: an explicit s3 manifest store authenticates with these.
+    "external_s3_access_key_id": "manifest-key-id",
+    "external_s3_secret_access_key": "manifest-secret",
     "llm_module_base_url": "https://llm.example/ingest",
     "llm_module_vault_secret_path": "llm/connections/ingest",
 }
@@ -244,15 +257,53 @@ def test_an_explicitly_set_manifest_store_must_be_complete(
     assert expected in str(excinfo.value)
 
 
-def test_azure_manifest_store_does_not_require_an_endpoint_url() -> None:
-    """Azure Blob addresses its container through the account, not an
-    endpoint URL, so requiring one would be a refusal with no remedy."""
+def test_an_explicit_s3_manifest_store_needs_the_external_keys_at_startup() -> None:
+    """D18: refused at startup, naming both, not at first commit — by which
+    point a run has published documents it then cannot record."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            external_s3_access_key_id="", external_s3_secret_access_key=""
+        )
+    message = str(excinfo.value)
+    assert "EXTERNAL_S3_ACCESS_KEY_ID" in message
+    assert "EXTERNAL_S3_SECRET_ACCESS_KEY" in message
+    # And never a suggestion to use CKB's own read-only keys (rule 6).
+    assert "never CKB's own AWS_* keys" in message
+
+
+def test_an_explicit_s3_manifest_store_on_ckbs_own_bucket_is_refused() -> None:
+    """Rule 1's bucket twin: CKB's bucket holds the scraped tree the Global
+    Classifier zips. The trailing slash must not be a way around it."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            s3_endpoint_url="https://store.example/",
+            s3_bucket_name="content-manifests",
+        )
+    assert "CKB's own bucket" in str(excinfo.value)
+
+
+def test_the_same_bucket_name_on_another_endpoint_is_not_ckbs_bucket() -> None:
     settings = _llm_module_settings(
-        manifest_store_backend="azure_blob",
-        manifest_store_endpoint_url="",
-        manifest_store_bucket="content-manifests",
+        s3_endpoint_url="https://ckb-store.internal",
+        s3_bucket_name="content-manifests",
     )
     assert settings.resolved_manifest_store_bucket == "content-manifests"
+
+
+def test_an_azure_manifest_store_is_refused_at_startup_until_stage_h() -> None:
+    """Otherwise it passes startup and fails at the first run — the exact
+    failure A12's matrix exists to pull forward. It is refused for being
+    unbuilt, not for lacking an endpoint URL: Azure addresses its container
+    through the account, so Stage H must not start requiring one."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            manifest_store_backend="azure_blob",
+            manifest_store_endpoint_url="",
+            manifest_store_bucket="content-manifests",
+        )
+    message = str(excinfo.value)
+    assert "Stage H" in message
+    assert "ENDPOINT_URL" not in message
 
 
 def test_local_manifest_store_needs_no_bucket() -> None:
@@ -342,6 +393,40 @@ def test_setting_only_a_manifest_prefix_does_not_count_as_configured(
     assert settings.resolved_manifest_store_prefix == "content"
 
 
+def test_an_ignored_manifest_store_setting_is_warned_about(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The operator who set a bucket and forgot the backend believes the
+    manifest moved. It did not, and startup says so."""
+    settings = _settings(manifest_store_bucket="manifests")
+
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        log_redacted_config(settings)
+
+    warnings = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "MANIFEST_STORE_BUCKET is set" in message
+    assert "MANIFEST_STORE_BACKEND is empty" in message
+
+
+def test_default_manifest_store_settings_are_not_warned_about(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The documented MANIFEST_STORE_PREFIX default is not an operator act."""
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        log_redacted_config(_settings())
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_an_explicit_manifest_store_is_never_warned_about(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        log_redacted_config(_llm_module_settings())
+    assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
 # --------------------------------------------------------------------------
 # Rule 1
 # --------------------------------------------------------------------------
@@ -402,6 +487,30 @@ def test_malformed_paths_are_rejected(work_dir: str) -> None:
 )
 def test_rule_one_accepts_and_normalises(work_dir: str, expected: str) -> None:
     assert _settings(work_dir).content_work_dir == expected
+
+
+@pytest.mark.parametrize(
+    "variable", ["content_external_prefix", "manifest_store_prefix"]
+)
+@pytest.mark.parametrize(
+    "prefix", ["scrapped-data", "uploads/scrapped-data", "content/SCRAPPED-DATA/x"]
+)
+def test_rule_one_rejects_a_key_prefix_inside_the_scraped_tree(
+    variable: str, prefix: str
+) -> None:
+    """The destination bucket is not CKB's, but rule 1 is about the path
+    component, and a key prefix is where every external write lands."""
+    with pytest.raises(ValidationError, match="rule 1"):
+        _settings(**{variable: prefix})
+
+
+def test_rule_one_allows_a_key_prefix_that_only_resembles_the_scraped_tree() -> None:
+    assert (
+        _settings(
+            content_external_prefix="scrapped-data-archive"
+        ).content_external_prefix
+        == "scrapped-data-archive"
+    )
 
 
 @pytest.mark.skipif(
@@ -686,6 +795,18 @@ def test_llm_module_env_without_chunk_profile_refuses_to_start(
     assert "CHUNK_PROFILE" in str(excinfo.value)
 
 
+def test_llm_module_env_without_a_manifest_store_refuses_to_start(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D18 through the startup path itself, not only the model: the lifespan
+    calls load_settings, so this is the refusal a crashed container shows."""
+    _set_llm_module_env(monkeypatch, pinned=True)
+    monkeypatch.delenv("MANIFEST_STORE_BACKEND")
+    with pytest.raises(ConfigurationError) as excinfo:
+        load_settings()
+    assert "MANIFEST_STORE_BACKEND" in str(excinfo.value)
+
+
 def test_config_echo_carries_the_chunk_geometry_and_fingerprint(
     clean_env: None, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -732,6 +853,19 @@ def test_redaction_never_emits_a_secret(clean_env: None) -> None:
     assert "AKIAEXAMPLE" not in repr(fields)
     assert fields["aws_secret_access_key"] == "[set]"
     assert fields["aws_access_key_id"] == "[set]"
+
+
+def test_destination_credentials_are_redacted(clean_env: None) -> None:
+    settings = _settings(
+        external_s3_access_key_id=SecretStr("EXTKEYEXAMPLE"),
+        external_s3_secret_access_key=SecretStr("ext-s3cr3t-never-log-me"),
+    )
+    fields = redacted_settings(settings)
+
+    assert "ext-s3cr3t-never-log-me" not in repr(fields)
+    assert "EXTKEYEXAMPLE" not in repr(fields)
+    assert fields["external_s3_access_key_id"] == "[set]"
+    assert fields["external_s3_secret_access_key"] == "[set]"
 
 
 def test_unset_secrets_report_unset(clean_env: None) -> None:
