@@ -254,7 +254,20 @@ class RunReport:
 
     # document_id -> reason
     skipped_reasons: Mapping[str, str] = field(default_factory=dict)
+    # Delete intents journalled before the destination was asked (F7), and
+    # the deleted items it did not confirm, which stay with the journal.
     deletions_recorded: int = 0
+    deletions_unresolved: int = 0
+
+    # Documents the destination did not confirm. They keep their previous
+    # manifest entry and are retried next run, so a run with failures can still
+    # be `success`; this count is what tells the two apart. F18 adds the
+    # per-document detail.
+    publish_failed_count: int = 0
+    # metadata_changed documents re-pushed in full because the destination has
+    # no metadata-only merge (L8): a cheap path that became an expensive one,
+    # reported rather than hidden.
+    metadata_full_repush_count: int = 0
 
     # Citation cross-checks (C2): documents cited from source_file.url
     # because the sidecar's source_url was unusable, and documents whose two

@@ -17,19 +17,30 @@ pytest puts it on sys.path.
 - live_s3_store_or_skip builds an S3Store from CONFORMANCE_S3_* or skips the
   calling test. It is the only thing here that reaches a network, and only
   when those variables are set.
+- FakeDocumentSource stands in for Stage E's Resql+S3 document source. It
+  hashes and parses with the real core functions, so the coordinator sees
+  exactly what a real read would hand it.
 """
 
 import hashlib
+import json
 import os
 import re
-from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 
 import pytest
 
 from exporter.core.ids import document_chunk_key, document_metadata_key
-from exporter.core.schemas import Chunk, DocumentRecord
+from exporter.core.metadata import SidecarRejection, parse_sidecar
+from exporter.core.schemas import Chunk, DocumentRecord, DocumentRef
+from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
+from exporter.services.document_source import (
+    CorpusWatermark,
+    DocumentSource,
+    ReadDocument,
+)
 from exporter.sinks.base import (
     ContentSink,
     DocumentProbe,
@@ -378,4 +389,117 @@ class RecordingSink(ContentSink):
             record_present=record_present,
             chunk_count=len(ordinals),
             chunk_ordinals=ordinals,
+        )
+
+
+def make_row(
+    document_id: str,
+    *,
+    agency_id: str = "agency-1",
+    updated_at: str = "2026-10-01T09:00:00Z",
+    status: str = "finished",
+    is_deleted: bool = False,
+    is_excluded: bool = False,
+    content_origin: str | None = "cleaned",
+    source_base_id: str = "source-1",
+) -> DocumentRef:
+    """An unread row as list_agency_export_documents.sql would return it."""
+    has_content = content_origin is not None
+    return DocumentRef(
+        document_id=document_id,
+        source_base_id=source_base_id,
+        agency_id=agency_id,
+        url=f"https://www.eesti.ee/{document_id}",
+        page_title=f"Title {document_id}",
+        subsector="",
+        status=status,
+        is_excluded=is_excluded,
+        is_deleted=is_deleted,
+        updated_at=updated_at,
+        content_key=f"uploads/{document_id}/{content_origin}.md"
+        if has_content
+        else None,
+        metadata_key=(
+            f"uploads/{document_id}/{content_origin}.meta.json" if has_content else None
+        ),
+        content_origin=content_origin,
+        file_size=None,
+    )
+
+
+@dataclass
+class FakeDocument:
+    row: DocumentRef
+    text: str
+    sidecar: Mapping[str, object] | None
+    skip_reason: str | None = None
+
+
+class FakeDocumentSource(DocumentSource):
+    """Rows plus each document's text and sidecar, with a read log and
+    injectable read failures. A read normalises and hashes with the real
+    core functions and parses the sidecar with the real parser."""
+
+    def __init__(self) -> None:
+        self.documents: dict[str, FakeDocument] = {}
+        self.reads: list[str] = []
+        self.fail_reads: set[str] = set()
+        self.listed = 0
+
+    def put(
+        self,
+        row: DocumentRef,
+        text: str = "",
+        *,
+        sidecar: Mapping[str, object] | None = None,
+        skip_reason: str | None = None,
+    ) -> DocumentRef:
+        """Add or replace a document. The default sidecar cites the row."""
+        if sidecar is None:
+            sidecar = {"source_url": row.url, "page_title": row.page_title}
+        self.documents[row.document_id] = FakeDocument(row, text, sidecar, skip_reason)
+        return row
+
+    def remove(self, document_id: str) -> None:
+        del self.documents[document_id]
+
+    def watermark(self, agency_id: str) -> CorpusWatermark:
+        rows = [d.row for d in self.documents.values() if d.row.agency_id == agency_id]
+        return CorpusWatermark(
+            max_updated_at=max((r.updated_at for r in rows), default=None),
+            document_count=sum(1 for r in rows if not r.is_deleted),
+        )
+
+    def list_documents(self, agency_id: str) -> Sequence[DocumentRef]:
+        self.listed += 1
+        return [d.row for d in self.documents.values() if d.row.agency_id == agency_id]
+
+    def read(self, ref: DocumentRef) -> ReadDocument:
+        self.reads.append(ref.document_id)
+        if ref.document_id in self.fail_reads:
+            raise StoreError(f"{INJECTED_FAILURE} reading {ref.document_id}")
+        document = self.documents[ref.document_id]
+        if document.skip_reason is not None:
+            return ReadDocument(
+                replace(ref, skip_reason=document.skip_reason), None, None
+            )
+        data = None if document.sidecar is None else json.dumps(document.sidecar)
+        parsed = parse_sidecar(
+            None if data is None else data.encode("utf-8"),
+            row_url=ref.url,
+            require_sidecar=True,
+        )
+        if isinstance(parsed, SidecarRejection):
+            return ReadDocument(replace(ref, skip_reason=parsed.value), None, None)
+        raw = document.text.encode("utf-8")
+        text = normalise_nfc(document.text)
+        return ReadDocument(
+            replace(
+                ref,
+                raw_sha256=sha256_hex(raw),
+                content_sha256=sha256_text(text),
+                metadata_sha256=parsed.metadata_sha256,
+            ),
+            text,
+            parsed,
         )
