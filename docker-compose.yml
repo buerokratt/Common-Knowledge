@@ -461,6 +461,17 @@ services:
       # unknown name is refused at startup. Changing it re-chunks the whole
       # corpus on the next run (and on llm_module, re-embeds it).
       - CHUNK_PROFILE=azure_native
+      # The object-store sink's destination: any S3-compatible endpoint, by
+      # URL alone. A DIFFERENT bucket and DIFFERENT credentials from CKB's
+      # own S3_* / AWS_* (rule 6) — set them in the root .env. Left blank the
+      # service still starts; a run refuses, naming every missing variable.
+      - EXTERNAL_S3_ENDPOINT_URL=${EXTERNAL_S3_ENDPOINT_URL:-}
+      - EXTERNAL_S3_BUCKET_NAME=${EXTERNAL_S3_BUCKET_NAME:-}
+      - EXTERNAL_S3_ACCESS_KEY_ID=${EXTERNAL_S3_ACCESS_KEY_ID:-}
+      - EXTERNAL_S3_SECRET_ACCESS_KEY=${EXTERNAL_S3_SECRET_ACCESS_KEY:-}
+      - EXTERNAL_S3_REGION=${EXTERNAL_S3_REGION:-us-east-1}
+      # false for a store without a working DeleteObjects (D11).
+      - EXTERNAL_S3_SUPPORTS_BATCH_DELETE=${EXTERNAL_S3_SUPPORTS_BATCH_DELETE:-true}
       # MANIFEST_STORE_* is deliberately unset. On the object_store sink an
       # empty MANIFEST_STORE_BACKEND means the manifest lives in the sink's
       # own store, bucket and prefix — endpoint, bucket AND prefix inherited
@@ -476,6 +487,8 @@ services:
       # - MANIFEST_STORE_ENDPOINT_URL=
       # - MANIFEST_STORE_BUCKET=
       # - MANIFEST_STORE_PREFIX=content-manifests
+      #   (an s3 manifest store authenticates with EXTERNAL_S3_ACCESS_KEY_ID /
+      #   EXTERNAL_S3_SECRET_ACCESS_KEY above — required at startup here)
       # - LLM_MODULE_BASE_URL=            # https:// only — the body is
       #                                   # Estonian government document text
       # - LLM_MODULE_VAULT_SECRET_PATH=   # fetched per task, never cached
