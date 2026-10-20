@@ -9,6 +9,10 @@ from typing import Any
 import pytest
 
 from exporter.core import schemas
+from exporter.core.constants import (
+    MANIFEST_DOCUMENT_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION,
+)
 from exporter.core.schemas import (
     Chunk,
     DocumentRecord,
@@ -53,8 +57,8 @@ def entry(**overrides: str | int) -> ManifestDocumentEntry:
 
 def manifest(documents: dict[str, ManifestDocumentEntry]) -> Manifest:
     return Manifest(
-        schema_version=1,
-        manifest_schema_version=1,
+        schema_version=MANIFEST_DOCUMENT_SCHEMA_VERSION,
+        manifest_schema_version=MANIFEST_SCHEMA_VERSION,
         agency_id="a1",
         sink_id="object_store",
         corpus_watermark=None,

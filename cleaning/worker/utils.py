@@ -62,7 +62,7 @@ def send_error(
     scraped_at = datetime.datetime.now(datetime.UTC).isoformat()
     try:
         requests.post(
-            f"{settings.ruuter_internal}/ckb/reports/logs/add",
+            f"{settings.ckb_ruuter_internal}/reports/logs/add",
             json={
                 "url": url,
                 "scraped_at": scraped_at,

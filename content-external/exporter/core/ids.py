@@ -29,6 +29,7 @@ from exporter.core.constants import (
     MAX_CHUNK_ORDINAL,
     NORMALISER_VERSION,
     PENDING_DELETIONS_BLOB_KEY_TEMPLATE,
+    SCRAPPED_DATA_COMPONENT,
     ChunkProfile,
 )
 
@@ -125,13 +126,33 @@ def _segment(name: str, value: str) -> str:
     return value
 
 
+def validate_segment(name: str, value: str) -> str:
+    """The key builders' segment rule, for a caller that must refuse an id
+    before it ever reaches one — the manifest parser, whose ids feed every
+    delete and sweep key a run builds. A ValueError there would escape the
+    coordinator's `except StoreError`; refusing at load keeps it a
+    fail-closed StoreError."""
+    return _segment(name, value)
+
+
 def validate_prefix(prefix: str) -> str:
     """The deployment prefix: may hold "/" between segments, but no empty,
-    "." or ".." segment and no leading or trailing "/"."""
+    "." or ".." segment and no leading or trailing "/".
+
+    Rule 1 is enforced here too, because every key builder runs through this:
+    no `scrapped-data` segment, in any case, so no key can ever be built
+    inside the tree the Global Classifier's payload is zipped from.
+    """
     if not isinstance(prefix, str) or not prefix:
         raise ValueError(f"prefix must be a non-empty string, got {prefix!r}")
     for part in prefix.split("/"):
         _segment("prefix segment", part)
+        if part.casefold() == SCRAPPED_DATA_COMPONENT:
+            raise ValueError(
+                f"rule 1: prefix {prefix!r} is inside a "
+                f"'{SCRAPPED_DATA_COMPONENT}' tree, which is zipped into the "
+                "Global Classifier's payload. Choose a different prefix."
+            )
     return prefix
 
 
