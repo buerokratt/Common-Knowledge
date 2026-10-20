@@ -23,7 +23,9 @@ The rule is enforced by tests/test_exporter_sink_resolution.py rather than by
 review, because a convention that only lives in a docstring is a convention
 that survives exactly as long as the person who wrote it.
 
-Contents arrive in Stage D: base.py (the ContentSink ABC and
-SinkCapabilities), object_store_sink.py, factory.py. Stage L adds
-llm_module_sink.py and nothing else.
+Present: base.py (the ContentSink ABC, SinkCapabilities and the outcome
+types) and factory.py, which until D14 registers the object-store sink maps
+every CONTENT_SINK value to a refusal naming the task that builds it. Still to
+come in Stage D: object_store_sink.py (D14). Stage L adds llm_module_sink.py
+and nothing else.
 """

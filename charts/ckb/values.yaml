@@ -607,7 +607,9 @@ contentExternal:
   # configuration at all. An llm_module deployment MUST set it — an HTTP API
   # has nowhere to hold a manifest — along with LLM_MODULE_BASE_URL (https://
   # only; the body is Estonian government document text) and
-  # LLM_MODULE_VAULT_SECRET_PATH.
+  # LLM_MODULE_VAULT_SECRET_PATH. An s3 manifest store authenticates with the
+  # EXTERNAL_S3_* keys from contentExternal.externalStore.secret, and startup
+  # refuses it without them.
   #
   # MANIFEST_STORE_BACKEND=local is development only and additionally needs
   # MANIFEST_STORE_ALLOW_LOCAL=true. Never set it in a chart values file: a
@@ -627,6 +629,23 @@ contentExternal:
       value: "object_store"
     - name: CHUNK_PROFILE
       value: "azure_native"
+  # The object-store sink's destination (D6/D7): any S3-compatible endpoint,
+  # chosen by URL alone. A DIFFERENT bucket and DIFFERENT credentials from
+  # CKB's own — never CKB's read-only AWS_* keys. Left blank, the service still
+  # starts and serves /health; a run refuses, naming every missing variable.
+  externalStore:
+    endpointUrl: ""
+    bucket: ""
+    region: "us-east-1"
+    # D11. Set false for a store whose DeleteObjects is missing or partial;
+    # deletes then go one key at a time with an identical outcome.
+    supportsBatchDelete: true
+    # The credentials come from a Secret, never from values. Empty name = not
+    # wired (the env vars are simply absent).
+    secret:
+      name: ""
+      accessKeyIdKey: access_key_id
+      secretAccessKeyKey: secret_access_key
   # A16. Peak memory is a PRODUCT, and both of its factors are configured
   # elsewhere:
   #
