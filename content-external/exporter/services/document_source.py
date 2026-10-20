@@ -7,11 +7,19 @@ URLs and timestamps stay verbatim so enumeration cannot change their meaning.
 """
 
 from abc import ABC, abstractmethod
+from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import requests
 
+from exporter.core.metadata import MAX_SIDECAR_BYTES, SidecarRejection, parse_sidecar
 from exporter.core.schemas import AgencyWatermark, DocumentRef, ReadDocument
+from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
+from exporter.services.ckb_bucket import (
+    CkbBucket,
+    InvalidObjectKeyError,
+    ObjectTooLargeError,
+)
 
 if TYPE_CHECKING:
     from exporter.api.config import Settings
@@ -69,9 +77,24 @@ def _validate_row(row: object, columns: dict[str, tuple[type, ...]]) -> dict[str
     return row
 
 
+def _skipped(ref: DocumentRef, reason: str) -> ReadDocument:
+    return ReadDocument(
+        replace(
+            ref,
+            raw_sha256=None,
+            content_sha256=None,
+            metadata_sha256=None,
+            skip_reason=reason,
+        ),
+        text=None,
+        sidecar=None,
+    )
+
+
 class CkbDocumentSource(DocumentSource):
     def __init__(self, settings: "Settings") -> None:
         self._settings = settings
+        self._bucket = CkbBucket(settings)
 
     def _rows(self, query: str, agency_id: str) -> list[Any]:
         url = f"{self._settings.ckb_resql}/{query}"
@@ -141,4 +164,46 @@ class CkbDocumentSource(DocumentSource):
         return documents
 
     def read(self, ref: DocumentRef) -> ReadDocument:
-        raise NotImplementedError
+        try:
+            raw = self._bucket.get_bytes(
+                ref.content_key, self._settings.max_document_bytes
+            )
+        except InvalidObjectKeyError:
+            return _skipped(ref, "content_key_invalid")
+        except ObjectTooLargeError:
+            return _skipped(ref, "content_too_large")
+        if raw is None:
+            return _skipped(ref, "content_missing")
+        try:
+            text = normalise_nfc(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return _skipped(ref, "content_undecodable")
+
+        try:
+            metadata = (
+                None
+                if ref.metadata_key is None
+                else self._bucket.get_bytes(ref.metadata_key, MAX_SIDECAR_BYTES)
+            )
+        except InvalidObjectKeyError:
+            return _skipped(ref, "metadata_key_invalid")
+        except ObjectTooLargeError:
+            return _skipped(ref, SidecarRejection.TOO_LARGE.value)
+        sidecar = parse_sidecar(
+            metadata,
+            row_url=ref.url,
+            require_sidecar=self._settings.require_metadata_sidecar,
+        )
+        if isinstance(sidecar, SidecarRejection):
+            return _skipped(ref, sidecar.value)
+        return ReadDocument(
+            replace(
+                ref,
+                raw_sha256=sha256_hex(raw),
+                content_sha256=sha256_text(text),
+                metadata_sha256=sidecar.metadata_sha256,
+                skip_reason=None,
+            ),
+            text=text,
+            sidecar=sidecar,
+        )

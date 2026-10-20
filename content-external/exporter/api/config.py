@@ -271,7 +271,7 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     aws_access_key_id: SecretStr = SecretStr("")
     aws_secret_access_key: SecretStr = SecretStr("")
-    aws_region: str = ""
+    aws_region: str = "us-east-1"
 
     # --- the external destination — a DIFFERENT bucket and credentials ------
     # Not required at startup: nothing builds the destination store until a

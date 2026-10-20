@@ -63,6 +63,27 @@ spec:
                   key: {{ .secret.secretAccessKeyKey | quote }}
             {{- end }}
             {{- end }}
+            # CKB's own bucket uses a separate read-only s3:GetObject key.
+            {{- with .Values.contentExternal.sourceBucket }}
+            - name: S3_ENDPOINT_URL
+              value: {{ .endpointUrl | quote }}
+            - name: S3_BUCKET_NAME
+              value: {{ .bucket | quote }}
+            - name: AWS_REGION
+              value: {{ .region | quote }}
+            {{- if .secret.name }}
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secret.name | quote }}
+                  key: {{ .secret.accessKeyIdKey | quote }}
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secret.name | quote }}
+                  key: {{ .secret.secretAccessKeyKey | quote }}
+            {{- end }}
+            {{- end }}
           ports:
             - containerPort: {{ .Values.contentExternal.service.port }}
           # A16: limits.memory is sized from EXPORT_CONCURRENCY x

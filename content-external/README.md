@@ -67,6 +67,25 @@ it — see the note in the table below.
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
 
+### Reading CKB's bucket
+
+Set `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` and `AWS_REGION` for CKB's own bucket. Compose takes
+these from the root `.env`; the chart uses `contentExternal.sourceBucket`,
+with the access key and secret supplied through its `secret` reference.
+The client is created on the first document read, so enumeration needs no
+bucket credentials. Missing endpoint, bucket or credentials fail that read.
+
+Use a dedicated key with **`s3:GetObject` only**. Enumeration comes from
+Resql, so no `s3:ListBucket` permission is needed. Without it, S3 can answer
+403 for a missing object; that is indistinguishable from denied access and
+therefore fails the run. A definitive object 404 is handled as missing.
+
+These are a different bucket and credentials from `EXTERNAL_S3_*`, which
+publishes the output. Reusing file-processing's keys is acceptable for
+**local development only**. The reader always uses its own boto3 client
+and never calls file-processing (Global Classifier rule 6).
+
 ### The startup validation matrix
 
 Every combination below that is not **OK** fails **at startup**, with a message naming the variable to
