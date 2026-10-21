@@ -8,6 +8,7 @@ import re
 import socket
 import textwrap
 import time
+from dataclasses import dataclass
 from html import escape as html_escape
 from pathlib import Path
 from typing import Any
@@ -810,10 +811,11 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtracti
     their token count without losing any content, which both cuts cost and
     keeps huge pages from tripping the model's context window. If the
     stripped HTML is still oversized, skips the LLM call and returns an
-    empty string so the caller falls back to BeautifulSoup.
+    "error" extraction so the caller falls back to BeautifulSoup.
 
-    Returns the extracted Markdown, or empty string on any error or
-    oversized input, so the caller can fall back gracefully.
+    Returns an LLMExtraction with the extracted Markdown, or with empty
+    content on any error, truncation or oversized input, so the caller can
+    fall back gracefully.
     """
     stripped = _prestrip_html_for_llm(html)
     approx_tokens = _estimate_tokens(stripped)
@@ -823,7 +825,7 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtracti
             f"ceiling {_LLM_INPUT_TOKEN_CEILING}; skipping LLM re-extract "
             "(caller will fall back to BeautifulSoup)"
         )
-        return ""
+        return LLMExtraction("error")
 
     try:
         response = _call_with_llm_retry(
@@ -842,8 +844,8 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtracti
             logger.error(
                 "LLM re-extraction hit the output token limit and was truncated"
             )
-            return ""
-        return (choice.message.content or "").strip()
+            return LLMExtraction("error")
+        content = (choice.message.content or "").strip()
     except APIError as e:
         logger.error(f"LLM API error during re-extraction: {e}")
         return LLMExtraction("error")
@@ -1738,7 +1740,7 @@ def _send_cleaning_report(
             with deterministic_filename.open("w") as f:
                 f.write(normalize_newlines(report.deterministic_text))
             r = requests.post(
-                f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
                 json={"source_file_path": deterministic_filename.as_posix()},
                 timeout=timeout,
             )
@@ -1776,7 +1778,7 @@ def _send_cleaning_report(
             "deterministic_data_url": deterministic_data_url,
         }
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/source-file/add-cleaning-report",
+            f"{settings.ckb_ruuter_internal}/source-file/add-cleaning-report",
             json=payload,
             timeout=timeout,
         )
