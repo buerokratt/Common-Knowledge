@@ -10,6 +10,12 @@ declaration:
       - field: agency_base_id
         type: string
         description: "UUID of the agency base"
+      - field: after_base_id
+        type: string
+        description: "Exclusive lower bound for the document base ID"
+      - field: page_size
+        type: number
+        description: "Maximum documents per page"
   response:
     fields:
       - field: base_id
@@ -72,4 +78,6 @@ SELECT DISTINCT ON (base_id)
     updated_at
 FROM data_collection.source_file
 WHERE agency_base_id = :agency_base_id::UUID
-ORDER BY base_id, updated_at DESC;
+  AND base_id > :after_base_id::UUID
+ORDER BY base_id, updated_at DESC
+LIMIT :page_size::INTEGER;

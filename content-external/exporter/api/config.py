@@ -265,6 +265,7 @@ class Settings(BaseSettings):
     # --- CKB ---------------------------------------------------------------
     ruuter_internal: str = "http://ruuter-internal:8089"
     ckb_resql: str = "http://resql-ckb:8090/ckb"
+    export_page_size: Annotated[int, Field(ge=1)] = 1_000
 
     # --- reading CKB's own bucket — read-only credentials -------------------
     s3_endpoint_url: str = ""

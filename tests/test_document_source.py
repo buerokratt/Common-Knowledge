@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import logging
 import unicodedata
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -67,6 +68,7 @@ def source(monkeypatch: pytest.MonkeyPatch) -> CkbDocumentSource:
         Settings(
             content_work_dir="/var/lib/content-external",
             ckb_resql="http://resql.test/ckb",
+            export_page_size=2,
             s3_endpoint_url="invalid://unused",
             s3_bucket_name="",
         )
@@ -100,42 +102,128 @@ def test_enumeration_maps_every_column_without_reading(
 ) -> None:
     payload = [ROW]
     captured = _stub(monkeypatch, {"response": payload} if envelope else payload)
-    documents = source.list_documents(AGENCY)
-    assert isinstance(documents, list)
-    assert len(documents) == 1
-    ref = documents[0]
-    assert (
-        ref.document_id,
-        ref.source_base_id,
-        ref.agency_id,
-        ref.url,
-        ref.page_title,
-        ref.subsector,
-        ref.status,
-        ref.is_excluded,
-        ref.is_deleted,
-        ref.updated_at,
-        ref.file_size,
-    ) == (
-        ROW["baseId"],
-        ROW["sourceBaseId"],
-        AGENCY,
-        ROW["url"],
-        ROW["pageTitle"],
-        ROW["subsector"],
-        ROW["status"],
-        ROW["isExcluded"],
-        ROW["isDeleted"],
-        TIMESTAMP,
-        42,
-    )
-    assert ref.raw_sha256 is ref.content_sha256 is ref.metadata_sha256 is None
-    assert ref.skip_reason is None
+    assert source.list_documents(AGENCY) == [
+        DocumentRef(
+            document_id="document-1",
+            source_base_id="source-1",
+            agency_id=AGENCY,
+            url="https://example.test/page",
+            page_title="Page",
+            subsector="services",
+            status="finished",
+            is_excluded=False,
+            is_deleted=False,
+            updated_at=TIMESTAMP,
+            content_key="s3://ckb/uploads/cleaned.txt",
+            metadata_key="uploads/cleaned.meta.json",
+            content_origin="cleaned",
+            file_size=42,
+        )
+    ]
     assert captured == {
         "url": "http://resql.test/ckb/source_file/list_agency_export_documents",
-        "params": {"agency_base_id": AGENCY},
+        "params": {
+            "agency_base_id": AGENCY,
+            "after_base_id": document_source.NIL_UUID,
+            "page_size": 2,
+        },
         "timeout": 30.0,
     }
+
+
+def _stub_pages(
+    monkeypatch: pytest.MonkeyPatch, pages: list[object]
+) -> list[dict[str, str | int]]:
+    remaining = iter(pages)
+    captured: list[dict[str, str | int]] = []
+
+    def fake_get(
+        _url: str, *, params: dict[str, str | int], timeout: float
+    ) -> requests.Response:
+        captured.append(params)
+        page = next(remaining)
+        if isinstance(page, requests.RequestException):
+            raise page
+        response = requests.Response()
+        response.status_code = 200
+        response._content = json.dumps(page).encode()
+        return response
+
+    monkeypatch.setattr(document_source.requests, "get", fake_get)
+    return captured
+
+
+@pytest.mark.parametrize("count", [0, 1, 4, 5])
+def test_enumeration_pages_until_a_short_page(
+    monkeypatch: pytest.MonkeyPatch,
+    source: CkbDocumentSource,
+    caplog: pytest.LogCaptureFixture,
+    count: int,
+) -> None:
+    page_size = 2
+    rows = [ROW | {"baseId": f"document-{i}"} for i in range(1, count + 1)]
+    pages = [rows[i : i + page_size] for i in range(0, count + 1, page_size)]
+    captured = _stub_pages(monkeypatch, pages)
+    with caplog.at_level(logging.INFO, logger=document_source.__name__):
+        documents = source.list_documents(AGENCY)
+    assert [ref.document_id for ref in documents] == [row["baseId"] for row in rows]
+    assert captured == [
+        {
+            "agency_base_id": AGENCY,
+            "after_base_id": (
+                document_source.NIL_UUID if i == 0 else rows[i - 1]["baseId"]
+            ),
+            "page_size": page_size,
+        }
+        for i in range(0, count + 1, page_size)
+    ]
+    assert caplog.messages == [
+        f"document enumeration agency={AGENCY} pages={len(pages)} rows={count}"
+    ]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [requests.HTTPError("503"), requests.ReadTimeout("timed out"), [{}]],
+    ids=["http", "timeout", "invalid-row"],
+)
+def test_second_page_failure_aborts_enumeration(
+    monkeypatch: pytest.MonkeyPatch,
+    source: CkbDocumentSource,
+    failure: object,
+) -> None:
+    captured = _stub_pages(
+        monkeypatch,
+        [
+            [ROW, ROW | {"baseId": "document-2"}],
+            failure,
+            [ROW | {"baseId": "document-5"}],
+        ],
+    )
+    with pytest.raises(DocumentSourceError) as excinfo:
+        source.list_documents(AGENCY)
+    assert len(captured) == 2
+    if isinstance(failure, requests.RequestException):
+        assert excinfo.value.__cause__ is failure
+
+
+@pytest.mark.parametrize(
+    "ids",
+    [
+        [document_source.NIL_UUID],
+        ["document-2", "document-2"],
+        ["document-2", "document-1"],
+        ["document-1", "document-2", "document-2"],
+        ["document-1", "document-2", "document-1"],
+    ],
+)
+def test_cursor_must_advance_within_and_between_pages(
+    monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, ids: list[str]
+) -> None:
+    rows = [ROW | {"baseId": document_id} for document_id in ids]
+    _stub_pages(monkeypatch, [rows[:2], rows[2:]])
+    with pytest.raises(DocumentSourceError, match="cursor"):
+        source.list_documents(AGENCY)
 
 
 @pytest.mark.parametrize(
@@ -386,10 +474,7 @@ def test_unreachable_resql_fails(
     method: str,
     error: type[requests.RequestException],
 ) -> None:
-    def fake_get(_url: str, **_kwargs: object) -> None:
-        raise error("unreachable")
-
-    monkeypatch.setattr(document_source.requests, "get", fake_get)
+    _stub_pages(monkeypatch, [error("unreachable")])
     with pytest.raises(DocumentSourceError):
         getattr(source, method)(AGENCY)
 
@@ -737,15 +822,6 @@ def test_missing_content_is_a_skip(
     _assert_skip(reader.read(unread_ref), unread_ref, "content_missing")
 
 
-@pytest.mark.parametrize("code", ["404", "NotFound"])
-def test_bare_404_raises_instead_of_skipping(
-    reader: CkbDocumentSource, unread_ref: DocumentRef, s3: Stubber, code: str
-) -> None:
-    s3.add_client_error("get_object", code, http_status_code=404)
-    with pytest.raises(StoreError):
-        reader.read(unread_ref)
-
-
 @pytest.mark.parametrize("sidecar_error", [True, False])
 @pytest.mark.parametrize(
     "code, status",
@@ -756,6 +832,9 @@ def test_bare_404_raises_instead_of_skipping(
         ("SlowDown", 503),
         ("NoSuchBucket", 404),
         ("InvalidAccessKeyId", 403),
+        # A bare 404 can come from a proxy, not S3, so it is not a missing key.
+        ("404", 404),
+        ("NotFound", 404),
     ],
 )
 def test_s3_failures_raise_instead_of_skipping(

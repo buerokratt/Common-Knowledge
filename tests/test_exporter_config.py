@@ -109,9 +109,11 @@ def test_env_var_overrides_the_default(
 ) -> None:
     monkeypatch.setenv(WORK_DIR_ENV, "/work")
     monkeypatch.setenv("EXPORT_CONCURRENCY", "8")
+    monkeypatch.setenv("EXPORT_PAGE_SIZE", "1")
     settings = load_settings()
     assert settings.content_work_dir == "/work"
     assert settings.export_concurrency == 8
+    assert settings.export_page_size == 1
 
 
 def test_nothing_but_the_work_dir_is_required(clean_env: None) -> None:
@@ -632,6 +634,8 @@ def test_enum_and_string_fields_reject_bad_values(field: str, value: str) -> Non
         ("export_concurrency", 0),
         ("export_concurrency", 17),  # F16's documented cap of ~16
         ("export_concurrency", "four"),
+        ("export_page_size", 0),
+        ("export_page_size", -1),
         ("max_document_bytes", -1),
         ("max_chunks_per_document", 0),
         ("bootstrap_checkpoint_every", 0),
