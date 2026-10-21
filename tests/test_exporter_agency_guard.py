@@ -23,6 +23,7 @@ from exporter.services.agency_guard import (
     count_agencies,
     require_single_agency,
 )
+from exporter.services.backoff import BackoffPolicy
 
 GUARD = "exporter.services.agency_guard.requests.get"
 
@@ -264,6 +265,23 @@ def test_startup_warns_and_continues_when_resql_is_unreachable(
     assert "every export" in message
 
 
+def test_the_startup_warning_is_sanitised(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """F13: the exception text can carry a URL, and every other log path in
+    this service sanitises it."""
+    _raiser(
+        monkeypatch,
+        requests.ConnectionError("http://user:hunter2@resql/agency?token=abc123"),
+    )
+
+    with caplog.at_level(logging.WARNING, logger="exporter.services.agency_guard"):
+        check_single_agency_at_startup(_settings())
+
+    assert "hunter2" not in caplog.text
+    assert "abc123" not in caplog.text
+
+
 def test_startup_does_not_tolerate_a_definite_wrong_answer(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -312,4 +330,39 @@ def test_run_start_does_not_tolerate_an_unreachable_resql(
     failed run is visible, which silent starvation is not."""
     _raiser(monkeypatch, requests.ConnectionError("resql is down"))
     with pytest.raises(AgencyCountUnavailableError):
-        require_single_agency(_settings())
+        require_single_agency(_settings(), policy=_INSTANT)
+
+
+# Retries without waiting, so the backoff is exercised and the test is fast.
+_INSTANT = BackoffPolicy(max_attempts=3, base_delay=0.0, max_delay=0.0)
+
+
+def _flaky(monkeypatch: pytest.MonkeyPatch, failures: int) -> list[int]:
+    """`requests.get` fails with a connection error `failures` times, then
+    answers one agency. Returns the call log."""
+    calls: list[int] = []
+
+    def fake_get(_url: str, **_kwargs: object) -> object:
+        calls.append(1)
+        if len(calls) <= failures:
+            raise requests.ConnectionError("resql is restarting")
+        return _Response(_rows(1))
+
+    monkeypatch.setattr(GUARD, fake_get)
+    return calls
+
+
+def test_run_start_retries_a_transient_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F8. A Resql restart at :17 costs seconds, not the hour's run."""
+    calls = _flaky(monkeypatch, failures=2)
+    assert require_single_agency(_settings(), policy=_INSTANT) == 1
+    assert len(calls) == 3
+
+
+def test_startup_does_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Boot must stay fast: one attempt, then warn and serve."""
+    calls = _flaky(monkeypatch, failures=1)
+    assert check_single_agency_at_startup(_settings()) is None
+    assert len(calls) == 1

@@ -97,6 +97,7 @@ class World:
     manifest_client: InMemoryStore = field(default_factory=InMemoryStore)
     on_missing: str = "first_run"
     max_chunks: int = 5000
+    checkpoint_every: int = 250
     ticks: Iterator[int] = field(default_factory=itertools.count)
 
     @property
@@ -131,12 +132,15 @@ class World:
             chunker_fingerprint=FP,
             work_dir=self.work_dir,
             max_chunks_per_document=self.max_chunks,
+            bootstrap_checkpoint_every=self.checkpoint_every,
             run_state=self.run_state,
             clock=self.clock,
         )
 
-    def export(self, run_id: str = "run-1") -> RunReport:
-        return self.coordinator().export(run_id)
+    def export(
+        self, run_id: str = "run-1", *, force: bool = False, limit: int | None = None
+    ) -> RunReport:
+        return self.coordinator().export(run_id, force=force, limit=limit)
 
     def manifest(self) -> Manifest | None:
         return self.manifest_store.load(AGENCY)
@@ -843,6 +847,29 @@ def test_a_lock_that_cannot_be_opened_is_a_failed_run_not_a_raise(
     assert last is not None and last.outcome == "failed"
 
 
+@pytest.mark.parametrize("error", [RuntimeError, PermissionError])
+def test_a_run_that_cannot_be_recorded_still_returns_its_report(
+    world: World, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+) -> None:
+    """The run committed; losing its log line or last-run record must neither
+    raise out of export() nor strip the duration from the report. OSError is
+    parametrised because export() once returned the unstamped report on it."""
+
+    def unrecordable(*_args: object, **_kwargs: object) -> None:
+        raise error("the record could not be written")
+
+    monkeypatch.setattr(RunStateStore, "record", unrecordable)
+    world.source.put(make_row("d1"), text(10))
+
+    report = world.export(force=True)
+
+    assert report.outcome == "success"
+    # Stamped by _finish, which the old OSError path skipped.
+    assert report.forced is True
+    assert report.duration_seconds > 0
+    assert world.manifest() is not None
+
+
 # --- the journal mirror (F7) -----------------------------------------------
 
 
@@ -947,7 +974,196 @@ def test_the_coordinator_refuses_a_manifest_service_for_another_sink(
             chunker_fingerprint=FP,
             work_dir=world.work_dir,
             max_chunks_per_document=10,
+            bootstrap_checkpoint_every=250,
         )
+
+
+class _CrashingSink(LoggingSink):
+    """A LoggingSink whose upsert of a named document raises, as a dying
+    process would: the run fails rather than recording an outcome."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.crash_on: set[str] = set()
+
+    def _upsert_document(
+        self, record: DocumentRecord, chunks: tuple[Chunk, ...] | None
+    ) -> UpsertOutcome:
+        if record.document_id in self.crash_on:
+            raise StoreError("InjectedFailure on upsert")
+        return super()._upsert_document(record, chunks)
+
+
+def _commits(monkeypatch: pytest.MonkeyPatch) -> list[Manifest]:
+    """Record every manifest committed, checkpoints included."""
+    committed: list[Manifest] = []
+    real = ManifestService.commit
+
+    def commit(service: ManifestService, manifest: Manifest) -> object:
+        committed.append(manifest)
+        return real(service, manifest)
+
+    monkeypatch.setattr(ManifestService, "commit", commit)
+    return committed
+
+
+# --- F15: first-run checkpoints ------------------------------------------------
+
+
+def test_a_first_run_checkpoints_with_the_watermark_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), checkpoint_every=2)
+    for n in range(1, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    committed = _commits(monkeypatch)
+
+    report = world.export()
+
+    assert report.outcome == "success"
+    assert report.checkpoints_committed == 2
+    checkpoints, final = committed[:-1], committed[-1]
+    assert [len(m.documents) for m in checkpoints] == [2, 4]
+    assert all(m.corpus_watermark is None for m in checkpoints)
+    assert len(final.documents) == 5
+    assert final.corpus_watermark == EARLY
+
+
+def test_a_killed_bootstrap_resumes_from_its_last_checkpoint(tmp_path: Path) -> None:
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink, checkpoint_every=2)
+    for n in range(1, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    sink.crash_on.add("d5")
+
+    report = world.export("run-1")
+
+    assert report.outcome == "failed"
+    assert report.checkpoints_committed == 2
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d1", "d2", "d3", "d4"}
+    assert manifest.corpus_watermark is None
+
+    sink.crash_on.clear()
+    world.source.reads.clear()
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    # Gate 2 spares everything the checkpoint recorded, at zero reads.
+    assert world.source.reads == ["d5"]
+    assert report.new_count == 1
+    assert report.unchanged_count == 4
+    assert report.checkpoints_committed == 0
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == EARLY
+
+
+def test_an_incremental_run_never_checkpoints(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _published(world, ("d1", text(3)))
+    for n in range(2, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    world.checkpoint_every = 1
+    committed = _commits(monkeypatch)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.new_count == 4
+    assert report.checkpoints_committed == 0
+    assert len(committed) == 1
+
+
+# --- F10: --limit and --force -----------------------------------------------
+
+
+def test_a_limited_first_run_publishes_the_slice_and_withholds_the_watermark(
+    world: World,
+) -> None:
+    for n in range(1, 4):
+        world.source.put(make_row(f"d{n}"), text(3))
+
+    report = world.export(limit=1)
+
+    assert report.outcome == "success"
+    assert report.limit == 1
+    assert report.new_count == 1
+    assert dict(report.skipped_reasons) == {
+        "d2": publish_service.LIMIT_REACHED,
+        "d3": publish_service.LIMIT_REACHED,
+    }
+    assert world.source.reads == ["d1"]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d1"}
+    assert manifest.corpus_watermark is None
+
+
+def test_a_limited_incremental_run_holds_the_rest_and_never_deletes_them(
+    world: World,
+) -> None:
+    before = _published(world, ("d1", text(3)), ("d2", text(3)), ("d3", text(3)))
+    _moved(world, "d1", text(5))
+    _moved(world, "d2", text(5))
+    _moved(world, "d3", is_deleted=True)
+
+    report = world.export("run-2", limit=1)
+
+    assert report.outcome == "success"
+    assert report.content_changed_count == 1
+    assert report.deleted_count == 1  # an explicit signal needs no read
+    assert dict(report.skipped_reasons) == {"d2": publish_service.LIMIT_REACHED}
+    assert world.source.reads == ["d1"]
+    assert ("delete_document", "d2", None) not in world.verbs
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d2"] == before.documents["d2"]
+    assert "d3" not in manifest.documents
+    # The other changed rows have not been read, so Gate 1 must not skip them.
+    assert manifest.corpus_watermark is None
+
+    report = world.export("run-3")
+
+    assert report.content_changed_count == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == LATER
+
+
+def test_a_limit_below_one_is_refused(world: World) -> None:
+    with pytest.raises(ValueError, match="limit"):
+        world.export(limit=0)
+
+
+def test_force_is_echoed_in_the_report(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+    assert world.export(force=True).forced is True
+
+
+# --- F11: the report ----------------------------------------------------------
+
+
+def test_the_report_carries_the_run_duration(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+    report = world.export()
+    assert report.duration_seconds > 0
+    assert report.error_type is None
+
+
+def test_a_failed_run_reports_and_records_its_error_type(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+    world.source.fail_reads.add("d1")
+
+    report = world.export()
+
+    assert report.outcome == "failed"
+    assert report.error_type == "StoreError"
+    last = world.run_state.read()
+    assert last is not None
+    assert last.error_type == "StoreError"
 
 
 def test_the_sync_timestamp_is_the_run_start(world: World) -> None:

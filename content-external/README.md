@@ -145,10 +145,15 @@ curl -s localhost:8125/health | jq
     "finished_at": "2026-09-16T17:04:11Z",
     "duration_seconds": 251.4,
     "consecutive_failures": 3,
-    "consecutive_busy": 0
+    "consecutive_busy": 0,
+    "error_type": "StoreError"
   }
 }
 ```
+
+`error_type` is the exception class behind a `failed` run, and only that: this
+endpoint is unauthenticated. The sanitised message is in the
+`content-external error` log line (below).
 
 `last_run` is `null` until a run completes — an hourly job that has never run
 is not the same as one that ran and succeeded.
@@ -162,7 +167,7 @@ is not the same as one that ran and succeeded.
 > surface.
 
 The record lives in `{CONTENT_WORK_DIR}/last_run.json` rather than in memory,
-because an export runs in a forked process and the CLI is a different process
+because an export runs in a spawned process and the CLI is a different process
 again — an in-memory value would read `null` forever in production. It is one
 record, overwritten; **history outliving the container is deferred work**, not
 this.
@@ -176,7 +181,7 @@ docker logs content-external | grep 'content-external run'
 ```
 content-external run agency_id=… deletions_recorded=0 docs_content_changed=4 \
   docs_deleted=1 docs_metadata_changed=0 docs_new=12 docs_skipped=3 \
-  docs_unchanged=340 duration_seconds=251.400 outcome=success \
+  docs_unchanged=340 duration_seconds=251.400 error_type=- outcome=success \
   run_id=r-2026-09-16T17 sink=object_store
 ```
 
@@ -185,6 +190,14 @@ so an alert rule is a log query and not a code change, and two runs diff
 line-for-line. `failed` lands at `ERROR` and everything else at `INFO`,
 including `busy`, which is by design not an error. The startup config echo
 follows the same convention under `content-external config`.
+
+A run that fails **before** the export can report itself — a configuration
+refusal, the agency check, a factory error — adds one more line, under
+`content-external error`, with the exception type and its sanitised message.
+It is recorded as a `failed` run too, so `/health` and the alert rule see it.
+Nothing is written to CKB: cleaning's `send_error` posts to Ruuter's
+`reports/logs/add`, which belongs to a scrape's run report, and this service
+is read-only against CKB.
 
 Counts never carry document text: ids, hex hash prefixes, counts and
 durations only. On the llm-module sink the body of a failed request *is*
@@ -207,6 +220,62 @@ colliding with an export) becomes indistinguishable from normal operation.
 > A `busy` outcome deliberately **does not** clear the failure streak. A run
 > that did not happen is no evidence that whatever was failing has stopped, so
 > a drain colliding with an export cannot mask a real failure streak.
+
+## Running an export
+
+> **Until Stage E lands, every run fails** with a `ConfigurationError` naming
+> it: the Resql enumeration and the S3 reads of CKB's bucket are not built yet,
+> so there is nothing to export from. Both entry points below are wired and
+> tested against in-memory fakes.
+
+**The production surface is the HTTP endpoint**, which CronManager calls
+through Ruuter (Stage G):
+
+```bash
+curl -s -X POST localhost:8125/export_agency_async \
+  -H 'Content-Type: application/json' \
+  -d '{"agency_base_id":"…","run_id":"r1"}'
+# {"status":"started","agency_base_id":"…","run_id":"r1"}
+```
+
+It starts the export in its own process and returns at once. `run_id` is
+generated when omitted. The outcome is not in the response: read it from
+`/health` or the `content-external run` line. A second export while one is
+running reports `busy`. If the export this service started last is still
+alive, the response itself says `{"status":"busy",…}` and no process starts,
+so a misfiring cron cannot pile up children; otherwise the run lock in the
+child decides, and the `busy` shows up in `/health`. Either way it is
+recorded and counted in `consecutive_busy`.
+`POST /drain_deletions` answers 501 until Stage J builds the drain.
+
+**The CLI is an operations tool**: the first end-to-end run, a bootstrap
+checked on a slice, a re-export by hand.
+
+```bash
+python -m exporter.run_sync --agency-id … [--run-id …] [--force] [--limit N] [--output-json PATH|-]
+```
+
+The report is JSON on stdout (or the file); logs go to stderr. Exit codes are
+`0` for `success`/`unchanged`/`busy`, `1` for `failed`, and `2` for a usage or
+configuration error. CLI runs take the same lock and show up in `/health`.
+
+- **`--limit N`** reads at most N documents. It never truncates the
+  enumeration, because a row left out would read as deleted. Rows past the cap
+  are held (`skipped`, reason `limit_reached`) with their published state
+  untouched. **The corpus watermark is withheld**, so the next full run still
+  walks every row, with Gate 2 sparing the unchanged ones at zero reads.
+- **`--force`** bypasses Gate 1. Gate 1 is Stage E's (E4), so until then
+  this flag is accepted, echoed in the report, and changes nothing. A
+  chunker-geometry change never needs it.
+- **A first run checkpoints.** With no previous manifest, the manifest is
+  committed every `BOOTSTRAP_CHECKPOINT_EVERY` published documents (default
+  250), with the watermark withheld. A killed bootstrap then resumes where it
+  stopped instead of starting over. An incremental run never checkpoints.
+
+Retries: Resql calls back off with full jitter on connection errors and
+408/429/5xx, honouring `Retry-After` up to 120 s. Past that, the call fails
+and the next tick is the retry. S3 calls use botocore's own standard-mode
+retries, deliberately not doubled.
 
 ## Deployment constraints — never scale this service
 

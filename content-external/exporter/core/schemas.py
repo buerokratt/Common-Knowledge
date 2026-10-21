@@ -127,7 +127,9 @@ class Chunk:
     chunk_id: str  # make_chunk_id(agency_id, document_id, ordinal)
     document_id: str
     ordinal: int  # position within the document — chunks/{ordinal:05d}.json
-    text: str
+    # Out of the repr (F13): a Chunk in an f-string, an assertion message or
+    # a traceback would otherwise carry Estonian government content.
+    text: str = field(repr=False)
     span: TextSpan  # where in the normalised document this text came from
 
 
@@ -147,7 +149,8 @@ class DocumentRecord:
     # back into `source`, which stays verbatim.
     source_url: str
     # The sidecar, verbatim, nested so upstream keys cannot collide with ours.
-    source: Mapping[str, Any]
+    # Out of the repr (F13): it holds the title and other document text.
+    source: Mapping[str, Any] = field(repr=False)
     raw_sha256: str
     content_sha256: str
     metadata_sha256: str
@@ -165,8 +168,8 @@ class ParsedSidecar:
     content text."""
 
     # The parsed JSON object, verbatim. {} when no sidecar exists and
-    # REQUIRE_METADATA_SIDECAR is off.
-    sidecar: Mapping[str, Any]
+    # REQUIRE_METADATA_SIDECAR is off. Out of the repr, as DocumentRecord.source.
+    sidecar: Mapping[str, Any] = field(repr=False)
     metadata_sha256: str
     source_url: str  # the resolved citation
     source_url_origin: str  # "sidecar" | "row"
@@ -274,6 +277,22 @@ class RunReport:
     # valid URLs disagreed.
     source_url_fallback_count: int = 0
     source_url_mismatch_count: int = 0
+
+    # Wall-clock time from the run's start to its report (F11, G9): a run
+    # that routinely approaches the cron interval is the signal to lengthen it.
+    duration_seconds: float = 0.0
+    # First-run manifest checkpoints committed before the final commit (F15).
+    checkpoints_committed: int = 0
+    # The exception class name behind a `failed` outcome, and nothing more:
+    # the report reaches /health, which is unauthenticated, and a message
+    # could name more than an operator needs there. The sanitised message is
+    # in the log line.
+    error_type: str | None = None
+    # How the run was asked for (F10): --force, and --limit's cap. A limited
+    # run withholds the corpus watermark, so these explain a report whose
+    # skipped count is larger than CKB's state alone accounts for.
+    forced: bool = False
+    limit: int | None = None
 
     def __post_init__(self) -> None:
         _freeze_fields(self, "skipped_reasons")

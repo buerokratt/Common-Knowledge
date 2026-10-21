@@ -20,6 +20,8 @@ pytest puts it on sys.path.
 - FakeDocumentSource stands in for Stage E's Resql+S3 document source. It
   hashes and parses with the real core functions, so the coordinator sees
   exactly what a real read would hand it.
+- patch_wiring points the worker task — and through it the CLI and the
+  endpoint's child — at these fakes, with A17's agency check stubbed.
 """
 
 import hashlib
@@ -29,10 +31,17 @@ import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
-from exporter.core.ids import document_chunk_key, document_metadata_key
+from exporter.core.chunking import Chunker
+from exporter.core.constants import CHUNK_PROFILES
+from exporter.core.ids import (
+    chunker_fingerprint,
+    document_chunk_key,
+    document_metadata_key,
+)
 from exporter.core.metadata import SidecarRejection, parse_sidecar
 from exporter.core.schemas import Chunk, DocumentRecord, DocumentRef
 from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
@@ -41,6 +50,10 @@ from exporter.services.document_source import (
     DocumentSource,
     ReadDocument,
 )
+from exporter.services.manifest_service import ManifestService
+from exporter.services.manifest_store import ManifestStore
+from exporter.services.publish_service import PublishCoordinator
+from exporter.services.run_state import RunStateStore
 from exporter.sinks.base import (
     ContentSink,
     DocumentProbe,
@@ -503,3 +516,48 @@ class FakeDocumentSource(DocumentSource):
             text,
             parsed,
         )
+
+
+MANIFEST_PREFIX = "manifests"
+
+
+def patch_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source: DocumentSource,
+    sink: ContentSink,
+    manifest_client: ExternalStoreClient,
+    checkpoint_every: int = 250,
+) -> None:
+    """Make exporter.worker.tasks build its coordinator over these fakes, and
+    stub A17's agency check, so the task, the CLI and the endpoint's child
+    run end to end with no network. The compact profile keeps chunks small."""
+    profile = CHUNK_PROFILES["compact"]
+
+    def build(
+        _settings: object,
+        *,
+        agency_id: str,
+        work_dir: Path,
+        run_state: RunStateStore | None,
+        source_factory: object = None,
+    ) -> PublishCoordinator:
+        assert agency_id == sink.agency_id
+        return PublishCoordinator(
+            sink=sink,
+            manifests=ManifestService(
+                ManifestStore(manifest_client, prefix=MANIFEST_PREFIX),
+                sink_id=sink.sink_id,
+                on_missing="first_run",
+            ),
+            source=source,
+            chunker=Chunker.from_profile(profile),
+            chunker_fingerprint=chunker_fingerprint(profile),
+            work_dir=work_dir,
+            max_chunks_per_document=5000,
+            bootstrap_checkpoint_every=checkpoint_every,
+            run_state=run_state,
+        )
+
+    monkeypatch.setattr("exporter.worker.tasks.build_coordinator", build)
+    monkeypatch.setattr("exporter.worker.tasks.require_single_agency", lambda _s: 1)

@@ -47,11 +47,29 @@ watermark is withheld so the next run cannot skip it. Neither is a document
 whose re-chunk disagrees with its published count: it is held, marked
 UNCONFIRMED_FINGERPRINT, and republished in full next run.
 
-NOT YET HERE, deliberately: Gate 1 (E4), backoff (F8), bootstrap checkpoints
-(F15), concurrency (F16 â€” the loop is sequential, so the manifest's single
-writer is trivially this one), per-document report detail (F18), the
-systemic-failure abort (F19), `run_observed_full_corpus` (F20) and the
-non-empty-destination probe (F21).
+BOOTSTRAP CHECKPOINTS (F15), on a first run only. With no previous manifest
+the deletion set is empty by construction and only published documents enter
+the manifest, so a checkpoint under-claims and can never over-claim. It is
+committed every BOOTSTRAP_CHECKPOINT_EVERY published documents with the
+corpus watermark withheld, so a killed bootstrap resumes: the next run walks
+every row and Gate 2 spares what the checkpoint recorded, at zero object
+reads. On an incremental run a partial commit could drop carried-forward
+entries, so `_maybe_checkpoint` refuses anything but a first run, and that is
+the one place the rule lives.
+
+A LIMITED RUN (F10's --limit) caps the rows that need a read, never the
+enumeration: a row left out of the rows would classify `deleted` as absent.
+Rows past the cap are skipped with LIMIT_REACHED and carried verbatim, and
+the run withholds the corpus watermark, so the next full run walks every row.
+F20 folds this into `run_observed_full_corpus`.
+
+NOT YET HERE, deliberately: Gate 1 (E4 — `force` is accepted and echoed, and
+is what Gate 1 will consult), concurrency (F16 — the loop is sequential, so
+the manifest's single writer is trivially this one), per-document report
+detail (F18), the systemic-failure abort (F19), `run_observed_full_corpus`
+(F20) and the non-empty-destination probe (F21). Backoff (F8) is the
+transport's, never this module's: a document the destination did not confirm
+is retried next tick.
 
 REDACTION (F13). Log lines carry ids, counts and sanitised reason codes. Never
 document text, chunk text, a URL or a request/response body, and an exception
@@ -88,7 +106,11 @@ from exporter.core.schemas import (
     RunReport,
 )
 from exporter.services.deletion_journal import DeletionJournal, agency_journals
-from exporter.services.document_source import DocumentSource, ReadDocument
+from exporter.services.document_source import (
+    CorpusWatermark,
+    DocumentSource,
+    ReadDocument,
+)
 from exporter.services.locking import run_lock
 from exporter.services.manifest_service import ManifestService
 from exporter.services.run_log import log_run_outcome
@@ -96,6 +118,7 @@ from exporter.services.run_state import RunOutcome, RunStateStore, utc_now_iso
 from exporter.sinks.base import ContentSink, UpsertOutcome
 
 __all__ = [
+    "LIMIT_REACHED",
     "TOO_MANY_CHUNKS",
     "UNCONFIRMED_FINGERPRINT",
     "EmptyEnumerationError",
@@ -107,6 +130,11 @@ logger = logging.getLogger(__name__)
 # The skip reason for a document over MAX_CHUNKS_PER_DOCUMENT, a guard that
 # can only run after chunking (E9; DiffResult.demote_to_skipped).
 TOO_MANY_CHUNKS = "too_many_chunks"
+
+# The skip reason for a row a --limit run did not get to (F10). Here and not
+# in core/diff.py's SkipReason: it is a property of how the run was invoked,
+# not of the row.
+LIMIT_REACHED = "limit_reached"
 
 # A chunker fingerprint no geometry has: a SHA-256 is never all zeros. An
 # entry carries it when the coordinator cannot vouch for the document's live
@@ -159,6 +187,15 @@ class _Progress:
     metadata_full_repush: int = 0
     source_url_fallback: int = 0
     source_url_mismatch: int = 0
+    # F10: rows that needed a read and got one under --limit, and whether
+    # any row was skipped for want of the cap. A limited run saw less than
+    # the corpus, so it withholds the watermark.
+    reads_under_limit: int = 0
+    limited: bool = False
+    # F15: first-run checkpoints committed, and the published count at the
+    # last one.
+    checkpoints_committed: int = 0
+    published_at_checkpoint: int = 0
 
 
 class PublishCoordinator:
@@ -175,6 +212,7 @@ class PublishCoordinator:
         chunker_fingerprint: str,
         work_dir: Path,
         max_chunks_per_document: int,
+        bootstrap_checkpoint_every: int,
         run_state: RunStateStore | None = None,
         clock: Callable[[], str] = utc_now_iso,
     ) -> None:
@@ -184,6 +222,8 @@ class PublishCoordinator:
             )
         if max_chunks_per_document < 1:
             raise ValueError("max_chunks_per_document must be >= 1")
+        if bootstrap_checkpoint_every < 1:
+            raise ValueError("bootstrap_checkpoint_every must be >= 1")
         self._sink = sink
         self._manifests = manifests
         self._source = source
@@ -191,6 +231,7 @@ class PublishCoordinator:
         self._fingerprint = chunker_fingerprint
         self._work_dir = work_dir
         self._max_chunks = max_chunks_per_document
+        self._checkpoint_every = bootstrap_checkpoint_every
         self._run_state = run_state
         self._clock = clock
 
@@ -198,23 +239,33 @@ class PublishCoordinator:
     def agency_id(self) -> str:
         return self._sink.agency_id
 
-    def export(self, run_id: str) -> RunReport:
+    def export(
+        self, run_id: str, *, force: bool = False, limit: int | None = None
+    ) -> RunReport:
         """Run one export and return its report. An Exception, including a
         lock file that cannot be opened, is the report's `failed` outcome
         rather than a raise, and the next tick is the retry. Only a
-        BaseException (SystemExit, KeyboardInterrupt) escapes."""
+        BaseException (SystemExit, KeyboardInterrupt) escapes.
+
+        `force` bypasses Gate 1 once E4 builds it; until then it is echoed in
+        the report and changes nothing. `limit` caps the documents read this
+        run (F10; see the module docstring)."""
+        if limit is not None and (
+            isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
+        ):
+            raise ValueError(f"limit must be an int >= 1, got {limit!r}")
         started_at = self._clock()
-        started = time.monotonic()
+        started = time.perf_counter()
         report: RunReport | None = None
         try:
             with run_lock(self._work_dir) as acquired:
                 if acquired:
-                    report = self._attempt(run_id, started_at)
+                    report = self._attempt(run_id, started_at, limit=limit)
                     # Recorded while the lock is still held: once it is free
                     # the next run may start, and its record must not race
                     # this one's. A `busy` can still interleave; it is only
                     # a counter.
-                    self._observe(report, time.monotonic() - started)
+                    report = self._finish(report, started, force=force, limit=limit)
                     return report
         except OSError as exc:
             if report is not None:
@@ -227,33 +278,72 @@ class PublishCoordinator:
                 type(exc).__name__,
                 sanitize_sensitive_text(str(exc)),
             )
-            report = self._report(run_id, "failed", started_at)
+            report = self._report(
+                run_id, "failed", started_at, error_type=type(exc).__name__
+            )
         else:
             # Reached only when the lock was not acquired: the acquired branch
             # returns from inside it.
             logger.info("run %s: another export or drain holds the lock", run_id)
             report = self._report(run_id, "busy", started_at)
-        self._observe(report, time.monotonic() - started)
-        return report
+        return self._finish(report, started, force=force, limit=limit)
 
-    def _attempt(self, run_id: str, started_at: str) -> RunReport:
+    def _attempt(self, run_id: str, started_at: str, *, limit: int | None) -> RunReport:
+        # Built here rather than in _run so a failure can still report the
+        # checkpoints it committed: the next run resumes from them.
+        progress = _Progress(synced_at=started_at)
         try:
-            return self._run(run_id, started_at)
+            return self._run(run_id, started_at, progress, limit=limit)
         except Exception as exc:
-            # Every failure is `failed`, and nothing was committed. Type and
-            # sanitised message only, never a traceback; see the module
-            # docstring.
+            # Every failure is `failed`, and nothing was committed beyond the
+            # first-run checkpoints counted below. Type and sanitised message
+            # only, never a traceback; see the module docstring.
             logger.error(
                 "run %s failed, nothing committed: %s: %s",
                 run_id,
                 type(exc).__name__,
                 sanitize_sensitive_text(str(exc)),
             )
-            return self._report(run_id, "failed", started_at)
+            return replace(
+                self._report(
+                    run_id, "failed", started_at, error_type=type(exc).__name__
+                ),
+                checkpoints_committed=progress.checkpoints_committed,
+            )
+
+    def _finish(
+        self, report: RunReport, started: float, *, force: bool, limit: int | None
+    ) -> RunReport:
+        """Stamp how the run was asked for and how long it took, then record
+        it (A15). Every outcome passes through here exactly once."""
+        report = replace(
+            report,
+            duration_seconds=time.perf_counter() - started,
+            forced=force,
+            limit=limit,
+        )
+        try:
+            self._observe(report)
+        except Exception as exc:
+            # Observability only. The run is over and, on success, committed;
+            # failing to log or record it must not turn it into a raise.
+            logger.warning(
+                "run %s: its outcome could not be recorded: %s",
+                report.run_id,
+                type(exc).__name__,
+            )
+        return report
 
     # -- the run -----------------------------------------------------------
 
-    def _run(self, run_id: str, started_at: str) -> RunReport:
+    def _run(
+        self,
+        run_id: str,
+        started_at: str,
+        progress: _Progress,
+        *,
+        limit: int | None,
+    ) -> RunReport:
         agency_id = self.agency_id
         journal = DeletionJournal(self._work_dir, run_id=run_id, agency_id=agency_id)
         if journal.is_closed():
@@ -285,13 +375,13 @@ class PublishCoordinator:
 
         # Every row is classified, and its document published, before any
         # whole document is deleted.
-        progress = _Progress(synced_at=started_at)
         seen: set[str] = set()
         for row in rows:
             self._check_row(row, seen)
-            progress.changes.append(
-                self._publish_one(row, entries.get(row.document_id), progress, journal)
-            )
+            entry = entries.get(row.document_id)
+            row = self._apply_limit(row, entry, progress, limit)
+            progress.changes.append(self._publish_one(row, entry, progress, journal))
+            self._maybe_checkpoint(previous, progress, watermark)
         progress.changes.extend(
             DocumentDiff(
                 document_id,
@@ -304,40 +394,24 @@ class PublishCoordinator:
         )
         self._delete_documents(progress, journal)
 
-        diff = self._assemble(previous, progress)
-        documents = record(
-            diff,
-            progress.published,
-            tails_deleted=progress.tails_deleted,
-            processed_at=progress.synced_at,
-        )
-        for document_id in documents.keys() & progress.unconfirmed:
-            documents[document_id] = replace(
-                documents[document_id], chunker_fingerprint=UNCONFIRMED_FINGERPRINT
-            )
-        manifest = self._manifests.build(
-            agency_id=agency_id,
-            diff=diff,
-            documents=documents,
-            watermark=watermark,
-            previous=previous,
+        diff, manifest = self._next_manifest(
+            previous,
+            progress,
+            watermark,
             advance_watermark=not (
                 progress.publish_failed
                 or progress.tails_unresolved
                 or progress.demoted
                 or progress.read_skipped
-                or any(
-                    entry.chunker_fingerprint == UNCONFIRMED_FINGERPRINT
-                    for entry in documents.values()
-                )
+                or progress.limited
             ),
-            committed_at=self._clock(),
         )
         self._manifests.commit(manifest)  # F6: the commit point.
         self._reconcile_journals(run_id, [*unreconciled, journal], [*on_disk, journal])
 
         return replace(
             self._report(run_id, "success", started_at),
+            checkpoints_committed=progress.checkpoints_committed,
             new_count=len(diff.new),
             content_changed_count=len(diff.content_changed),
             metadata_changed_count=len(diff.metadata_changed),
@@ -363,6 +437,28 @@ class PublishCoordinator:
                 f"document {row.document_id} belongs to another agency than this run's"
             )
         seen.add(row.document_id)
+
+    def _apply_limit(
+        self,
+        row: DocumentRef,
+        entry: ManifestDocumentEntry | None,
+        progress: _Progress,
+        limit: int | None,
+    ) -> DocumentRef:
+        """F10. The row, or the row skipped with LIMIT_REACHED once `limit`
+        reads have been spent. Only a row that needs a read counts or is
+        skipped: one Gate 2 spares, and a deletion signal, cost no read and
+        are handled as on any run. A skipped row is carried verbatim by
+        record() (C15), never deleted."""
+        if limit is None or not needs_read(
+            entry, row, chunker_fingerprint=self._fingerprint
+        ):
+            return row
+        if progress.reads_under_limit < limit:
+            progress.reads_under_limit += 1
+            return row
+        progress.limited = True
+        return replace(row, skip_reason=LIMIT_REACHED)
 
     # -- one document (F5) -------------------------------------------------
 
@@ -542,6 +638,82 @@ class PublishCoordinator:
 
     # -- the manifest ------------------------------------------------------
 
+    def _next_manifest(
+        self,
+        previous: Manifest | None,
+        progress: _Progress,
+        watermark: CorpusWatermark,
+        *,
+        advance_watermark: bool,
+    ) -> tuple[DiffResult, Manifest]:
+        """The manifest describing `progress`, for the final commit or a
+        first-run checkpoint, which therefore cannot drift apart. An entry
+        left UNCONFIRMED_FINGERPRINT always withholds the watermark."""
+        diff = self._assemble(previous, progress)
+        documents = record(
+            diff,
+            progress.published,
+            tails_deleted=progress.tails_deleted,
+            processed_at=progress.synced_at,
+        )
+        for document_id in documents.keys() & progress.unconfirmed:
+            documents[document_id] = replace(
+                documents[document_id], chunker_fingerprint=UNCONFIRMED_FINGERPRINT
+            )
+        manifest = self._manifests.build(
+            agency_id=self.agency_id,
+            diff=diff,
+            documents=documents,
+            watermark=watermark,
+            previous=previous,
+            advance_watermark=advance_watermark
+            and not any(
+                entry.chunker_fingerprint == UNCONFIRMED_FINGERPRINT
+                for entry in documents.values()
+            ),
+            committed_at=self._clock(),
+        )
+        return diff, manifest
+
+    def _maybe_checkpoint(
+        self,
+        previous: Manifest | None,
+        progress: _Progress,
+        watermark: CorpusWatermark,
+    ) -> None:
+        """F15: commit the manifest so far, on a first run only, once
+        BOOTSTRAP_CHECKPOINT_EVERY more documents have published since the
+        last checkpoint. Counting published documents rather than rows means
+        a fresh CKB that is mostly skipped does not commit the same manifest
+        over and over.
+
+        `previous is None` is the whole rule, and it lives only here: on an
+        incremental run a partial commit could drop carried-forward entries.
+        """
+        if previous is not None:
+            return
+        if (
+            len(progress.published) - progress.published_at_checkpoint
+            < self._checkpoint_every
+        ):
+            return
+        diff, manifest = self._next_manifest(
+            None, progress, watermark, advance_watermark=False
+        )
+        if diff.deleted or diff.chunks_to_delete:
+            # Impossible on a first run: nothing was published before, so
+            # nothing can be deleted. Refusing keeps a checkpoint from ever
+            # recording a deletion the journal does not yet own.
+            raise RuntimeError("a first-run checkpoint found deletions; refusing")
+        self._manifests.commit(manifest)
+        progress.published_at_checkpoint = len(progress.published)
+        progress.checkpoints_committed += 1
+        logger.info(
+            "first-run checkpoint %d committed: %d document(s) published so far",
+            progress.checkpoints_committed,
+            len(progress.published),
+        )
+
     def _assemble(self, previous: Manifest | None, progress: _Progress) -> DiffResult:
         diff = DiffResult.from_documents(
             progress.changes,
@@ -609,7 +781,14 @@ class PublishCoordinator:
 
     # -- reporting (A15) ---------------------------------------------------
 
-    def _report(self, run_id: str, outcome: RunOutcome, started_at: str) -> RunReport:
+    def _report(
+        self,
+        run_id: str,
+        outcome: RunOutcome,
+        started_at: str,
+        *,
+        error_type: str | None = None,
+    ) -> RunReport:
         return RunReport(
             run_id=run_id,
             agency_id=self.agency_id,
@@ -617,9 +796,10 @@ class PublishCoordinator:
             outcome=outcome,
             started_at=started_at,
             finished_at=self._clock(),
+            error_type=error_type,
         )
 
-    def _observe(self, report: RunReport, duration_seconds: float) -> None:
+    def _observe(self, report: RunReport) -> None:
         counts = {
             Bucket.NEW.value: report.new_count,
             Bucket.CONTENT_CHANGED.value: report.content_changed_count,
@@ -636,16 +816,18 @@ class PublishCoordinator:
             run_id=report.run_id,
             agency_id=report.agency_id,
             sink=report.sink_id,
-            duration_seconds=duration_seconds,
+            duration_seconds=report.duration_seconds,
             counts=counts,
             deletions_recorded=report.deletions_recorded,
+            error_type=report.error_type,
         )
         if self._run_state is not None:
             self._run_state.record(
                 outcome=outcome,
                 run_id=report.run_id,
                 agency_id=report.agency_id,
-                duration_seconds=duration_seconds,
+                duration_seconds=report.duration_seconds,
+                error_type=report.error_type,
             )
 
 

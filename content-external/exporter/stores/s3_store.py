@@ -78,7 +78,9 @@ __all__ = ["S3Store"]
 _MAX_KEYS_PER_BATCH_DELETE = 1000
 
 # Bounded, so one hung connection cannot stall a run indefinitely. Retries are
-# botocore's standard mode: exponential backoff, throttles included.
+# botocore's standard mode: exponential backoff, throttles included. That IS
+# F8's backoff for this store; exporter/services/backoff.py is deliberately not
+# stacked on top, which would multiply the attempts into a retry storm.
 _CONNECT_TIMEOUT_SECONDS = 5
 _READ_TIMEOUT_SECONDS = 60
 _MAX_ATTEMPTS = 3
