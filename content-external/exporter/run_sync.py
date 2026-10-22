@@ -10,10 +10,11 @@ records its outcome where /health reads it.
 
   --agency-id ID     the agency to export (required)
   --run-id ID        default: a generated, sortable id
-  --force            bypass Gate 1. Gate 1 is Stage E's (E4) and not built
-                     yet, so this is accepted, echoed in the report, and
-                     changes nothing until then. A chunker-geometry change
-                     never needs it: the fingerprint comparison catches that.
+  --force            bypass Gate 1 (E4): walk every row even when the
+                     watermark, the live count and the chunker fingerprint
+                     all match the committed manifest. A chunker-geometry
+                     change never needs it: the fingerprint comparison
+                     catches that.
   --limit N          read at most N documents this run. The rest are held,
                      never deleted, and the corpus watermark is withheld, so
                      the next full run still walks every row.
@@ -32,9 +33,6 @@ The report is JSON on stdout (or the file); logs go to stderr, so stdout
 pipes cleanly into jq. Exit codes follow the run outcomes: 0 for success,
 unchanged and busy (busy is by design not an error), 1 for failed, and 2 for
 a usage or configuration error that stopped the run before it started.
-
-Until Stage E builds the document source, every run fails with a message
-naming it.
 """
 
 import argparse
@@ -104,7 +102,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="bypass Gate 1 (inert until Stage E's E4 builds it)",
+        help="bypass Gate 1 (E4): walk every row even when nothing moved",
     )
     parser.add_argument(
         "--limit",

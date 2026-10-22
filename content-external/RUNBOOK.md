@@ -18,9 +18,79 @@ version row** of the agency, not with its document count. `source_file` gets a
 new row on every status change. Document pages use an exclusive `base_id` cursor,
 starting at `NIL_UUID` from `document_source.py`; a short page ends the listing.
 An exact multiple of the page size requires a final empty page. All pages must
-succeed before any documents are returned. Each call keeps the `CKB_RESQL_TIMEOUT`
-timeout and the current single-attempt behaviour. Successful enumeration logs the
+succeed before any documents are returned. Each call has the `CKB_RESQL_TIMEOUT`
+timeout. Connection errors, 408/429 and 5xx are retried under F8 (up to 4
+attempts, full jitter, `Retry-After` honoured), each logged as `Resql <query>:
+attempt N of 4 failed`. A **read timeout is never retried**, for the reason in
+[Do not retry immediately after a timeout](#do-not-retry-immediately-after-a-timeout):
+the run fails and the next tick is the retry. Successful enumeration logs the
 agency, page count (including an empty terminal page), and total row count.
+
+Both queries also read `data_collection.source`, so that a deleted source
+deletes its files (`source/delete_source.sql` marks only the source row). The
+document query looks up each page row's latest source version with a
+`LEFT JOIN LATERAL`. The watermark adds the newest *deleted* source version and
+counts live files against their source's latest version. The current numbers
+are in [With the source-deletion fix](#with-the-source-deletion-fix--measured-2026-10-22);
+the two sections after it are the history that chose the page size.
+
+### With the source-deletion fix — measured 2026-10-22
+
+Measured on one machine against the queries committed before the fix (`old`)
+and after it (`new`), so the effect of the fix is measured rather than
+compared with another machine's numbers. Default page size 1,000.
+
+| Queries | Source history | Warm EXPLAIN, watermark | Warm EXPLAIN, first / middle page | Resql watermark, 3 calls after restart | Resql per page: median / p90 / max | `list_documents()`, 9 back to back | Peak RSS | Timeouts |
+|---|---|---|---|---|---|---|---|---|
+| old | not read | 1.28 s | 0.050 / 0.056 s | 1.30 / 1.20 / 1.12 s | 0.087 / 0.134 / 0.383 s | 5.6–6.3 s | 189 MB | 0 |
+| new | 1,650 versions per source | 0.77 s | 0.067 / 0.057 s | 0.85 / 0.68 / 0.66 s | 0.099 / 0.133 / 0.168 s | 5.8–6.6 s | 189 MB | 0 |
+| new | 39,600 versions per source | 1.36 s | 0.112 / 0.057 s | 1.35 / 1.21 / 1.22 s | 0.095 / 0.153 / 0.187 s | 6.0–6.7 s | 189 MB | 0 |
+
+At the 10k step the two are as close: warm watermark 0.53 s new against
+0.47 s old, pages 0.07 / 0.06 s against 0.05 / 0.05 s, listings 1.1–1.5 s
+against 1.0–1.5 s. At 5,000 per page (50k step), pages took 0.27 / 0.31 s new
+against 0.32 / 0.24 s old, with no Sort in either.
+
+Data and conditions:
+
+- **Data**: `scripts/measure_export_queries.sql` with its defaults, the 10k
+  then the 50k step. At 50k: 50,000 documents and 998,327 version rows in the
+  measured agency, 1,787,246 `source_file` rows in all, the same shape as the
+  tables below. Sources: 25 per agency, 1,650 versions each (about five
+  source writes per scrape, one scrape a day), 206,250 `source` rows in all.
+  One source in 25 ends deleted, so 4% of documents belong to a deleted
+  source. The deep row reloaded sources at 39,600 versions each (an hourly
+  scrape): 990,000 per agency, 4.95M rows and 5.2 GB in all.
+- **Machine**: Windows 11, Docker Desktop 29.7.2 on WSL2 (16 CPUs, 15.5 GB),
+  data on a named Docker volume. Another project's containers were running on
+  the same engine. Postgres 14.1 with defaults (`shared_buffers` 128 MB,
+  `work_mem` 4 MB, `/dev/shm` 64 MB). `VACUUM (ANALYZE)` on both tables after
+  each load, as autovacuum would reach; with the 64 MB `/dev/shm` it needs
+  `PARALLEL 0`. Resql from the local `resql:latest` image. This machine lists
+  the same 50k agency about 5× faster than the one below, so compare rows
+  within this table only.
+- **Columns**: as in the sections below. Old Resql timings used a second Resql
+  serving a copy of `DSL/Resql` with the two old files, and the committed
+  `document_source.py`, which expects the old columns.
+
+What the plans show:
+
+- **Pages are unchanged in shape.** Every page is an ordered Index Scan on
+  `idx_source_file_agency_base_updated` with no Sort. The source lookup is an
+  Index Only Scan on `idx_source_base_updated_deleted_auto_scrapping_status`
+  with no heap fetches: about 3 buffer hits and 4–11 µs per row at either
+  source depth, so it does not grow with source history.
+- **The watermark is faster at realistic depth.** Its latest-file step now
+  feeds a join, and the planner runs that Sort in parallel (a Parallel Seq Scan
+  and Gather Merge over 3 processes) where the old scalar subquery sorted in
+  one. The two new source parts are Index Only Scans on
+  `idx_source_agency_base_updated_deleted_url_subsector_scraped_st`: 2 ms and
+  5 ms at 1,650 versions per source, 83 ms and 180 ms at 39,600.
+- **What grows**: the watermark now also grows with the agency's source
+  version rows, by about 0.6 s per million here. Page time does not.
+- **The fix is visible in the results**: the new watermark's `liveCount` was
+  45,633 against 47,542, and the new listing marked 4,367 rows deleted against
+  2,458. The 1,909 extra are the deleted source's files.
 
 ### Before pagination — measured 2026-10-20, commit 1c483d3
 
@@ -108,11 +178,16 @@ What the numbers show:
 
 ### Ceiling and conclusion
 
-- **Ceiling**: ≥ 50k documents (about 990k version rows) at the default page
-  size; 200k not measured. The budget is 15 s per HTTP call, half of the
-  default `CKB_RESQL_TIMEOUT` (30 s). At 50k the slowest call was the watermark at 4.5 s
-  (30%), and the slowest document page took 1.53 s. This is not an
-  extrapolation beyond 50k.
+- **Ceiling**: ≥ 50k documents (about 1M version rows) and ≥ 1M source
+  version rows per agency, at the default page size; 200k documents not
+  measured. The budget is 15 s per HTTP call, half of the default
+  `CKB_RESQL_TIMEOUT` (30 s). On the 2026-10-20/21 machine the slowest call at
+  50k was the watermark at 4.5 s (30%) and the slowest page 1.53 s. With the
+  source-deletion fix, on the 2026-10-22 machine, the slowest call at 50k
+  with 990k source versions was the watermark at 1.35 s (9%) and the slowest
+  page 0.19 s. The fix added no measurable cost to a page and made the
+  watermark faster at daily-scrape depth. This is not an extrapolation beyond
+  either measured size.
 - **Before pagination the margin at 50k was thin**, and this is what paging
   fixed:
   - The single document query took 9.9 s at most for single calls, 66% of
@@ -123,11 +198,13 @@ What the numbers show:
     does not cancel it, so the next call competes with it (see
     [Signs the ceiling is being hit](#signs-the-ceiling-is-being-hit)).
 - **What still grows with the agency**: the watermark call and the total
-  listing time both scale with the agency's version rows. Page time does not.
+  listing time both scale with the agency's version rows, and the watermark
+  also with its source version rows. Page time does not.
 - **Expected production size per agency is unknown.** It has been asked from
   the business side.
 - **Re-check threshold**: re-measure before go-live (step 5 below) for any
-  agency above 50,000 documents or about 1M version rows, the measured range.
+  agency above 50,000 documents, about 1M version rows or about 1M source
+  version rows, the measured range.
 - **Total table size matters too.** The watermark's `live_count` reads the
   whole of `source_file`, so growth in other agencies also slows every
   agency's export.
@@ -143,6 +220,11 @@ itself, and use the target deployment's Postgres settings.
    SELECT agency_base_id, count(*) AS version_rows, count(DISTINCT base_id) AS documents
    FROM data_collection.source_file
    GROUP BY agency_base_id ORDER BY version_rows DESC LIMIT 5;
+
+   -- The watermark also reads the agency's source history.
+   SELECT agency_base_id, count(*) AS source_version_rows, count(DISTINCT base_id) AS sources
+   FROM data_collection.source
+   GROUP BY agency_base_id ORDER BY source_version_rows DESC LIMIT 5;
    ```
 
 2. **EXPLAIN both queries as Resql runs them**, three times each, keeping the
@@ -156,32 +238,57 @@ itself, and use the target deployment's Postgres settings.
 
    ```sql
    PREPARE wm(varchar) AS
-   WITH latest_files AS (
-       SELECT DISTINCT ON (base_id) base_id, is_deleted
-       FROM data_collection.source_file
-       WHERE agency_base_id = $1::UUID
-       ORDER BY base_id, updated_at DESC
+   WITH latest_sources AS (
+       SELECT DISTINCT ON (s.base_id) s.base_id, s.is_deleted
+       FROM data_collection.source AS s
+       WHERE s.agency_base_id = $1::UUID
+       ORDER BY s.base_id, s.updated_at DESC
+   ),
+   latest_files AS (
+       SELECT DISTINCT ON (sf.base_id) sf.base_id, sf.source_base_id, sf.is_deleted
+       FROM data_collection.source_file AS sf
+       WHERE sf.agency_base_id = $1::UUID
+       ORDER BY sf.base_id, sf.updated_at DESC
    )
-   SELECT MAX(updated_at) AS max_updated_at,
-          (SELECT COUNT(*) FROM latest_files WHERE is_deleted = false) AS live_count
-   FROM data_collection.source_file
-   WHERE agency_base_id = $1::UUID;
+   SELECT
+       GREATEST(
+           (SELECT MAX(sf.updated_at) FROM data_collection.source_file AS sf
+            WHERE sf.agency_base_id = $1::UUID),
+           (SELECT MAX(s.updated_at) FROM data_collection.source AS s
+            WHERE s.agency_base_id = $1::UUID AND s.is_deleted = TRUE)
+       ) AS max_updated_at,
+       (SELECT COUNT(*) FROM latest_files AS lf
+        LEFT JOIN latest_sources AS ls ON lf.source_base_id = ls.base_id
+        WHERE lf.is_deleted = FALSE AND ls.is_deleted IS NOT TRUE) AS live_count;
    EXPLAIN (ANALYZE, BUFFERS) EXECUTE wm('<agency>');  -- run 3 times
 
    PREPARE docs(varchar, varchar, varchar) AS
-   SELECT DISTINCT ON (base_id)
-       base_id, source_base_id, url, page_title, subsector, status,
-       cleaned_data_url, cleaned_metadata_url, edited_data_url, edited_metadata_url,
-       file_size, is_excluded, is_deleted, updated_at
-   FROM data_collection.source_file
-   WHERE agency_base_id = $1::UUID AND base_id > $2::UUID
-   ORDER BY base_id, updated_at DESC
-   LIMIT $3::INTEGER;
+   WITH page AS (
+       SELECT DISTINCT ON (base_id)
+           base_id, source_base_id, url, page_title, subsector, status,
+           cleaned_data_url, cleaned_metadata_url, edited_data_url, edited_metadata_url,
+           file_size, is_excluded, is_deleted, type, updated_at
+       FROM data_collection.source_file
+       WHERE agency_base_id = $1::UUID AND base_id > $2::UUID
+       ORDER BY base_id, updated_at DESC
+       LIMIT $3::INTEGER
+   )
+   SELECT p.*, COALESCE(ls.is_deleted, FALSE) AS source_is_deleted
+   FROM page AS p
+   LEFT JOIN LATERAL (
+       SELECT s.is_deleted FROM data_collection.source AS s
+       WHERE s.base_id = p.source_base_id
+       ORDER BY s.updated_at DESC LIMIT 1
+   ) AS ls ON TRUE
+   ORDER BY p.base_id;
    EXPLAIN (ANALYZE, BUFFERS) EXECUTE docs('<agency>', '<cursor>', '<page-size>');
    -- Run 3 times for each cursor / page size, retaining the third plan.
    ```
 
-   If these examples differ from the .sql files, the files win.
+   If these examples differ from the .sql files, the files win. Check the
+   source lookup too: it should be an Index Only Scan on a `source` index
+   leading with `base_id, updated_at DESC`, with no heap fetches after a
+   vacuum.
 
 3. **Time both calls end to end through Resql**, one call at a time, three
    times each:
@@ -214,11 +321,18 @@ itself, and use the target deployment's Postgres settings.
 To reproduce the synthetic ladder on a **local, disposable** database only,
 use `scripts/measure_export_queries.sql`. Never run it against a shared,
 staging or production database: it inserts millions of rows into
-`data_collection.source_file`.
+`data_collection.source_file` and `data_collection.source`. Sources are
+generated once per agency and kept by later steps; `-v source_versions=<n>`
+sets their depth (default 1,650), and a deeper run needs their rows removed
+first.
 
 - It refuses to run without `-v measure_local_only=yes` and
   `-v measure_agency_id=<agency-uuid>`. Loading also requires
   `-v bucket=<bucket>`, the bucket name written into the generated `s3://` URLs.
+- It also refuses an `<agency-uuid>` that has an agency row, or whose (or a
+  derived agency's) `source_file` or `source` rows it did not generate, for
+  load and cleanup alike. Cleanup deletes all of those agencies' rows, so pass
+  a fresh UUID that no real agency uses.
 - The four other agencies are derived from `<agency-uuid>`, so cleanup needs
   the same value to find them.
 - `<db-container>`, `<db-user>` and `<db-name>` are the Postgres container,
@@ -298,6 +412,57 @@ seed's four rows.
 3. Re-measure as above. If a document page is over 15 s, reduce the page
    size and inspect its query plan. Raising `CKB_RESQL_TIMEOUT` only hides the problem until
    the next growth step.
+
+## Dead-lettered documents
+
+A document skipped for a fault of its own is **dead-lettered**: listed in
+`$CONTENT_WORK_DIR/_dead_letter/<agency_id>.json` and never allowed to fail the
+run, so one bad file cannot block the agency's other documents (E9). The run
+line's `dead_lettered=` and the report's `dead_lettered_count` give the size;
+a WARNING `document <id> dead-lettered: <reason>` is logged when one first
+appears, and an INFO line when it leaves.
+
+```json
+{
+  "agency_id": "…",
+  "updated_at": "2026-10-22T09:00:04Z",
+  "updated_by_run": "20261022T090000Z-1a2b3c4d",
+  "documents": {
+    "<source_file.base_id>": {
+      "reason": "content_too_large",
+      "first_seen_at": "2026-10-01T09:00:02Z",
+      "last_seen_at": "2026-10-22T09:00:04Z",
+      "last_run_id": "20261022T090000Z-1a2b3c4d",
+      "runs": 504
+    }
+  }
+}
+```
+
+It is the current set, not a history: a run that observed the whole corpus
+rewrites it, a `--limit` run only adds and resolves, and a failed run leaves
+it alone. A document leaves when a run publishes it, deletes it or finds it
+unchanged. Nothing is lost if the volume is: the next complete run rebuilds it.
+
+**Why it matters beyond the document.** A dead-lettered document is read again
+on every run and withholds the corpus watermark, so while any document is
+listed **Gate 1 cannot skip a quiet tick** and every run walks every row
+(Gate 2 still spares the rest at zero reads). A persistent nonzero
+`dead_lettered=` is therefore worth an alert, though not a page.
+
+| Reason | Meaning | What to do |
+|---|---|---|
+| `content_too_large`, `sidecar_too_large` | Over `MAX_DOCUMENT_BYTES` (20 MiB) or the sidecar limit; refused on `ContentLength`, nothing downloaded | Check the cleaned file in CKB. If it is genuinely that large, raise `MAX_DOCUMENT_BYTES`, within A16's memory product |
+| `too_many_chunks` | Cleaned text produces more than `MAX_CHUNKS_PER_DOCUMENT` chunks | Usually a cleaning fault (a page of repeated boilerplate); re-clean it in CKB |
+| `content_undecodable` | Cleaned text is not UTF-8 | Re-clean it in CKB |
+| `content_missing` | The row names a content object that is not in CKB's bucket | Re-scrape or re-clean the page; the row and the bucket disagree |
+| `content_key_invalid`, `metadata_key_invalid` | The URL column is neither a bare key nor `s3://<S3_BUCKET_NAME>/…` | Check `S3_BUCKET_NAME` first, then the row |
+| `sidecar_missing`, `sidecar_invalid_json`, `sidecar_undecodable`, `sidecar_not_an_object` | The metadata sidecar is absent or does not parse | Re-clean it in CKB |
+| `invalid_source_url`, `uncitable_source_url` | No usable citation, or a presigned or credential-carrying one | Fix the page's URL in CKB; a signed URL is never published |
+
+Each fix in CKB writes a new row version, so the next run reads the document
+again and removes it from the record once it publishes. Raising a limit
+instead needs no CKB change: the next run reads it again on its own.
 
 ## Do not retry immediately after a timeout
 

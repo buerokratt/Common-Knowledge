@@ -10,8 +10,10 @@ it, and that nothing commits unless the whole run got that far.
 
 import itertools
 import json
+import logging
 import threading
 import time
+import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
@@ -23,13 +25,22 @@ import pytest
 from exporter.core.chunking import Chunker
 from exporter.core.constants import CHUNK_PROFILES
 from exporter.core.ids import chunker_fingerprint
-from exporter.core.schemas import Chunk, DocumentRecord, Manifest, RunReport
+from exporter.core.schemas import (
+    Chunk,
+    DocumentRecord,
+    DocumentRef,
+    Manifest,
+    ReadDocument,
+    RunReport,
+)
 from exporter.services.bootstrap_marker import BOOTSTRAP_DIRNAME, BootstrapMarker
 from exporter.services.corpus_guard import (
     IncompleteCorpusError,
     require_observed_full_corpus,
 )
-from exporter.services.deletion_journal import JOURNAL_DIRNAME
+from exporter.services.deletion_journal import JOURNAL_DIRNAME, DeletionJournal
+from exporter.services.dead_letter import DeadLetterEntry, DeadLetterStore
+from exporter.services.document_source import UPLOADED_FILE_UNCITABLE
 from exporter.services.locking import run_lock
 from exporter.services.manifest_service import ManifestService
 from exporter.services.manifest_store import ManifestStore
@@ -258,12 +269,14 @@ def test_a_first_run_publishes_every_ready_document_and_commits(world: World) ->
 def test_an_unchanged_second_run_reads_nothing_and_publishes_nothing(
     world: World,
 ) -> None:
-    """Gate 2 is load-bearing: an unmoved row costs zero object reads."""
+    """Gate 2 is load-bearing: an unmoved row costs zero object reads. Forced
+    past Gate 1, which would otherwise end the run before the rows."""
     first = _published(world, ("d1", text(30)), ("d2", text(3)))
 
-    report = world.export("run-2")
+    report = world.export("run-2", force=True)
 
     assert report.outcome == "success"
+    assert report.forced is True
     assert report.unchanged_count == 2
     assert world.source.reads == []
     assert world.verbs == []
@@ -271,6 +284,298 @@ def test_an_unchanged_second_run_reads_nothing_and_publishes_nothing(
     assert second is not None
     assert second.documents == first.documents
     assert replace(second, committed_at="x") == replace(first, committed_at="x")
+
+
+# --- Gate 1 (E4) -----------------------------------------------------------
+
+
+def test_gate_1_ends_a_quiet_run_before_the_enumeration(world: World) -> None:
+    """One watermark query and one manifest read: no listing, no object
+    read, no destination call and no commit."""
+    first = _published(world, ("d1", text(30)), ("d2", text(3)))
+    listed = world.source.listed
+
+    report = world.export("run-2")
+
+    assert report.outcome == "unchanged"
+    assert report.forced is False
+    assert world.source.listed == listed
+    assert world.source.reads == []
+    assert world.verbs == []
+    assert world.manifest() == first
+    # It classified nothing, so it can vouch for nothing a sweep needs.
+    assert report.run_observed_full_corpus is False
+    with pytest.raises(IncompleteCorpusError):
+        require_observed_full_corpus(report, operation="a sweep")
+    last = world.run_state.read()
+    assert last is not None
+    assert last.outcome == "unchanged"
+
+
+def test_an_uploaded_file_does_not_cost_reads_or_disable_gate_1(world: World) -> None:
+    """Skipped at enumeration (document_source.UPLOADED_FILE_UNCITABLE), so
+    it is never read and, unlike a read-time skip, never withholds the
+    watermark: the next quiet run is still `unchanged`."""
+    world.source.put(make_row("d1", updated_at=EARLY), text(3))
+    world.source.put(
+        replace(make_row("u1", updated_at=EARLY), skip_reason=UPLOADED_FILE_UNCITABLE)
+    )
+
+    first = world.export("run-1")
+
+    assert first.outcome == "success"
+    assert first.skipped_reasons == {"u1": UPLOADED_FILE_UNCITABLE}
+    assert first.documents_held_back == 0
+    assert world.source.reads == ["d1"]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == EARLY
+    assert set(manifest.documents) == {"d1"}
+
+    world.source.reads.clear()
+    assert world.export("run-2").outcome == "unchanged"
+    assert world.source.reads == []
+
+
+def test_a_read_time_skip_still_withholds_the_watermark(world: World) -> None:
+    """The contrast: a rejected sidecar is a verdict on configuration and
+    content, so it keeps the next run walking."""
+    world.source.put(make_row("d1", updated_at=EARLY), text(3))
+    world.source.put(
+        make_row("d2", updated_at=EARLY), text(3), skip_reason="sidecar_missing"
+    )
+
+    assert world.export("run-1").documents_held_back == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark is None
+    assert world.export("run-2").outcome == "success"
+
+
+def _dead_letters(world: World) -> dict[str, DeadLetterEntry]:
+    return DeadLetterStore(world.work_dir, agency_id=AGENCY).load()
+
+
+def test_document_faults_are_dead_lettered_and_nothing_else(tmp_path: Path) -> None:
+    """E9: a read-time guard and MAX_CHUNKS_PER_DOCUMENT dead-letter; a row
+    not ready, an uploaded file and a --limit skip are expected, not faults."""
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), max_chunks=3)
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.source.put(make_row("long", updated_at=EARLY), text(60))
+    world.source.put(make_row("busy", updated_at=EARLY, status="in_review"), text(3))
+    world.source.put(
+        replace(make_row("up", updated_at=EARLY), skip_reason=UPLOADED_FILE_UNCITABLE)
+    )
+    world.source.put(make_row("ok", updated_at=EARLY), text(3))
+
+    report = world.export("run-1")
+
+    assert report.outcome == "success"
+    dead = _dead_letters(world)
+    assert {d: e.reason for d, e in dead.items()} == {
+        "big": "content_too_large",
+        "long": TOO_MANY_CHUNKS,
+    }
+    assert report.dead_lettered_count == 2
+    assert all(e.runs == 1 and e.last_run_id == "run-1" for e in dead.values())
+
+
+def test_a_stuck_document_keeps_its_first_seen_and_counts_runs(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    first = _dead_letters(world)["big"]
+
+    # Still stuck: its watermark was withheld, so the next run reads it again.
+    report = world.export("run-2")
+
+    entry = _dead_letters(world)["big"]
+    assert report.dead_lettered_count == 1
+    assert (entry.first_seen_at, entry.runs, entry.last_run_id) == (
+        first.first_seen_at,
+        2,
+        "run-2",
+    )
+    assert entry.last_seen_at != first.last_seen_at
+
+
+def test_a_fixed_document_leaves_the_record(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    assert set(_dead_letters(world)) == {"big"}
+
+    world.source.put(make_row("big", updated_at=LATER), text(3))
+    report = world.export("run-2")
+
+    assert report.new_count == 1
+    assert report.dead_lettered_count == 0
+    assert _dead_letters(world) == {}
+
+
+def test_a_limited_run_keeps_entries_it_did_not_read(world: World) -> None:
+    for name in ("a", "b"):
+        world.source.put(
+            make_row(name, updated_at=EARLY), text(3), skip_reason="content_too_large"
+        )
+    world.export("run-1")
+    assert set(_dead_letters(world)) == {"a", "b"}
+
+    report = world.export("run-2", limit=1)
+
+    assert report.run_observed_full_corpus is False
+    assert set(_dead_letters(world)) == {"a", "b"}
+    assert report.dead_lettered_count == 2
+
+
+def test_a_failed_run_does_not_touch_the_record(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    before = _dead_letters(world)
+    world.source.put(make_row("d2", updated_at=LATER), text(3))
+    world.source.fail_reads.add("d2")
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    # Untouched, and still reported: an alert on the count must not see it
+    # drop to 0 on a failed tick.
+    assert report.dead_lettered_count == 1
+    assert _dead_letters(world) == before
+
+
+def test_a_busy_run_reports_the_record_as_it_stands(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+
+    with run_lock(world.work_dir) as acquired:
+        assert acquired
+        report = world.export("run-2")
+
+    assert report.outcome == "busy"
+    assert report.dead_lettered_count == 1
+
+
+def test_a_limited_run_resolves_a_never_published_document_now_deleted(
+    world: World,
+) -> None:
+    """A deletion signal on a row never published lands in no diff bucket,
+    but the document is no longer stuck, even on a run that saw a slice."""
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    assert set(_dead_letters(world)) == {"big"}
+
+    world.source.put(make_row("big", updated_at=LATER, is_excluded=True), text(3))
+    for name in ("x1", "x2"):
+        world.source.put(make_row(name, updated_at=LATER), text(3))
+    report = world.export("run-2", limit=1)
+
+    assert report.run_observed_full_corpus is False
+    assert _dead_letters(world) == {}
+    assert report.dead_lettered_count == 0
+
+
+def test_the_run_line_carries_the_dead_letter_count(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    with caplog.at_level(logging.INFO):
+        world.export("run-1")
+    line = next(m for m in caplog.messages if m.startswith("content-external run "))
+    assert "dead_lettered=1" in line
+
+
+def test_force_bypasses_gate_1(world: World) -> None:
+    _published(world, ("d1", text(3)))
+    listed = world.source.listed
+
+    report = world.export("run-2", force=True)
+
+    assert report.outcome == "success"
+    assert report.unchanged_count == 1
+    assert world.source.listed == listed + 1
+
+
+def test_a_moved_watermark_passes_gate_1(world: World) -> None:
+    _published(world, ("d1", text(3)), ("d2", text(3)))
+    _moved(world, "d1", text(4, word="toetus"))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.content_changed_count == 1
+
+
+def test_a_changed_live_count_passes_gate_1(world: World) -> None:
+    """A row added at the existing watermark moves only the count."""
+    _published(world, ("d1", text(3)))
+    world.source.put(make_row("d2", updated_at=EARLY), text(3))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.new_count == 1
+
+
+def test_a_withheld_watermark_passes_gate_1(world: World) -> None:
+    """A limited bootstrap commits a null watermark, so the next run walks
+    the rows and publishes what the cap held back."""
+    for n in (1, 2, 3):
+        world.source.put(make_row(f"d{n}", updated_at=EARLY), text(3))
+    assert world.export("run-1", limit=1).outcome == "success"
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark is None
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.new_count == 2
+
+
+def test_an_unclosed_journal_keeps_gate_1_from_skipping(world: World) -> None:
+    """Only a walking run reconciles it; skipping would keep its entries
+    distrusted for as long as CKB stays quiet."""
+    before = _published(world, ("d1", text(30)), ("d2", text(3)))
+    DeletionJournal(
+        world.work_dir, run_id="run-orphan", agency_id=AGENCY
+    ).intend_document_deletes({"d1": "absent_from_rows"})
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert world.verbs == [("upsert", "d1", before.documents["d1"].chunk_count)]
+    world.verbs.clear()
+    assert world.export("run-3").outcome == "unchanged"
+    assert world.verbs == []
+
+
+def test_a_closed_journal_awaiting_its_mirror_keeps_gate_1_from_skipping(
+    world: World,
+) -> None:
+    """The mirror is retried after a commit, so a skipping run would never
+    retry it."""
+    _published(world, ("d1", text(3)))
+    journal = DeletionJournal(world.work_dir, run_id="run-unmirrored", agency_id=AGENCY)
+    journal.intend_document_deletes({"d9": "absent_from_rows"})
+    journal.close(closed_by="run-0")
+    assert journal.needs_mirror()
+
+    assert world.export("run-2").outcome == "success"
+    assert not journal.needs_mirror()
+    assert world.export("run-3").outcome == "unchanged"
 
 
 # --- per-bucket dispatch (F5) ----------------------------------------------
@@ -598,6 +903,62 @@ def test_a_mid_run_exception_commits_nothing(world: World) -> None:
     assert world.run_state.read().outcome == "failed"  # type: ignore[union-attr]
 
 
+class _BrokenReadSource(FakeDocumentSource):
+    """A source whose reads break schemas.ReadDocument's contract, which the
+    coordinator checks because the type does not."""
+
+    def __init__(self, breakage: Callable[[ReadDocument], ReadDocument]) -> None:
+        super().__init__()
+        self._breakage = breakage
+
+    def read(self, ref: DocumentRef) -> ReadDocument:
+        return self._breakage(super().read(ref))
+
+
+@pytest.mark.parametrize(
+    "breakage",
+    [
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, skip_reason="too_large")),
+            id="skipped-with-text",
+        ),
+        pytest.param(lambda r: replace(r, text=None), id="unskipped-without-text"),
+        pytest.param(
+            lambda r: replace(r, sidecar=None), id="unskipped-without-sidecar"
+        ),
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, content_sha256=None)),
+            id="unhashed",
+        ),
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, metadata_sha256="0" * 64)),
+            id="metadata-hash-not-the-sidecars",
+        ),
+        pytest.param(
+            lambda r: replace(r, text=unicodedata.normalize("NFD", r.text)),
+            id="not-nfc",
+        ),
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, url="https://elsewhere.ee/x")),
+            id="row-fields-changed",
+        ),
+    ],
+)
+def test_a_read_that_breaks_the_contract_fails_the_run(
+    tmp_path: Path, breakage: Callable[[ReadDocument], ReadDocument]
+) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink())
+    world.source = _BrokenReadSource(breakage)
+    world.source.put(make_row("d1"), "Õun ja äädikas. " * 10)
+
+    report = world.export()
+
+    assert report.outcome == "failed"
+    assert report.error_type == "ValueError"
+    assert world.verbs == []
+    assert world.manifest() is None
+
+
 def test_a_failed_commit_leaves_the_journal_on_disk(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -700,10 +1061,13 @@ def test_a_document_deleted_by_an_uncommitted_run_is_republished_when_restored(
     assert manifest.documents["d1"].chunker_fingerprint == FP
     assert manifest.documents["d2"] == before.documents["d2"]
 
-    # Reconciled and closed: the next run trusts the manifest again.
+    # Reconciled and closed: the next run trusts the manifest again, and the
+    # closed journal no longer keeps Gate 1 from skipping.
     world.verbs.clear()
-    assert world.export("run-4").unchanged_count == 2
+    world.source.reads.clear()
+    assert world.export("run-4").outcome == "unchanged"
     assert world.verbs == []
+    assert world.source.reads == []
 
 
 def test_a_document_still_deleted_after_an_uncommitted_run_is_deleted_again(
@@ -1491,7 +1855,8 @@ def test_a_stale_marker_never_outlives_the_manifest(
     assert _marker_path(world).exists()
 
     failing["on"] = False
-    assert world.export("run-2").outcome == "success"
+    # Nothing moved, so Gate 1 skips — but only after the marker is cleared.
+    assert world.export("run-2").outcome == "unchanged"
     assert not _marker_path(world).exists()
 
     _manifest_lost(world)

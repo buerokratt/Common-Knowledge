@@ -3,6 +3,13 @@
 Credentials are explicit, so boto3 cannot fall back to its default chain.
 Client creation is lazy and locked: enumeration needs no credentials, and
 concurrent reads share a client without sharing a mutable Session.
+
+F8's backoff for these reads is botocore's standard retry mode, as for the
+destination store (stores/s3_store.py): throttles, 5xx and connection errors
+are retried with jittered backoff inside the call. Nothing retries above it —
+the coordinator never does — so a read that still fails raises StoreError and
+fails the run, and the next tick is the retry. services/backoff.py is not
+stacked on top, which would multiply the attempts.
 """
 
 from contextlib import closing
@@ -18,6 +25,9 @@ from exporter.stores.base import StoreError
 
 if TYPE_CHECKING:
     from exporter.api.config import Settings
+
+# The same as stores/s3_store.py. Counts the first attempt.
+_MAX_ATTEMPTS = 3
 
 
 class ObjectTooLargeError(Exception):
@@ -86,8 +96,13 @@ class CkbBucket:
                         s3={"addressing_style": "path"},
                         connect_timeout=settings.ckb_s3_connect_timeout,
                         read_timeout=settings.ckb_s3_read_timeout,
-                        # The coordinator decides whether to retry a failed read.
-                        retries={"total_max_attempts": 1},
+                        # F8; see the module docstring.
+                        # total_max_attempts, not max_attempts: botocore reads
+                        # the latter as retries and adds one (args.py).
+                        retries={
+                            "mode": "standard",
+                            "total_max_attempts": _MAX_ATTEMPTS,
+                        },
                     ),
                 )
             except (BotoCoreError, ClientError, ValueError) as exc:

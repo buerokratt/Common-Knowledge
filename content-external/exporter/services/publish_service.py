@@ -15,6 +15,7 @@ WHAT THIS MODULE DOES ORDER, across documents and across the run:
 
     take the run lock (F2)  — held: record `busy`, touch nothing else
     read the corpus watermark, then load the previous manifest (F6, F17)
+    Gate 1 (E4): nothing moved and no journal pending -> `unchanged`, done
     distrust every entry an uncommitted run's journal touched (F7)
     enumerate the rows
     on a first run only, refuse a destination that already holds content
@@ -36,6 +37,7 @@ WHAT THIS MODULE DOES ORDER, across documents and across the run:
     journal, then delete_documents(every deleted id) (F4, F7)
     build the next manifest with diff.record(), then COMMIT it (F6)
     close the journals it reconciled, and mirror the unmirrored ones (F7)
+    update the dead-letter record (E9)
 
 THE COMMIT IS THE ONLY POINT OF NO RETURN, and any exception before it fails
 the run with nothing committed; the next tick is the retry. An upsert before it
@@ -121,8 +123,17 @@ back (`documents_held_back`: not published, tail unconfirmed, skipped by a
 guard) keeps its old state and its old synced_at, and a sweep would take it
 for stale. The guard refuses those runs too.
 
-NOT YET HERE, deliberately: Gate 1 (E4 — `force` is accepted and echoed, and
-is what Gate 1 will consult) and the sweeps (Stage J, L10), which must call
+GATE 1 (E4) ends a run as `unchanged` before the enumeration when
+core/gate.can_skip_run() matches the committed manifest and `force` is
+absent, so a quiet tick costs one watermark query and one manifest read. Two
+things it cannot see keep it from skipping. A journal no committed run has
+closed: only a run that walks the rows reconciles it, and skipping would
+leave its entries distrusted for as long as CKB stays quiet. And a closed
+journal still waiting for its mirror, retried only after a commit. An
+`unchanged` run classified nothing, so it reports
+run_observed_full_corpus=False and drives no sweep.
+
+NOT YET HERE, deliberately: the sweeps (Stage J, L10), which must call
 corpus_guard.require_observed_full_corpus first. Backoff (F8) is the
 transport's, never this module's: a document the destination did not confirm
 is retried next tick.
@@ -136,6 +147,7 @@ could hold a document.
 import logging
 import threading
 import time
+import unicodedata
 from collections import Counter, deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -154,24 +166,24 @@ from exporter.core.diff import (
     record,
     tail_coordinates,
 )
+from exporter.core.gate import can_skip_run
 from exporter.core.metadata import build_document_record
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.core.schemas import (
+    AgencyWatermark,
     Chunk,
     DocumentRecord,
     DocumentRef,
     Manifest,
     ManifestDocumentEntry,
     ParsedSidecar,
+    ReadDocument,
     RunReport,
 )
 from exporter.services.bootstrap_marker import BootstrapMarker
+from exporter.services.dead_letter import DeadLetterStore
 from exporter.services.deletion_journal import DeletionJournal, agency_journals
-from exporter.services.document_source import (
-    CorpusWatermark,
-    DocumentSource,
-    ReadDocument,
-)
+from exporter.services.document_source import DocumentSource
 from exporter.services.locking import run_lock
 from exporter.services.manifest_service import ManifestService
 from exporter.services.run_log import log_run_outcome
@@ -310,6 +322,9 @@ class _Progress:
     # so it withholds the watermark: a raised limit must not meet a Gate 1
     # that skips the unchanged corpus.
     read_skipped: set[str] = field(default_factory=set)
+    # Rows with a deletion signal that were never published: classify_document
+    # puts them in no bucket, but for E9's record they are resolved.
+    ended_unpublished: set[str] = field(default_factory=set)
     # Held because their published chunks could not be vouched for; marked
     # UNCONFIRMED_FINGERPRINT in the next manifest.
     unconfirmed: set[str] = field(default_factory=set)
@@ -432,9 +447,9 @@ class PublishCoordinator:
         rather than a raise, and the next tick is the retry. Only a
         BaseException (SystemExit, KeyboardInterrupt) escapes.
 
-        `force` bypasses Gate 1 once E4 builds it; until then it is echoed in
-        the report and changes nothing. `limit` caps the documents read this
-        run (F10). `accept_existing_content` lets a first run publish into a
+        `force` bypasses Gate 1 (E4), so the run walks every row even when
+        nothing moved; it is echoed in the report. `limit` caps the
+        documents read this run (F10). `accept_existing_content` lets a first run publish into a
         destination that already holds this agency's content (F21) — an
         operator's deliberate act, which only the CLI offers."""
         if limit is not None and (
@@ -455,6 +470,7 @@ class PublishCoordinator:
                     report = self._attempt(
                         run_id,
                         started_at,
+                        force=force,
                         limit=limit,
                         accept_existing_content=accept_existing_content,
                     )
@@ -490,6 +506,7 @@ class PublishCoordinator:
         run_id: str,
         started_at: str,
         *,
+        force: bool,
         limit: int | None,
         accept_existing_content: bool,
     ) -> RunReport:
@@ -502,6 +519,7 @@ class PublishCoordinator:
                 run_id,
                 started_at,
                 progress,
+                force=force,
                 limit=limit,
                 accept_existing_content=accept_existing_content,
             )
@@ -532,6 +550,11 @@ class PublishCoordinator:
         report = replace(
             report, duration_seconds=time.perf_counter() - started, **asked
         )
+        if report.outcome in ("failed", "busy"):
+            # Neither updates the record, but it still stands: report its
+            # size, so an alert on `dead_lettered=` does not see it drop to 0
+            # on every failed or busy tick.
+            report = replace(report, dead_lettered_count=self._dead_letter_size())
         try:
             self._observe(report)
         except Exception as exc:
@@ -552,6 +575,7 @@ class PublishCoordinator:
         started_at: str,
         progress: _Progress,
         *,
+        force: bool,
         limit: int | None,
         accept_existing_content: bool,
     ) -> RunReport:
@@ -585,6 +609,23 @@ class PublishCoordinator:
             marker.clear()
         on_disk = agency_journals(self._work_dir, agency_id)
         unreconciled = [j for j in on_disk if not j.is_closed()]
+        if (
+            not unreconciled
+            and not any(j.needs_mirror() for j in on_disk)
+            and can_skip_run(previous, watermark, self._fingerprint, force=force)
+        ):
+            # Gate 1 (E4): nothing read, nothing written; see the module
+            # docstring for why a pending journal keeps the run walking.
+            logger.info(
+                "run %s: agency %s unchanged since the committed manifest",
+                run_id,
+                agency_id,
+            )
+            return replace(
+                self._report(run_id, "unchanged", started_at),
+                dead_lettered_count=self._dead_letter_size(),
+                **_outcome_fields(progress),
+            )
         entries = _distrust(
             {} if previous is None else previous.documents, unreconciled
         )
@@ -640,9 +681,11 @@ class PublishCoordinator:
         )
         self._commit(manifest, marker)  # F6: the commit point.
         self._reconcile_journals(run_id, [*unreconciled, journal], [*on_disk, journal])
+        dead_lettered = self._record_dead_letters(run_id, diff, progress)
 
         return replace(
             self._report(run_id, "success", started_at),
+            dead_lettered_count=dead_lettered,
             new_count=len(diff.new),
             content_changed_count=len(diff.content_changed),
             metadata_changed_count=len(diff.metadata_changed),
@@ -667,7 +710,7 @@ class PublishCoordinator:
         entries: Mapping[str, ManifestDocumentEntry],
         *,
         previous: Manifest | None,
-        watermark: CorpusWatermark,
+        watermark: AgencyWatermark,
         progress: _Progress,
         journal: DeletionJournal,
         marker: BootstrapMarker,
@@ -1009,6 +1052,9 @@ class PublishCoordinator:
         document_id = work.document_id
         if work.read_skipped:
             progress.read_skipped.add(document_id)
+        if work.change is None:
+            # classify_document's only None: a deletion signal, never published.
+            progress.ended_unpublished.add(document_id)
         progress.source_url_fallback += int(work.source_url_fallback)
         progress.source_url_mismatch += int(work.source_url_mismatch)
         progress.metadata_full_repush += int(work.metadata_full_repush)
@@ -1110,7 +1156,7 @@ class PublishCoordinator:
         self,
         previous: Manifest | None,
         progress: _Progress,
-        watermark: CorpusWatermark,
+        watermark: AgencyWatermark,
         *,
         advance_watermark: bool,
     ) -> tuple[DiffResult, Manifest]:
@@ -1166,7 +1212,7 @@ class PublishCoordinator:
         self,
         previous: Manifest | None,
         progress: _Progress,
-        watermark: CorpusWatermark,
+        watermark: AgencyWatermark,
         marker: BootstrapMarker,
     ) -> None:
         """F15: commit the manifest so far, on a first run only, once
@@ -1246,6 +1292,59 @@ class PublishCoordinator:
             if journal.needs_mirror():
                 self._mirror_journal(run_id, journal)
 
+    def _dead_letter_size(self) -> int:
+        """The dead-letter record's current size, for a run that does not
+        update it. Observability only, so never raises."""
+        try:
+            return len(DeadLetterStore(self._work_dir, agency_id=self.agency_id).load())
+        except Exception as exc:
+            logger.warning(
+                "the dead-letter record could not be read: %s", type(exc).__name__
+            )
+            return 0
+
+    def _record_dead_letters(
+        self, run_id: str, diff: DiffResult, progress: _Progress
+    ) -> int:
+        """E9: update the dead-letter record after the commit, and return its
+        size. Documents skipped by a read-time guard or MAX_CHUNKS_PER_DOCUMENT
+        are dead-lettered; see services/dead_letter.py. After the commit, so
+        nothing here may fail the run."""
+        reasons = diff.skipped_reasons()
+        dead = {
+            document_id: reasons[document_id]
+            for document_id in progress.read_skipped | progress.demoted.keys()
+            if document_id in reasons
+        }
+        resolved = progress.ended_unpublished | {
+            change.document_id
+            for bucket in (
+                diff.new,
+                diff.content_changed,
+                diff.metadata_changed,
+                diff.unchanged,
+                diff.deleted,
+            )
+            for change in bucket
+        }
+        try:
+            store = DeadLetterStore(self._work_dir, agency_id=self.agency_id)
+            record = store.update(
+                dead,
+                resolved=resolved,
+                complete=progress.observed_full_corpus,
+                run_id=run_id,
+                at=self._clock(),
+            )
+        except Exception as exc:
+            logger.warning(
+                "run %s: the dead-letter record was not updated: %s",
+                run_id,
+                type(exc).__name__,
+            )
+            return len(dead)
+        return len(record)
+
     def _mirror_journal(self, run_id: str, journal: DeletionJournal) -> None:
         payload = journal.payload()
         if payload is None:
@@ -1310,6 +1409,7 @@ class PublishCoordinator:
             error_type=report.error_type,
             upsert_outcomes=report.upsert_outcomes,
             full_corpus=report.run_observed_full_corpus,
+            dead_lettered=report.dead_lettered_count,
         )
         if self._run_state is not None:
             self._run_state.record(
@@ -1376,9 +1476,37 @@ def _unique(journals: Sequence[DeletionJournal]) -> list[DeletionJournal]:
 
 
 def _check_read(row: DocumentRef, read: ReadDocument) -> None:
-    """The source may add hashes or a skip reason to a row, and nothing else:
+    """The read contract schemas.ReadDocument states, which the coordinator
+    checks because the type does not.
+
+    The source may add hashes or a skip reason to a row, and nothing else:
     a read that came back as another document, or with the row's own fields
-    changed, would publish something the enumeration never described."""
+    changed, would publish something the enumeration never described. A
+    skipped read carries no text and no sidecar; any other read carries
+    NFC text, its sidecar and all three hashes, the metadata hash being the
+    sidecar's own. Messages name the document and never its text (F13)."""
+    document_id = row.document_id
+    ref = read.ref
+    if ref.skip_reason is not None:
+        if read.text is not None or read.sidecar is not None:
+            raise ValueError(
+                f"document {document_id}: a skipped read carries no text and no sidecar"
+            )
+    else:
+        if read.text is None or read.sidecar is None:
+            raise ValueError(
+                f"document {document_id}: a read that was not skipped needs "
+                "its text and its sidecar"
+            )
+        if None in (ref.raw_sha256, ref.content_sha256, ref.metadata_sha256):
+            raise ValueError(f"document {document_id}: a read document is hashed")
+        if ref.metadata_sha256 != read.sidecar.metadata_sha256:
+            raise ValueError(
+                f"document {document_id}: metadata_sha256 does not match the "
+                "sidecar it was read with"
+            )
+        if not unicodedata.is_normalized("NFC", read.text):
+            raise ValueError(f"document {document_id}: read text is not NFC")
     unread = replace(
         read.ref,
         raw_sha256=None,

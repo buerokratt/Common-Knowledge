@@ -337,6 +337,12 @@ class RunReport:
     # synced_at. Seeing the whole corpus is not enough for a sweep: these
     # would look stale to it, so any sweep also requires this to be 0.
     documents_held_back: int = 0
+    # E9. Documents in the dead-letter record after this run: stuck on a
+    # fault of their own (a read-time guard or MAX_CHUNKS_PER_DOCUMENT).
+    # Which ones, why and since when is in the record itself
+    # (services/dead_letter.py). Busy, failed and unchanged runs do not update
+    # it and report its size as it stands.
+    dead_lettered_count: int = 0
     # F21, on a first run only: how the "is the destination already
     # populated?" check came out — "empty", "resumed" (our own bootstrap that
     # never committed), "overridden" (--accept-existing-content) or

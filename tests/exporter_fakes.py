@@ -29,7 +29,7 @@ import json
 import os
 import re
 import threading
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -44,13 +44,15 @@ from exporter.core.ids import (
     document_metadata_key,
 )
 from exporter.core.metadata import SidecarRejection, parse_sidecar
-from exporter.core.schemas import Chunk, DocumentRecord, DocumentRef
-from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
-from exporter.services.document_source import (
-    CorpusWatermark,
-    DocumentSource,
+from exporter.core.schemas import (
+    AgencyWatermark,
+    Chunk,
+    DocumentRecord,
+    DocumentRef,
     ReadDocument,
 )
+from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
+from exporter.services.document_source import DocumentSource
 from exporter.services.manifest_service import ManifestService
 from exporter.services.manifest_store import ManifestStore
 from exporter.services.publish_service import PublishCoordinator
@@ -511,14 +513,14 @@ class FakeDocumentSource(DocumentSource):
     def remove(self, document_id: str) -> None:
         del self.documents[document_id]
 
-    def watermark(self, agency_id: str) -> CorpusWatermark:
+    def watermark(self, agency_id: str) -> AgencyWatermark:
         rows = [d.row for d in self.documents.values() if d.row.agency_id == agency_id]
-        return CorpusWatermark(
+        return AgencyWatermark(
             max_updated_at=max((r.updated_at for r in rows), default=None),
-            document_count=sum(1 for r in rows if not r.is_deleted),
+            live_count=sum(1 for r in rows if not r.is_deleted),
         )
 
-    def list_documents(self, agency_id: str) -> Sequence[DocumentRef]:
+    def list_documents(self, agency_id: str) -> list[DocumentRef]:
         self.listed += 1
         return [d.row for d in self.documents.values() if d.row.agency_id == agency_id]
 

@@ -37,8 +37,12 @@ from exporter.core.constants import (
     MANIFEST_SCHEMA_VERSION,
 )
 from exporter.core.diff import DiffResult
-from exporter.core.schemas import Manifest, ManifestDocumentEntry, StoreObject
-from exporter.services.document_source import CorpusWatermark
+from exporter.core.schemas import (
+    AgencyWatermark,
+    Manifest,
+    ManifestDocumentEntry,
+    StoreObject,
+)
 from exporter.services.manifest_store import ManifestStore
 from exporter.stores.base import StoreError
 
@@ -124,7 +128,7 @@ class ManifestService:
         agency_id: str,
         diff: DiffResult,
         documents: Mapping[str, ManifestDocumentEntry],
-        watermark: CorpusWatermark,
+        watermark: AgencyWatermark,
         previous: Manifest | None,
         advance_watermark: bool,
         committed_at: str,
@@ -169,7 +173,7 @@ class ManifestService:
             agency_id=agency_id,
             sink_id=self._sink_id,
             corpus_watermark=watermark.max_updated_at if advance_watermark else None,
-            document_count=watermark.document_count,
+            document_count=watermark.live_count,
             chunker_fingerprint=diff.chunker_fingerprint,
             committed_at=committed_at,
             documents=dict(documents),

@@ -54,12 +54,12 @@ it — see the note in the table below.
 
 | Variable | Required | Description |
 |---|---|---|
-| `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds only the run lock and the deletion journal. Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
+| `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds the run lock, the deletion journal, the last-run record and the dead-letter record (`_dead_letter/`). Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
 | `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | no | Vault Agent sidecar, credentials fetched per task. `VAULT_SECRET_PATH` has no default — the Stage-H Azure value is `blob/connections/azure_blob/content` |
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
 | `EXPORT_PAGE_SIZE` | no (default `1000`, minimum `1`) | Documents per Resql keyset page. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
-| `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit) |
-| `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each read from CKB's own bucket. A read is tried once; a timeout fails it, and the coordinator decides whether to retry |
+| `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit). For the same reason a read timeout is never retried, while connection errors, 429 and 5xx are (F8) |
+| `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each attempt to read from CKB's own bucket. Throttles, 5xx, connection errors and timeouts are retried by botocore's standard mode, up to 3 attempts in all (F8); a read that still fails fails the run, and the next tick is the retry |
 | `CHUNK_PROFILE` | required for `llm_module`; optional for `object_store` (default `azure_native`) | Chunk geometry preset: `azure_native` (target 1200 / overlap 200 / min 200 / max 2000 chars) or `compact` (450 / 80 / 120 / 700). Overlap is capped at min − 1 so no chunk can fall wholly inside the one before it, which makes `azure_native`'s effective overlap 199. Pinned per deployment alongside the sink, because whoever embeds the chunks decides what fits: on `llm_module` a chunk over the embedder's token budget is silently truncated. An unknown name is refused at startup. Changing it re-chunks the whole corpus on the next run via the chunker fingerprint — and on `llm_module` re-embeds it, so do it as an announced, operator-driven run. A new preset is a reviewed row in `exporter/core/constants.py`, never four separate settings |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
 | `EXTERNAL_S3_ENDPOINT_URL` / `EXTERNAL_S3_BUCKET_NAME` | for a run on `object_store` + `s3` | The destination: any S3-compatible endpoint (SeaweedFS, MinIO, AWS), chosen by URL alone. Path-style addressing. Not checked at startup, so `/health` comes up before a destination exists. A run refuses and names every missing variable |
@@ -262,10 +262,10 @@ colliding with an export) becomes indistinguishable from normal operation.
 
 ## Running an export
 
-> **Until Stage E lands, every run fails** with a `ConfigurationError` naming
-> it: the Resql enumeration and the S3 reads of CKB's bucket are not built yet,
-> so there is nothing to export from. Both entry points below are wired and
-> tested against in-memory fakes.
+> Both entry points below read CKB through Stage E's document source: the
+> Resql enumeration and read-only S3 reads of CKB's bucket. A run therefore
+> needs `CKB_RESQL` reachable and the `AWS_*` / `S3_*` read keys set, as well
+> as a configured destination.
 
 **The production surface is the HTTP endpoint**, which CronManager calls
 through Ruuter (Stage G):
@@ -317,9 +317,26 @@ configuration error. CLI runs take the same lock and show up in `/health`.
   held-back document is one that was not published, had a tail delete left
   unconfirmed, or was skipped by a size guard. It keeps its old state and old
   `synced_at`, so a sweep would delete it as stale.
-- **`--force`** bypasses Gate 1. Gate 1 is Stage E's (E4), so until then
-  this flag is accepted, echoed in the report, and changes nothing. A
-  chunker-geometry change never needs it.
+- **Gate 1 makes a quiet tick cheap.** When the agency's watermark, live
+  document count and chunker fingerprint all match the committed manifest,
+  the run ends `unchanged` after one watermark query and one manifest read:
+  no enumeration, no S3 reads, no commit. It still walks the rows when a
+  deletion journal is unclosed or awaiting its mirror, since only a walking
+  run settles those. An `unchanged` run reports
+  `run_observed_full_corpus: false` and never drives a sweep.
+- **`--force`** bypasses Gate 1 and walks every row. A chunker-geometry
+  change never needs it.
+- **Stuck documents are dead-lettered.** A document skipped for a fault of its
+  own — over `MAX_DOCUMENT_BYTES` or `MAX_CHUNKS_PER_DOCUMENT`, undecodable, a
+  sidecar that is missing, too large or does not parse, an uncitable
+  `source_url` — never fails the run. It is listed in
+  `$CONTENT_WORK_DIR/_dead_letter/<agency_id>.json` with its reason, when it
+  was first and last seen, and how many runs in a row found it. The report's
+  `dead_lettered_count` and the run line's `dead_lettered=` give the size. It
+  leaves the record when a run publishes, deletes or finds it unchanged.
+  Rows that are only not ready yet, uploaded files and `--limit` skips are
+  not faults and are never listed. See
+  [RUNBOOK.md](RUNBOOK.md#dead-lettered-documents).
 - **A first run checkpoints.** With no previous manifest, the manifest is
   committed every `BOOTSTRAP_CHECKPOINT_EVERY` published documents (default
   250), with the watermark withheld. A killed bootstrap then resumes where it

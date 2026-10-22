@@ -18,16 +18,20 @@ fails the call now; the next tick is the retry.
 
 WHERE IT IS APPLIED, AND WHERE IT IS DELIBERATELY NOT.
 
-- Every `requests` call: the run-start agency check today, Stage E's Resql
-  queries and Stage L's llm-module push when they land. A timeout is retried,
-  and a timed-out request may have been applied, so this is for idempotent
-  calls: GETs, and an upsert keyed by coordinate chunk ids, whose replay
-  overwrites rather than adds. A caller with a non-idempotent request passes
-  its own `is_retryable`.
-- NOT the S3 store. botocore's `retries={"mode": "standard"}` already backs
-  off with jitter on throttles, 5xx and connection errors
-  (exporter/stores/s3_store.py), and stacking this on top would multiply the
-  attempts into a retry storm against the store it is meant to spare.
+- Every `requests` call: the run-start agency check, Stage E's Resql queries
+  (services/document_source.py), and Stage L's llm-module push when it
+  lands. A timeout is retried, and a timed-out request may have been applied,
+  so this is for idempotent calls: GETs, and an upsert keyed by coordinate
+  chunk ids, whose replay overwrites rather than adds. A caller with a
+  non-idempotent request, or one whose timed-out request keeps running on the
+  far side, passes its own `is_retryable`: the Resql queries do, because
+  Resql does not cancel a query whose client gave up.
+- NOT either S3 client. botocore's `retries={"mode": "standard"}` already
+  backs off with jitter on throttles, 5xx and connection errors
+  (exporter/stores/s3_store.py for the destination,
+  exporter/services/ckb_bucket.py for CKB's bucket), and stacking this on top
+  would multiply the attempts into a retry storm against the store it is
+  meant to spare.
 - NOT the coordinator. A document the destination did not confirm is
   `failed_retryable`: it keeps its previous manifest entry, the watermark is
   withheld, and the next tick retries it. Retrying it again inside the run

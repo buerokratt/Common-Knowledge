@@ -12,6 +12,7 @@ import pytest
 
 from exporter.api.config import ConfigurationError, Settings
 from exporter.core.schemas import RunReport
+from exporter.services.document_source import CkbDocumentSource
 from exporter.services.run_log import RUN_LOG_PREFIX
 from exporter.services.run_state import RunStateStore
 from exporter.worker import tasks, wiring
@@ -129,13 +130,21 @@ def test_send_error_never_raises(
 # --- export_agency_task -------------------------------------------------------
 
 
-def test_until_stage_e_the_task_fails_naming_it(
+def test_the_real_wiring_builds_stage_e_document_source(work_dir: Path) -> None:
+    """Building it reaches neither Resql nor S3: the client is lazy."""
+    source = wiring.build_document_source(_settings(work_dir))
+    assert isinstance(source, CkbDocumentSource)
+
+
+def test_the_real_wiring_gets_past_the_source_to_the_destination(
     work_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Unpatched apart from A17: the source builds, so the first refusal is
+    the unconfigured destination's, as a failed run."""
     monkeypatch.setattr(tasks, "require_single_agency", lambda _s: 1)
     task = ExportTask(agency_id=AGENCY, run_id="r-1")
 
-    with pytest.raises(ConfigurationError, match="Stage E"):
+    with pytest.raises(ConfigurationError, match="EXTERNAL_S3_ENDPOINT_URL"):
         export_agency_task(task, _settings(work_dir), work_dir)
 
     last = RunStateStore(work_dir).read()

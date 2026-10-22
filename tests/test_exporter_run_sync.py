@@ -162,16 +162,17 @@ def test_a_configuration_error_exits_2(
     assert main(["--agency-id", AGENCY]) == EXIT_USAGE
 
 
-def test_until_stage_e_a_run_exits_2_naming_it(
+def test_an_unconfigured_destination_exits_2_naming_it(
     work_dir: Path,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """The real wiring, unpatched apart from A17's network call."""
+    """The real wiring, unpatched apart from A17's network call: Stage E's
+    source builds, and the destination's missing keys are the refusal."""
     monkeypatch.setattr("exporter.worker.tasks.require_single_agency", lambda _s: 1)
 
     assert main(["--agency-id", AGENCY]) == EXIT_USAGE
-    assert "Stage E" in caplog.text
+    assert "EXTERNAL_S3_ENDPOINT_URL" in caplog.text
     last = RunStateStore(work_dir.resolve()).read()
     assert last is not None
     assert last.error_type == "ConfigurationError"

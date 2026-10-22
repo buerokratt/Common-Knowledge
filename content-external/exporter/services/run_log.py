@@ -68,6 +68,7 @@ _RESERVED = frozenset(
         "deletions_recorded",
         "error_type",
         "full_corpus",
+        "dead_lettered",
         *(f"{_UPSERT_PREFIX}{outcome}" for outcome in UPSERT_OUTCOMES),
     }
 )
@@ -98,6 +99,7 @@ def format_run_line(
     error_type: str | None = None,
     upsert_outcomes: Mapping[str, int] | None = None,
     full_corpus: bool = False,
+    dead_lettered: int = 0,
 ) -> str:
     """Render the terminal line. Pure — no logging, so it is testable.
 
@@ -126,6 +128,9 @@ def format_run_line(
         "deletions_recorded": str(int(deletions_recorded)),
         "error_type": scrub_value(error_type) if error_type else "-",
         "full_corpus": "true" if full_corpus else "false",
+        # E9: documents in the dead-letter record. Nonzero is worth an alert
+        # that is not a page: the export works, these documents do not.
+        "dead_lettered": str(int(dead_lettered)),
     }
     for bucket in DIFF_BUCKETS:
         fields[f"{_COUNT_PREFIX}{bucket}"] = str(int(counts.get(bucket, 0)))
@@ -149,6 +154,7 @@ def log_run_outcome(
     error_type: str | None = None,
     upsert_outcomes: Mapping[str, int] | None = None,
     full_corpus: bool = False,
+    dead_lettered: int = 0,
 ) -> str:
     """Emit the terminal line once, and return it.
 
@@ -167,6 +173,7 @@ def log_run_outcome(
         error_type=error_type,
         upsert_outcomes=upsert_outcomes,
         full_corpus=full_corpus,
+        dead_lettered=dead_lettered,
     )
     logger.error(line) if outcome == "failed" else logger.info(line)
     return line

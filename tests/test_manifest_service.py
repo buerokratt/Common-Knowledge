@@ -7,8 +7,7 @@ import pytest
 from exporter.core.constants import CHUNK_PROFILES
 from exporter.core.diff import DiffResult
 from exporter.core.ids import chunker_fingerprint
-from exporter.core.schemas import Manifest, ManifestDocumentEntry
-from exporter.services.document_source import CorpusWatermark
+from exporter.core.schemas import AgencyWatermark, Manifest, ManifestDocumentEntry
 from exporter.services.manifest_service import (
     ManifestMissing,
     ManifestService,
@@ -21,7 +20,7 @@ from exporter_fakes import InMemoryStore
 AGENCY = "agency-1"
 SINK = "object_store"
 FP = chunker_fingerprint(CHUNK_PROFILES["azure_native"])
-WATERMARK = CorpusWatermark(max_updated_at="2026-10-19T09:00:00Z", document_count=3)
+WATERMARK = AgencyWatermark(max_updated_at="2026-10-19T09:00:00Z", live_count=3)
 
 
 def _service(
@@ -142,7 +141,7 @@ def test_build_stamps_the_sink_versions_fingerprint_and_count() -> None:
     assert manifest.sink_id == SINK
     assert manifest.agency_id == AGENCY
     assert manifest.chunker_fingerprint == FP
-    assert manifest.document_count == WATERMARK.document_count
+    assert manifest.document_count == WATERMARK.live_count
     assert manifest.corpus_watermark == WATERMARK.max_updated_at
     assert dict(manifest.documents) == {"d1": _entry()}
 

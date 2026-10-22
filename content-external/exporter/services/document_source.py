@@ -4,6 +4,28 @@ Like agency_guard, this bypasses Ruuter only for query-named reads. Every row
 must reach the diff: omitting an unfinished or malformed row would turn it
 into a downstream deletion. Malformed responses therefore fail the whole run.
 URLs and timestamps stay verbatim so enumeration cannot change their meaning.
+
+A deleted source deletes its files. CKB marks only the source row
+(source/delete_source.sql) and never its files, so a file whose source's
+latest version is deleted is enumerated as deleted.
+
+Uploaded files are skipped at enumeration, never read. Their sidecar and row
+URL are presigned links, so they would only ever be skipped as uncitable
+(core/metadata.py). Skipping them unread costs no S3 read on any run, and
+because the verdict comes from the row rather than from configuration, it
+does not withhold the corpus watermark the way a read-time skip does.
+
+A read fetches the sidecar before the content, so a rejected sidecar costs one
+small GET instead of a full content download on every run.
+
+Each Resql call is retried under F8's rule (services/backoff.py): connection
+errors, 408/429 and 5xx, with full jitter and Retry-After honoured. A read
+timeout is the one carve-out. Resql does not cancel a query its client gave up
+on, so a retry would run alongside the abandoned one and stack load
+(RUNBOOK.md, "Do not retry immediately after a timeout"). That holds whether
+the timeout hits before the response or while its body streams in, which
+requests reports as a ConnectionError. A connect timeout never reached Resql
+and is retried.
 """
 
 import logging
@@ -12,10 +34,17 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import requests
+from urllib3.exceptions import ReadTimeoutError
 
 from exporter.core.metadata import MAX_SIDECAR_BYTES, SidecarRejection, parse_sidecar
 from exporter.core.schemas import AgencyWatermark, DocumentRef, ReadDocument
 from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
+from exporter.services.backoff import (
+    DEFAULT_POLICY,
+    BackoffPolicy,
+    is_retryable_http,
+    retry_with_backoff,
+)
 from exporter.services.ckb_bucket import (
     CkbBucket,
     InvalidObjectKeyError,
@@ -29,6 +58,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 NIL_UUID = "00000000-0000-0000-0000-000000000000"
+
+UPLOADED_FILE_TYPE = "uploaded_file"
+# The skip reason for an uploaded file. Distinct from the read-time
+# uncitable_source_url: this one is decided from the row, with nothing read.
+UPLOADED_FILE_UNCITABLE = "uploaded_file_uncitable"
 
 _DOCUMENT_COLUMNS = {
     "baseId": (str,),
@@ -44,6 +78,8 @@ _DOCUMENT_COLUMNS = {
     "fileSize": (int, type(None)),
     "isExcluded": (bool,),
     "isDeleted": (bool,),
+    "type": (str,),
+    "sourceIsDeleted": (bool,),
     "updatedAt": (str,),
 }
 _WATERMARK_COLUMNS = {
@@ -68,6 +104,22 @@ class DocumentSource(ABC):
     @abstractmethod
     def read(self, ref: DocumentRef) -> ReadDocument:
         raise NotImplementedError
+
+
+def _read_timed_out(exc: BaseException) -> bool:
+    """A read timeout, in either form requests raises it: ReadTimeout while
+    waiting for the response, or ConnectionError wrapping urllib3's
+    ReadTimeoutError once the body has started (requests/models.py)."""
+    if isinstance(exc, requests.ReadTimeout):
+        return True
+    return isinstance(exc, requests.ConnectionError) and any(
+        isinstance(arg, ReadTimeoutError) for arg in exc.args
+    )
+
+
+def is_retryable_resql(exc: BaseException) -> bool:
+    """F8's rule, less a read timeout: see the module docstring."""
+    return not _read_timed_out(exc) and is_retryable_http(exc)
 
 
 def _validate_row(row: object, columns: dict[str, tuple[type, ...]]) -> dict[str, Any]:
@@ -95,19 +147,32 @@ def _skipped(ref: DocumentRef, reason: str) -> ReadDocument:
 
 
 class CkbDocumentSource(DocumentSource):
-    def __init__(self, settings: "Settings") -> None:
+    def __init__(
+        self, settings: "Settings", *, backoff: BackoffPolicy = DEFAULT_POLICY
+    ) -> None:
         self._settings = settings
         self._bucket = CkbBucket(settings)
+        self._backoff = backoff
 
     def _rows(self, query: str, agency_id: str, **params: str | int) -> list[Any]:
         url = f"{self._settings.ckb_resql}/{query}"
-        try:
+
+        def get() -> requests.Response:
             response = requests.get(
                 url,
                 params={"agency_base_id": agency_id, **params},
                 timeout=self._settings.ckb_resql_timeout,
             )
             response.raise_for_status()
+            return response
+
+        try:
+            response = retry_with_backoff(
+                get,
+                describe=f"Resql {query}",
+                policy=self._backoff,
+                is_retryable=is_retryable_resql,
+            )
         except requests.RequestException as exc:
             raise DocumentSourceError("could not read Resql") from exc
         try:
@@ -169,13 +234,18 @@ class CkbDocumentSource(DocumentSource):
                         subsector=row["subsector"],
                         status=row["status"],
                         is_excluded=row["isExcluded"],
-                        is_deleted=row["isDeleted"],
+                        is_deleted=row["isDeleted"] or row["sourceIsDeleted"],
                         updated_at=row["updatedAt"],
                         content_key=row["editedDataUrl"] or row["cleanedDataUrl"],
                         metadata_key=row["editedMetadataUrl"]
                         or row["cleanedMetadataUrl"],
                         content_origin=origin,
                         file_size=row["fileSize"],
+                        skip_reason=(
+                            UPLOADED_FILE_UNCITABLE
+                            if row["type"] == UPLOADED_FILE_TYPE
+                            else None
+                        ),
                     )
                 )
             if len(rows) < page_size:
@@ -189,21 +259,8 @@ class CkbDocumentSource(DocumentSource):
         return documents
 
     def read(self, ref: DocumentRef) -> ReadDocument:
-        try:
-            raw = self._bucket.get_bytes(
-                ref.content_key, self._settings.max_document_bytes
-            )
-        except InvalidObjectKeyError:
-            return _skipped(ref, "content_key_invalid")
-        except ObjectTooLargeError:
-            return _skipped(ref, "content_too_large")
-        if raw is None:
-            return _skipped(ref, "content_missing")
-        try:
-            text = normalise_nfc(raw.decode("utf-8"))
-        except UnicodeDecodeError:
-            return _skipped(ref, "content_undecodable")
-
+        # The sidecar first: it is small, and a rejected one makes the
+        # content download pointless.
         try:
             metadata = (
                 None
@@ -221,6 +278,21 @@ class CkbDocumentSource(DocumentSource):
         )
         if isinstance(sidecar, SidecarRejection):
             return _skipped(ref, sidecar.value)
+
+        try:
+            raw = self._bucket.get_bytes(
+                ref.content_key, self._settings.max_document_bytes
+            )
+        except InvalidObjectKeyError:
+            return _skipped(ref, "content_key_invalid")
+        except ObjectTooLargeError:
+            return _skipped(ref, "content_too_large")
+        if raw is None:
+            return _skipped(ref, "content_missing")
+        try:
+            text = normalise_nfc(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return _skipped(ref, "content_undecodable")
         return ReadDocument(
             replace(
                 ref,

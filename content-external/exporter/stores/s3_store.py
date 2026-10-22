@@ -83,7 +83,7 @@ _MAX_KEYS_PER_BATCH_DELETE = 1000
 # stacked on top, which would multiply the attempts into a retry storm.
 _CONNECT_TIMEOUT_SECONDS = 5
 _READ_TIMEOUT_SECONDS = 60
-_MAX_ATTEMPTS = 3
+_MAX_ATTEMPTS = 3  # in all, counting the first
 
 # Error codes meaning "this key definitively does not exist". NoSuchBucket is
 # deliberately absent from both: a missing bucket is a configuration fault,
@@ -218,7 +218,9 @@ class S3Store(ExternalStoreClient):
             config=Config(
                 signature_version="s3v4",
                 s3={"addressing_style": "path"},
-                retries={"mode": "standard", "max_attempts": _MAX_ATTEMPTS},
+                # total_max_attempts, not max_attempts: botocore reads the
+                # latter as retries and adds one (args.py).
+                retries={"mode": "standard", "total_max_attempts": _MAX_ATTEMPTS},
                 connect_timeout=_CONNECT_TIMEOUT_SECONDS,
                 read_timeout=_READ_TIMEOUT_SECONDS,
                 max_pool_connections=max_pool_connections,
