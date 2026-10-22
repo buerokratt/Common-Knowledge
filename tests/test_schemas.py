@@ -16,8 +16,10 @@ from exporter.core.constants import (
 from exporter.core.schemas import (
     Chunk,
     DocumentRecord,
+    DocumentRef,
     Manifest,
     ManifestDocumentEntry,
+    ParsedSidecar,
     RunReport,
     TextSpan,
     to_json_dict,
@@ -85,7 +87,9 @@ def record(source: dict[str, Any]) -> DocumentRecord:
 def test_every_schema_is_found() -> None:
     names = {cls.__name__ for cls in SCHEMA_CLASSES}
     assert names >= {
+        "AgencyWatermark",
         "DocumentRef",
+        "ReadDocument",
         "Chunk",
         "TextSpan",
         "Manifest",
@@ -230,7 +234,12 @@ def test_to_json_dict_leaves_nothing_json_cannot_take(cls: type) -> None:
         Mapping[str, str]: {"k": "v"},
         Mapping[str, int]: {"k": 1},
         Mapping[str, ManifestDocumentEntry]: {"d1": entry()},
+        ParsedSidecar | None: None,
     }
+    ref_hints = typing.get_type_hints(DocumentRef)
+    samples[DocumentRef] = DocumentRef(
+        **{f.name: samples[ref_hints[f.name]] for f in dataclasses.fields(DocumentRef)}
+    )
     hints = typing.get_type_hints(cls)
     instance = cls(**{f.name: samples[hints[f.name]] for f in dataclasses.fields(cls)})
     json.dumps(to_json_dict(instance))

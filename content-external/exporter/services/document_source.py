@@ -1,120 +1,234 @@
-"""The document source — how the publish coordinator reads CKB (Stage E's seam).
+"""Enumeration reads Resql directly under the named read-only SELECT exception.
 
-WHAT THIS IS TODAY. The interface, and the two value types that cross it.
-Stage E implements it in this module: the watermark and enumeration Resql
-queries (E1, E2), the read-only boto3 reads against CKB's own bucket (E7),
-content precedence and readiness (E6, E12), the size guards (E9) and the three
-hashes (E8). Stage F was built first, against an in-memory fake, so the
-coordinator's ordering could be proved without a database or a bucket.
-
-WHAT AN IMPLEMENTATION MUST DO, because the coordinator depends on it:
-
-- `list_documents` returns every row the agency has, deleted and excluded
-  rows included (E3). Filtering them out here makes a deletion
-  indistinguishable from absence. Rows come back unread: no hashes, no text.
-- `read` is called only for a row the diff says must be read (Gate 2, E5),
-  and each document's text is dropped once it is published (E11). Nothing
-  here may hold a corpus.
-- `read` MUST BE THREAD-SAFE (F16). The coordinator reads up to
-  EXPORT_CONCURRENCY documents at once, one per worker thread, so a shared
-  client has to tolerate concurrent calls: a boto3 client does, a
-  boto3 Session or a resource does not. `watermark` and `list_documents` are
-  only ever called from the coordinator thread.
-- A read-time guard (oversize, an unusable sidecar) is a skip, never an
-  error: the row comes back with `skip_reason` set and no text (E9, C5).
-- A failure to read is an error, never a skip: it raises StoreError, so the
-  run aborts and commits nothing. A document that could not be read is not a
-  document that is not ready.
-
-This module never learns which destination is configured. If an
-implementation here ever needs to branch on CONTENT_SINK, something has leaked
-downward.
+Like agency_guard, this bypasses Ruuter only for query-named reads. Every row
+must reach the diff: omitting an unfinished or malformed row would turn it
+into a downstream deletion. Malformed responses therefore fail the whole run.
+URLs and timestamps stay verbatim so enumeration cannot change their meaning.
 """
 
+import logging
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import replace
+from typing import TYPE_CHECKING, Any
 
-from exporter.core.schemas import DocumentRef, ParsedSidecar
+import requests
 
-__all__ = ["CorpusWatermark", "DocumentSource", "ReadDocument"]
+from exporter.core.metadata import MAX_SIDECAR_BYTES, SidecarRejection, parse_sidecar
+from exporter.core.schemas import AgencyWatermark, DocumentRef, ReadDocument
+from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
+from exporter.services.ckb_bucket import (
+    CkbBucket,
+    InvalidObjectKeyError,
+    ObjectTooLargeError,
+)
 
-
-@dataclass(frozen=True)
-class CorpusWatermark:
-    """get_agency_export_watermark.sql's answer (E1): the newest `updated_at`
-    over every row the agency has, deleted ones included, and the count of
-    latest live rows. `max_updated_at` is None for an agency with no rows."""
-
-    max_updated_at: str | None
-    document_count: int
-
-    def __post_init__(self) -> None:
-        count = self.document_count
-        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
-            raise ValueError(f"document_count must be an int >= 0, got {count!r}")
+if TYPE_CHECKING:
+    from exporter.api.config import Settings
 
 
-@dataclass(frozen=True)
-class ReadDocument:
-    """One document as read: the row with its hashes, its normalised text and
-    its parsed sidecar — or the row with a `skip_reason` and nothing else.
+logger = logging.getLogger(__name__)
 
-    `text` is NFC-normalised (E8), the same text `content_sha256` covers, so
-    the chunker cuts exactly what was hashed.
-    """
+NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
-    ref: DocumentRef
-    text: str | None
-    sidecar: ParsedSidecar | None
+_DOCUMENT_COLUMNS = {
+    "baseId": (str,),
+    "sourceBaseId": (str,),
+    "url": (str, type(None)),
+    "pageTitle": (str, type(None)),
+    "subsector": (str, type(None)),
+    "status": (str,),
+    "cleanedDataUrl": (str, type(None)),
+    "cleanedMetadataUrl": (str, type(None)),
+    "editedDataUrl": (str, type(None)),
+    "editedMetadataUrl": (str, type(None)),
+    "fileSize": (int, type(None)),
+    "isExcluded": (bool,),
+    "isDeleted": (bool,),
+    "updatedAt": (str,),
+}
+_WATERMARK_COLUMNS = {
+    "maxUpdatedAt": (str, type(None)),
+    "liveCount": (int,),
+}
 
-    def __post_init__(self) -> None:
-        document_id = self.ref.document_id
-        if self.ref.skip_reason is not None:
-            if self.text is not None or self.sidecar is not None:
-                raise ValueError(
-                    f"document {document_id}: a skipped read carries no text "
-                    "and no sidecar"
-                )
-            return
-        if self.text is None or self.sidecar is None:
-            raise ValueError(
-                f"document {document_id}: a read that was not skipped needs "
-                "its text and its sidecar"
-            )
-        if None in (
-            self.ref.raw_sha256,
-            self.ref.content_sha256,
-            self.ref.metadata_sha256,
-        ):
-            raise ValueError(f"document {document_id}: a read document is hashed")
-        if self.ref.metadata_sha256 != self.sidecar.metadata_sha256:
-            raise ValueError(
-                f"document {document_id}: metadata_sha256 does not match the "
-                "sidecar it was read with"
-            )
 
-    def __repr__(self) -> str:
-        # Never the text (F13): a ReadDocument in a log line or a traceback
-        # would otherwise carry Estonian government content.
-        state = "skipped" if self.ref.skip_reason is not None else "read"
-        return f"ReadDocument(document_id={self.ref.document_id!r}, {state})"
+class DocumentSourceError(RuntimeError):
+    """Enumeration could not be trusted; the run must fail."""
 
 
 class DocumentSource(ABC):
-    """CKB, as the publish coordinator sees it. See the module docstring for
-    the contract every implementation meets."""
+    @abstractmethod
+    def watermark(self, agency_id: str) -> AgencyWatermark:
+        raise NotImplementedError
 
     @abstractmethod
-    def watermark(self, agency_id: str) -> CorpusWatermark:
-        """The corpus watermark (E1). Raises StoreError on failure."""
-
-    @abstractmethod
-    def list_documents(self, agency_id: str) -> Sequence[DocumentRef]:
-        """Every row for the agency, unread, deleted and excluded rows
-        included (E2, E3). Raises StoreError on failure."""
+    def list_documents(self, agency_id: str) -> list[DocumentRef]:
+        raise NotImplementedError
 
     @abstractmethod
     def read(self, ref: DocumentRef) -> ReadDocument:
-        """Read and hash one document (E7, E8), or return it skipped by a
-        read-time guard (E9). Raises StoreError on failure."""
+        raise NotImplementedError
+
+
+def _validate_row(row: object, columns: dict[str, tuple[type, ...]]) -> dict[str, Any]:
+    if not isinstance(row, dict):
+        raise DocumentSourceError("Resql returned a non-object row")
+    for name, types in columns.items():
+        if name not in row or type(row[name]) not in types:
+            # Exact types prevent JSON booleans being accepted as integer counts.
+            raise DocumentSourceError(f"Resql column {name} is missing or mistyped")
+    return row
+
+
+def _skipped(ref: DocumentRef, reason: str) -> ReadDocument:
+    return ReadDocument(
+        replace(
+            ref,
+            raw_sha256=None,
+            content_sha256=None,
+            metadata_sha256=None,
+            skip_reason=reason,
+        ),
+        text=None,
+        sidecar=None,
+    )
+
+
+class CkbDocumentSource(DocumentSource):
+    def __init__(self, settings: "Settings") -> None:
+        self._settings = settings
+        self._bucket = CkbBucket(settings)
+
+    def _rows(self, query: str, agency_id: str, **params: str | int) -> list[Any]:
+        url = f"{self._settings.ckb_resql}/{query}"
+        try:
+            response = requests.get(
+                url,
+                params={"agency_base_id": agency_id, **params},
+                timeout=self._settings.ckb_resql_timeout,
+            )
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            raise DocumentSourceError("could not read Resql") from exc
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise DocumentSourceError("Resql returned a non-JSON body") from exc
+        if isinstance(payload, dict):
+            payload = payload.get("response", payload)
+        if not isinstance(payload, list):
+            raise DocumentSourceError("Resql did not return a list")
+        return payload
+
+    def watermark(self, agency_id: str) -> AgencyWatermark:
+        rows = self._rows("agency/get_agency_export_watermark", agency_id)
+        if len(rows) != 1:
+            raise DocumentSourceError("Resql did not return exactly one watermark")
+        row = _validate_row(rows[0], _WATERMARK_COLUMNS)
+        if row["liveCount"] < 0:
+            raise DocumentSourceError("Resql liveCount is negative")
+        return AgencyWatermark(row["maxUpdatedAt"], row["liveCount"])
+
+    def list_documents(self, agency_id: str) -> list[DocumentRef]:
+        """Pages are separate snapshots; the base_id cursor returns each ID at most once.
+        This relies on F reading watermark() before listing: writes during listing
+        have later updated_at values and are picked up by the next run.
+        """
+        documents: list[DocumentRef] = []
+        after_base_id = NIL_UUID
+        page_size = self._settings.export_page_size
+        pages = 0
+        while True:
+            rows = self._rows(
+                "source_file/list_agency_export_documents",
+                agency_id,
+                after_base_id=after_base_id,
+                page_size=page_size,
+            )
+            pages += 1
+            for raw in rows:
+                row = _validate_row(raw, _DOCUMENT_COLUMNS)
+                document_id = row["baseId"]
+                if document_id <= after_base_id:
+                    raise DocumentSourceError("Resql baseId did not advance the cursor")
+                after_base_id = document_id
+                origin = (
+                    "edited"
+                    if row["editedDataUrl"]
+                    else "cleaned"
+                    if row["cleanedDataUrl"]
+                    else None
+                )
+                documents.append(
+                    DocumentRef(
+                        document_id=document_id,
+                        source_base_id=row["sourceBaseId"],
+                        agency_id=agency_id,
+                        url=row["url"],
+                        page_title=row["pageTitle"],
+                        subsector=row["subsector"],
+                        status=row["status"],
+                        is_excluded=row["isExcluded"],
+                        is_deleted=row["isDeleted"],
+                        updated_at=row["updatedAt"],
+                        content_key=row["editedDataUrl"] or row["cleanedDataUrl"],
+                        metadata_key=row["editedMetadataUrl"]
+                        or row["cleanedMetadataUrl"],
+                        content_origin=origin,
+                        file_size=row["fileSize"],
+                    )
+                )
+            if len(rows) < page_size:
+                break
+        logger.info(
+            "document enumeration agency=%s pages=%d rows=%d",
+            agency_id,
+            pages,
+            len(documents),
+        )
+        return documents
+
+    def read(self, ref: DocumentRef) -> ReadDocument:
+        try:
+            raw = self._bucket.get_bytes(
+                ref.content_key, self._settings.max_document_bytes
+            )
+        except InvalidObjectKeyError:
+            return _skipped(ref, "content_key_invalid")
+        except ObjectTooLargeError:
+            return _skipped(ref, "content_too_large")
+        if raw is None:
+            return _skipped(ref, "content_missing")
+        try:
+            text = normalise_nfc(raw.decode("utf-8"))
+        except UnicodeDecodeError:
+            return _skipped(ref, "content_undecodable")
+
+        try:
+            metadata = (
+                None
+                if ref.metadata_key is None
+                else self._bucket.get_bytes(ref.metadata_key, MAX_SIDECAR_BYTES)
+            )
+        except InvalidObjectKeyError:
+            return _skipped(ref, "metadata_key_invalid")
+        except ObjectTooLargeError:
+            return _skipped(ref, SidecarRejection.TOO_LARGE.value)
+        sidecar = parse_sidecar(
+            metadata,
+            row_url=ref.url,
+            require_sidecar=self._settings.require_metadata_sidecar,
+        )
+        if isinstance(sidecar, SidecarRejection):
+            return _skipped(ref, sidecar.value)
+        return ReadDocument(
+            replace(
+                ref,
+                raw_sha256=sha256_hex(raw),
+                content_sha256=sha256_text(text),
+                metadata_sha256=sidecar.metadata_sha256,
+                skip_reason=None,
+            ),
+            text=text,
+            sidecar=sidecar,
+        )

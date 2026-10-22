@@ -77,9 +77,9 @@ class DocumentRef:
     document_id: str  # source_file.base_id — never derived, see Finding 8
     source_base_id: str
     agency_id: str
-    url: str
-    page_title: str
-    subsector: str
+    url: str | None
+    page_title: str | None
+    subsector: str | None
     status: str
     is_excluded: bool
     is_deleted: bool
@@ -105,6 +105,14 @@ class DocumentRef:
     # after chunking, such as too many chunks, cannot use this field: it
     # goes through DiffResult.demote_to_skipped() instead.
     skip_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class AgencyWatermark:
+    """max_updated_at is None when the agency has no rows."""
+
+    max_updated_at: str | None
+    live_count: int
 
 
 @dataclass(frozen=True)
@@ -179,6 +187,23 @@ class ParsedSidecar:
 
     def __post_init__(self) -> None:
         _freeze_fields(self, "sidecar")
+
+
+@dataclass(frozen=True)
+class ReadDocument:
+    """The read contract checked by the publish coordinator:
+
+    1. text is NFC-normalised and is None exactly when ref.skip_reason is set.
+    2. ref equals the input ref except for raw_sha256, content_sha256,
+       metadata_sha256 and skip_reason.
+    3. ref.metadata_sha256 equals the hash of the parsed sidecar.
+    4. A failed read (S3/network error) raises StoreError, never a skip.
+       Only read-time guards (oversize, sidecar rejection) set skip_reason.
+    """
+
+    ref: DocumentRef
+    text: str | None
+    sidecar: ParsedSidecar | None
 
 
 @dataclass(frozen=True)

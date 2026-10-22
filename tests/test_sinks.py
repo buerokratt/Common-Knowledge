@@ -603,9 +603,8 @@ def test_the_interfaces_import_no_transport(relative: str) -> None:
     assert not roots & {"boto3", "botocore", "azure", "requests", "httpx"}
 
 
-def test_boto3_is_imported_only_by_the_s3_backend() -> None:
-    """One file speaks S3, so D10's five-operation surface has one place to
-    audit, and the coordinator cannot reach a store client by accident."""
+def test_boto3_is_imported_only_by_the_s3_backend_and_ckb_reader() -> None:
+    """Each bucket has one transport module; the coordinator imports neither."""
     importers = {
         path.relative_to(EXPORTER_ROOT).as_posix()
         for path in EXPORTER_ROOT.rglob("*.py")
@@ -615,7 +614,12 @@ def test_boto3_is_imported_only_by_the_s3_backend() -> None:
         }
         & {"boto3", "botocore"}
     }
-    assert importers == {"stores/s3_store.py"}
+    assert importers == {
+        "stores/s3_store.py",
+        # CKB's own read-only bucket: README rule 6 requires our own boto3
+        # client, GetObject only.
+        "services/ckb_bucket.py",
+    }
 
 
 def test_the_app_does_not_build_a_sink_yet() -> None:
