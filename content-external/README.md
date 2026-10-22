@@ -57,6 +57,9 @@ it — see the note in the table below.
 | `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds only the run lock and the deletion journal. Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
 | `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | no | Vault Agent sidecar, credentials fetched per task. `VAULT_SECRET_PATH` has no default — the Stage-H Azure value is `blob/connections/azure_blob/content` |
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
+| `EXPORT_PAGE_SIZE` | no (default `1000`, minimum `1`) | Documents per Resql keyset page. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
+| `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit) |
+| `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each read from CKB's own bucket. A read is tried once; a timeout fails it, and the coordinator decides whether to retry |
 | `CHUNK_PROFILE` | required for `llm_module`; optional for `object_store` (default `azure_native`) | Chunk geometry preset: `azure_native` (target 1200 / overlap 200 / min 200 / max 2000 chars) or `compact` (450 / 80 / 120 / 700). Overlap is capped at min − 1 so no chunk can fall wholly inside the one before it, which makes `azure_native`'s effective overlap 199. Pinned per deployment alongside the sink, because whoever embeds the chunks decides what fits: on `llm_module` a chunk over the embedder's token budget is silently truncated. An unknown name is refused at startup. Changing it re-chunks the whole corpus on the next run via the chunker fingerprint — and on `llm_module` re-embeds it, so do it as an announced, operator-driven run. A new preset is a reviewed row in `exporter/core/constants.py`, never four separate settings |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
 | `EXTERNAL_S3_ENDPOINT_URL` / `EXTERNAL_S3_BUCKET_NAME` | for a run on `object_store` + `s3` | The destination: any S3-compatible endpoint (SeaweedFS, MinIO, AWS), chosen by URL alone. Path-style addressing. Not checked at startup, so `/health` comes up before a destination exists. A run refuses and names every missing variable |
@@ -66,6 +69,25 @@ it — see the note in the table below.
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
+
+### Reading CKB's bucket
+
+Set `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` and `AWS_REGION` for CKB's own bucket. Compose takes
+these from the root `.env`; the chart uses `contentExternal.sourceBucket`,
+with the access key and secret supplied through its `secret` reference.
+The client is created on the first document read, so enumeration needs no
+bucket credentials. Missing endpoint, bucket or credentials fail that read.
+
+Use a dedicated key with **`s3:GetObject` only**. Enumeration comes from
+Resql, so no `s3:ListBucket` permission is needed. Without it, S3 can answer
+403 for a missing object; that is indistinguishable from denied access and
+therefore fails the run. A definitive object 404 is handled as missing.
+
+These are a different bucket and credentials from `EXTERNAL_S3_*`, which
+publishes the output. Reusing file-processing's keys is acceptable for
+**local development only**. The reader always uses its own boto3 client
+and never calls file-processing (Global Classifier rule 6).
 
 ### The startup validation matrix
 

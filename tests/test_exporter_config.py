@@ -78,6 +78,9 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.bootstrap_checkpoint_every == 250
     assert settings.max_document_bytes == 20_971_520
     assert settings.max_chunks_per_document == 5_000
+    assert settings.ckb_resql_timeout == 30.0
+    assert settings.ckb_s3_connect_timeout == 5.0
+    assert settings.ckb_s3_read_timeout == 60.0
     assert settings.ruuter_internal == "http://ruuter-internal:8089"
     assert settings.ckb_resql == "http://resql-ckb:8090/ckb"
     assert settings.vault_addr == "http://vault:8200"
@@ -109,9 +112,11 @@ def test_env_var_overrides_the_default(
 ) -> None:
     monkeypatch.setenv(WORK_DIR_ENV, "/work")
     monkeypatch.setenv("EXPORT_CONCURRENCY", "8")
+    monkeypatch.setenv("EXPORT_PAGE_SIZE", "1")
     settings = load_settings()
     assert settings.content_work_dir == "/work"
     assert settings.export_concurrency == 8
+    assert settings.export_page_size == 1
 
 
 def test_nothing_but_the_work_dir_is_required(clean_env: None) -> None:
@@ -632,6 +637,14 @@ def test_enum_and_string_fields_reject_bad_values(field: str, value: str) -> Non
         ("export_concurrency", 0),
         ("export_concurrency", 17),  # F16's documented cap of ~16
         ("export_concurrency", "four"),
+        ("export_page_size", 0),
+        ("export_page_size", -1),
+        ("ckb_resql_timeout", 0),
+        ("ckb_resql_timeout", -1),
+        ("ckb_s3_connect_timeout", 0),
+        ("ckb_s3_connect_timeout", -1),
+        ("ckb_s3_read_timeout", 0),
+        ("ckb_s3_read_timeout", -1),
         ("max_document_bytes", -1),
         ("max_chunks_per_document", 0),
         ("bootstrap_checkpoint_every", 0),
