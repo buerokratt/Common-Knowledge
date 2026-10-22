@@ -28,6 +28,7 @@ from collections.abc import Mapping
 
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.services.run_state import RunOutcome
+from exporter.sinks.base import UpsertStatus
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,13 @@ DIFF_BUCKETS = (
 
 _COUNT_PREFIX = "docs_"
 
+# F18's per-document sink outcomes, emitted as `upsert_published=` and so on.
+# Prefixed for the same reason as the buckets, and because `published` alone
+# would read as a document count rather than an upsert count.
+UPSERT_OUTCOMES = tuple(status.value for status in UpsertStatus)
+
+_UPSERT_PREFIX = "upsert_"
+
 # Fields the caller may not overwrite by passing a same-named count.
 _RESERVED = frozenset(
     {
@@ -59,6 +67,8 @@ _RESERVED = frozenset(
         "duration_seconds",
         "deletions_recorded",
         "error_type",
+        "full_corpus",
+        *(f"{_UPSERT_PREFIX}{outcome}" for outcome in UPSERT_OUTCOMES),
     }
 )
 
@@ -86,6 +96,8 @@ def format_run_line(
     counts: Mapping[str, int] | None = None,
     deletions_recorded: int = 0,
     error_type: str | None = None,
+    upsert_outcomes: Mapping[str, int] | None = None,
+    full_corpus: bool = False,
 ) -> str:
     """Render the terminal line. Pure — no logging, so it is testable.
 
@@ -93,12 +105,17 @@ def format_run_line(
     only sometimes is a field no alert rule or log-parsing query can rely on,
     and `docs_deleted` absent versus `docs_deleted=0` is exactly the
     distinction someone investigating a deletion would need. The same rule
-    makes `error_type` always present, as `-` when the run did not fail.
+    makes `error_type` always present, as `-` when the run did not fail, and
+    every `upsert_*` count present, as 0 when nothing had that outcome.
     """
     counts = counts or {}
     unknown = set(counts) - set(DIFF_BUCKETS)
     if unknown:
         raise ValueError(f"unknown diff buckets: {sorted(unknown)}")
+    upsert_outcomes = upsert_outcomes or {}
+    unknown = set(upsert_outcomes) - set(UPSERT_OUTCOMES)
+    if unknown:
+        raise ValueError(f"unknown upsert outcomes: {sorted(unknown)}")
 
     fields: dict[str, str] = {
         "outcome": scrub_value(outcome),
@@ -108,9 +125,12 @@ def format_run_line(
         "duration_seconds": f"{float(duration_seconds):.3f}",
         "deletions_recorded": str(int(deletions_recorded)),
         "error_type": scrub_value(error_type) if error_type else "-",
+        "full_corpus": "true" if full_corpus else "false",
     }
     for bucket in DIFF_BUCKETS:
         fields[f"{_COUNT_PREFIX}{bucket}"] = str(int(counts.get(bucket, 0)))
+    for status in UPSERT_OUTCOMES:
+        fields[f"{_UPSERT_PREFIX}{status}"] = str(int(upsert_outcomes.get(status, 0)))
 
     # Sorted so two runs diff line-for-line, as with the startup echo.
     body = " ".join(f"{key}={fields[key]}" for key in sorted(fields))
@@ -127,6 +147,8 @@ def log_run_outcome(
     counts: Mapping[str, int] | None = None,
     deletions_recorded: int = 0,
     error_type: str | None = None,
+    upsert_outcomes: Mapping[str, int] | None = None,
+    full_corpus: bool = False,
 ) -> str:
     """Emit the terminal line once, and return it.
 
@@ -143,6 +165,8 @@ def log_run_outcome(
         counts=counts,
         deletions_recorded=deletions_recorded,
         error_type=error_type,
+        upsert_outcomes=upsert_outcomes,
+        full_corpus=full_corpus,
     )
     logger.error(line) if outcome == "failed" else logger.info(line)
     return line

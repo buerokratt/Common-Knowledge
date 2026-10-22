@@ -13,8 +13,13 @@ WHAT AN IMPLEMENTATION MUST DO, because the coordinator depends on it:
   rows included (E3). Filtering them out here makes a deletion
   indistinguishable from absence. Rows come back unread: no hashes, no text.
 - `read` is called only for a row the diff says must be read (Gate 2, E5),
-  one document at a time, and the coordinator drops the text before reading
-  the next (E11). Nothing here may hold a corpus.
+  and each document's text is dropped once it is published (E11). Nothing
+  here may hold a corpus.
+- `read` MUST BE THREAD-SAFE (F16). The coordinator reads up to
+  EXPORT_CONCURRENCY documents at once, one per worker thread, so a shared
+  client has to tolerate concurrent calls: a boto3 client does, a
+  boto3 Session or a resource does not. `watermark` and `list_documents` are
+  only ever called from the coordinator thread.
 - A read-time guard (oversize, an unusable sidecar) is a skip, never an
   error: the row comes back with `skip_reason` set and no text (E9, C5).
 - A failure to read is an error, never a skip: it raises StoreError, so the

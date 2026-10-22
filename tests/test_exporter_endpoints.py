@@ -94,6 +94,22 @@ def test_a_supplied_run_id_and_force_are_passed_through(
     assert task == ExportTask(agency_id="agency-1", run_id="cron-17", force=True)
 
 
+def test_the_http_body_cannot_accept_existing_content(
+    processes: list[_RecordedProcess],
+) -> None:
+    """F21's override is an operator's deliberate act at the CLI. The cron
+    path goes through this endpoint, so the field is ignored here."""
+    with TestClient(app) as client:
+        client.post(
+            "/export_agency_async",
+            json={"agency_base_id": "agency-1", "accept_existing_content": True},
+        )
+
+    task = processes[0].args[0]
+    assert isinstance(task, ExportTask)
+    assert task.accept_existing_content is False
+
+
 @pytest.mark.parametrize(
     "body",
     [

@@ -17,6 +17,15 @@ records its outcome where /health reads it.
   --limit N          read at most N documents this run. The rest are held,
                      never deleted, and the corpus watermark is withheld, so
                      the next full run still walks every row.
+  --accept-existing-content
+                     on a first run (no manifest), publish even though the
+                     destination already holds this agency's content (F21).
+                     Without it such a run fails: a missing manifest in a
+                     mature deployment means something deleted it, and a cold
+                     start would orphan every document deleted meanwhile. Use
+                     it only when that content is known to be safe to
+                     overwrite. A bootstrap of this service's own that died
+                     before its first checkpoint resumes without it.
   --output-json P    write the report as JSON to P, or `-` for stdout
 
 The report is JSON on stdout (or the file); logs go to stderr, so stdout
@@ -104,6 +113,14 @@ def _parser() -> argparse.ArgumentParser:
         help="read at most N documents; the rest are held and the watermark withheld",
     )
     parser.add_argument(
+        "--accept-existing-content",
+        action="store_true",
+        help=(
+            "on a first run, publish into a destination that already holds "
+            "this agency's content (F21); refused without it"
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         default="-",
         help="where to write the report: a path, or - for stdout (default)",
@@ -145,6 +162,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         run_id=args.run_id or new_run_id(),
         force=args.force,
         limit=args.limit,
+        accept_existing_content=args.accept_existing_content,
     )
     try:
         report = export_agency_task(

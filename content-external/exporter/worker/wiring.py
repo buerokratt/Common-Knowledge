@@ -76,5 +76,8 @@ def build_coordinator(
         work_dir=work_dir,
         max_chunks_per_document=settings.max_chunks_per_document,
         bootstrap_checkpoint_every=settings.bootstrap_checkpoint_every,
+        # F16: the coordinator caps this at the sink's max_concurrency.
+        concurrency=settings.export_concurrency,
+        sink_failure_abort_threshold=settings.sink_failure_abort_threshold,
         run_state=run_state,
     )

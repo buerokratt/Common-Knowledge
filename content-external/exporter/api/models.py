@@ -51,6 +51,10 @@ class LastRunSummary(BaseModel):
     # F12. The exception class name behind a `failed` outcome, never its
     # message: this endpoint is unauthenticated.
     error_type: str | None = None
+    # F20. Whether the last run classified every row; null when unknown. A
+    # `success` with false is a --limit run: the watermark was withheld, and
+    # no sweep may treat that run as having seen the corpus.
+    run_observed_full_corpus: bool | None = None
 
 
 class HealthResponse(BaseModel):

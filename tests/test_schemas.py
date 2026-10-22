@@ -228,6 +228,7 @@ def test_to_json_dict_leaves_nothing_json_cannot_take(cls: type) -> None:
         TextSpan: TextSpan(0, 1),
         Mapping[str, Any]: {"k": {"n": [1]}},
         Mapping[str, str]: {"k": "v"},
+        Mapping[str, int]: {"k": 1},
         Mapping[str, ManifestDocumentEntry]: {"d1": entry()},
     }
     hints = typing.get_type_hints(cls)

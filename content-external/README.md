@@ -66,6 +66,10 @@ it — see the note in the table below.
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
+| `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; the llm-module's is its owner's to state), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
+| `SINK_FAILURE_ABORT_THRESHOLD` | no (default `25`) | Consecutive **permanent** upsert failures (a refused credential, a missing bucket, a wrong base URL) after which the run aborts with nothing committed and reports `failed` / `SystemicSinkFailure`. A published document resets the count, and retryable failures never count. One permanent failure is a document's problem: it is held and retried. This many in a row is the destination's |
+| `DIFF_ON_MISSING_MANIFEST` | no (default `first_run`) | `first_run` treats a missing manifest as a bootstrap. `fail` refuses it. Flip to `fail` once the bootstrap is done. Even under `first_run`, a first run refuses a destination that already holds the agency's content (see *Running an export*) |
+| `BOOTSTRAP_CHECKPOINT_EVERY` | no (default `250`) | On a first run, commit the manifest every N published documents, with the watermark withheld, so a killed bootstrap resumes |
 
 ### The startup validation matrix
 
@@ -146,7 +150,8 @@ curl -s localhost:8125/health | jq
     "duration_seconds": 251.4,
     "consecutive_failures": 3,
     "consecutive_busy": 0,
-    "error_type": "StoreError"
+    "error_type": "StoreError",
+    "run_observed_full_corpus": false
   }
 }
 ```
@@ -154,6 +159,10 @@ curl -s localhost:8125/health | jq
 `error_type` is the exception class behind a `failed` run, and only that: this
 endpoint is unauthenticated. The sanitised message is in the
 `content-external error` log line (below).
+
+`run_observed_full_corpus` is true only for a run that classified every row.
+A `--limit` run, an aborted run and any `busy` or `failed` run report false.
+It is `null` on a record written before the field existed.
 
 `last_run` is `null` until a run completes — an hourly job that has never run
 is not the same as one that ran and succeeded.
@@ -181,9 +190,17 @@ docker logs content-external | grep 'content-external run'
 ```
 content-external run agency_id=… deletions_recorded=0 docs_content_changed=4 \
   docs_deleted=1 docs_metadata_changed=0 docs_new=12 docs_skipped=3 \
-  docs_unchanged=340 duration_seconds=251.400 error_type=- outcome=success \
-  run_id=r-2026-09-16T17 sink=object_store
+  docs_unchanged=340 duration_seconds=251.400 error_type=- full_corpus=true \
+  outcome=success run_id=r-2026-09-16T17 sink=object_store upsert_deferred=0 \
+  upsert_failed_permanent=1 upsert_failed_retryable=0 upsert_published=15
 ```
+
+The `upsert_*` fields count every upsert by its outcome. A `success` with
+non-zero failures is a run whose failed documents keep their previous
+manifest entry and are retried next tick. The report names each one in
+`publish_failures`, with its status, or with `rechunk_count_mismatch` for a
+document held because re-chunking its unchanged content disagreed with the
+published count. `full_corpus` is `run_observed_full_corpus`.
 
 Stable prefix, sorted `key=value` fields, every bucket present even at zero —
 so an alert rule is a log query and not a code change, and two runs diff
@@ -252,7 +269,8 @@ recorded and counted in `consecutive_busy`.
 checked on a slice, a re-export by hand.
 
 ```bash
-python -m exporter.run_sync --agency-id … [--run-id …] [--force] [--limit N] [--output-json PATH|-]
+python -m exporter.run_sync --agency-id … [--run-id …] [--force] [--limit N] \
+  [--accept-existing-content] [--output-json PATH|-]
 ```
 
 The report is JSON on stdout (or the file); logs go to stderr. Exit codes are
@@ -263,7 +281,20 @@ configuration error. CLI runs take the same lock and show up in `/health`.
   enumeration, because a row left out would read as deleted. Rows past the cap
   are held (`skipped`, reason `limit_reached`) with their published state
   untouched. **The corpus watermark is withheld**, so the next full run still
-  walks every row, with Gate 2 sparing the unchanged ones at zero reads.
+  walks every row, with Gate 2 sparing the unchanged ones at zero reads. This
+  holds on an incremental run too, not only a bootstrap. Without it,
+  `--limit 25` would record the full watermark and the next tick would
+  report `unchanged` while every other changed document stayed unpublished.
+  The report says `run_observed_full_corpus: false`. The flag is false only
+  when the cap actually held a row back: a `--limit` larger than the reads
+  the run needed skipped nothing, so it counts as a full run.
+- **Sweeps need a clean full run.** Every sweep (Stage J's orphan sweep and
+  `run_purge`, the llm-module's `synced_at` sweep) must check the run through
+  `exporter/services/corpus_guard.py`. It refuses unless the run succeeded,
+  `run_observed_full_corpus` is true, and `documents_held_back` is 0. A
+  held-back document is one that was not published, had a tail delete left
+  unconfirmed, or was skipped by a size guard. It keeps its old state and old
+  `synced_at`, so a sweep would delete it as stale.
 - **`--force`** bypasses Gate 1. Gate 1 is Stage E's (E4), so until then
   this flag is accepted, echoed in the report, and changes nothing. A
   chunker-geometry change never needs it.
@@ -271,6 +302,42 @@ configuration error. CLI runs take the same lock and show up in `/health`.
   committed every `BOOTSTRAP_CHECKPOINT_EVERY` published documents (default
   250), with the watermark withheld. A killed bootstrap then resumes where it
   stopped instead of starting over. An incremental run never checkpoints.
+- **A first run refuses a populated destination.** With no manifest, the run
+  first checks whether the destination already holds this agency's content.
+  On a listable sink it lists; otherwise it reads back the first 25
+  enumerated documents. If any content is there, the run fails with
+  `NonEmptyDestination` and publishes nothing. In a mature deployment a
+  missing manifest means something deleted it, and a cold start would
+  republish the corpus **and permanently orphan every document CKB deleted
+  while it was gone**. So `DIFF_ON_MISSING_MANIFEST=first_run` cannot do that
+  damage even if the flip to `fail` was forgotten. The report's
+  `first_run_probe` says how the check came out:
+  - `empty`: the check found nothing.
+  - `populated`: the check found content, and the run was refused.
+  - `resumed`: a bootstrap of this service's own died before its first
+    checkpoint.
+    - A marker at `{CONTENT_WORK_DIR}/_bootstrap/{agency}.inprogress` exists
+      from the first upsert to the first commit, and the log line names the
+      run that wrote it.
+    - It may exist only while no manifest does. Every run that finds a
+      manifest removes it first, and that run **fails** if it cannot.
+    - A lost volume loses the marker, which refuses: the safe direction.
+  - `overridden`: see the next bullet.
+  - `unverifiable`: a sink that can neither list nor read back. The config
+    flip is then the only defence.
+- **`--accept-existing-content`** lets a first run publish into a populated
+  destination anyway: it overwrites what it publishes and keeps the rest. Use
+  it only when that content is known to be safe to overwrite.
+  - It is CLI only. The HTTP endpoint, and so the cron, can never set it.
+  - Such a run never writes a marker and removes any it finds, because the
+    destination's content is no longer all this service's own. If it fails,
+    the retry needs the flag again.
+
+**Interrupting a run.** On SIGTERM or Ctrl-C the export stops submitting
+documents and waits for the ones already in flight. One stuck S3 call can
+take up to about 3 × (5 s connect + 60 s read). A container stop grace period
+shorter than that ends in SIGKILL. That is safe: nothing commits before the
+end, the lock dies with the process, and every upsert is replayed next tick.
 
 Retries: Resql calls back off with full jitter on connection errors and
 408/429/5xx, honouring `Retry-After` up to 120 s. Past that, the call fails
@@ -374,8 +441,10 @@ contract, not a bug in this service.
 
 - **`exporter/sinks/base.py` — `ContentSink`.** The coordinator's only
   destination interface: `upsert_document`, `delete_documents`,
-  `delete_chunks`, `delete_agency`, `sweep_stale`, `read_document`, plus
-  declared `SinkCapabilities`. A sink is bound to one agency when it is
+  `delete_chunks`, `delete_agency`, `sweep_stale`, `read_document`,
+  `holds_agency_content` (the first-run probe, needs `can_list`), plus
+  declared `SinkCapabilities`. Those include `max_concurrency`, the sink's own
+  ceiling on parallel documents. A sink is bound to one agency when it is
   built. Any capability a sink has not declared raises `NotSupported`; it
   never silently does nothing.
 - **`exporter/stores/base.py` — `ExternalStoreClient`.** A key-value view of

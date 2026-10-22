@@ -82,6 +82,16 @@ class LastRun:
     # only: /health serves this unauthenticated, and the sanitised message is
     # in the `content-external error` log line.
     error_type: str | None = None
+    # F20. Whether the run classified every row. None when the recorder did
+    # not say (a record from before F20, or a failure reported before the
+    # coordinator could run), which is not the same as False.
+    run_observed_full_corpus: bool | None = None
+
+
+def _optional_bool(value: object) -> bool | None:
+    """A JSON boolean, or None for anything else: absent on an older record,
+    and never coerced from a string, where "false" would read as True."""
+    return value if isinstance(value, bool) else None
 
 
 def utc_now_iso() -> str:
@@ -119,6 +129,7 @@ class RunStateStore:
         duration_seconds: float,
         finished_at: str | None = None,
         error_type: str | None = None,
+        run_observed_full_corpus: bool | None = None,
     ) -> LastRun:
         """Persist a terminal outcome, maintaining the consecutive counters.
 
@@ -148,6 +159,7 @@ class RunStateStore:
                 duration_seconds=duration_seconds,
                 finished_at=finished_at,
                 error_type=error_type,
+                run_observed_full_corpus=run_observed_full_corpus,
             )
 
     @contextmanager
@@ -194,6 +206,7 @@ class RunStateStore:
         duration_seconds: float,
         finished_at: str | None,
         error_type: str | None,
+        run_observed_full_corpus: bool | None,
     ) -> LastRun:
         # Parsed afresh, not through read()'s cache: the cache is keyed on
         # (mtime, size), and two records of the same size written within the
@@ -226,6 +239,7 @@ class RunStateStore:
             # Only a failure has one; a stale type on a later success would
             # read as a current fault.
             error_type=error_type if outcome == "failed" else None,
+            run_observed_full_corpus=run_observed_full_corpus,
         )
         self._write(current)
         return current
@@ -288,6 +302,9 @@ class RunStateStore:
                 consecutive_busy=int(raw.get("consecutive_busy", 0)),
                 error_type=(
                     None if raw.get("error_type") is None else str(raw["error_type"])
+                ),
+                run_observed_full_corpus=_optional_bool(
+                    raw.get("run_observed_full_corpus")
                 ),
             )
         except (KeyError, TypeError, ValueError):

@@ -83,6 +83,33 @@ def test_limit_and_force_reach_the_run(
     assert report["run_id"]  # generated
 
 
+def test_accept_existing_content_reaches_the_run(
+    source: FakeDocumentSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """F21's override is the CLI's alone, and it arrives at the coordinator:
+    a first run into a populated destination publishes instead of failing."""
+    sink = RecordingSink()
+    patch_wiring(monkeypatch, source=source, sink=sink, manifest_client=InMemoryStore())
+    assert main(["--agency-id", AGENCY, "--run-id", "seed"]) == EXIT_OK
+    capsys.readouterr()
+    # A fresh manifest store: the destination is populated, the manifest gone.
+    patch_wiring(monkeypatch, source=source, sink=sink, manifest_client=InMemoryStore())
+
+    assert main(["--agency-id", AGENCY, "--run-id", "refused"]) == EXIT_FAILED
+    assert json.loads(capsys.readouterr().out)["error_type"] == "NonEmptyDestination"
+
+    code = main(
+        ["--agency-id", AGENCY, "--run-id", "accepted", "--accept-existing-content"]
+    )
+
+    assert code == EXIT_OK
+    report = json.loads(capsys.readouterr().out)
+    assert report["accepted_existing_content"] is True
+    assert report["first_run_probe"] == "overridden"
+
+
 def test_the_report_can_go_to_a_file(
     source: FakeDocumentSource, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

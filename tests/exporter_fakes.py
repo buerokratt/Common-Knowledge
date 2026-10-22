@@ -28,6 +28,7 @@ import hashlib
 import json
 import os
 import re
+import threading
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -83,6 +84,7 @@ FULL_SINK_CAPABILITIES = SinkCapabilities(
     supports_batch_delete=True,
     atomic_per_document=False,
     supports_agency_scoped_delete=True,
+    max_concurrency=16,
 )
 
 INJECTED_FAILURE = "InjectedFailure"
@@ -109,10 +111,15 @@ class InMemoryStore(ExternalStoreClient):
     """A dict-backed ExternalStoreClient with injectable failures.
 
     - `fail_keys`: get/exists/put on these raise StoreError — an outage, not
-      an absence.
+      an absence. Retryable.
+    - `permanent_fail_keys`: the same, but the StoreError is permanent — a
+      refused credential, a missing bucket (F19).
     - `fail_delete_keys`: delete_many reports these as failed, per item.
     - `unreported_delete_keys`: the backend "forgets" these in its outcome,
       which the base class must turn into failures.
+
+    Thread-safe, because the coordinator upserts from worker threads (F16):
+    every operation holds one lock, and a listing is a snapshot.
     """
 
     def __init__(
@@ -120,22 +127,27 @@ class InMemoryStore(ExternalStoreClient):
         *,
         capabilities: StoreCapabilities = FULL_STORE_CAPABILITIES,
         fail_keys: Iterable[str] = (),
+        permanent_fail_keys: Iterable[str] = (),
         fail_delete_keys: Iterable[str] = (),
         unreported_delete_keys: Iterable[str] = (),
     ) -> None:
         self._capabilities = capabilities
         self.fail_keys = set(fail_keys)
+        self.permanent_fail_keys = set(permanent_fail_keys)
         self.fail_delete_keys = set(fail_delete_keys)
         self.unreported_delete_keys = set(unreported_delete_keys)
         self.objects: dict[str, StoredObject] = {}
         # (verb, key-or-keys) in the order the backend saw them.
         self.calls: list[tuple[str, object]] = []
+        self._lock = threading.Lock()
 
     @property
     def capabilities(self) -> StoreCapabilities:
         return self._capabilities
 
     def _check(self, key: str) -> None:
+        if key in self.permanent_fail_keys:
+            raise StoreError(f"{INJECTED_FAILURE} for {key}", permanent=True)
         if key in self.fail_keys:
             raise StoreError(f"{INJECTED_FAILURE} for {key}")
 
@@ -147,43 +159,51 @@ class InMemoryStore(ExternalStoreClient):
         content_type: str,
         metadata: Mapping[str, str],
     ) -> StoreObject:
-        self.calls.append(("put", key))
-        self._check(key)
-        self.objects[key] = StoredObject(payload, content_type, dict(metadata))
+        with self._lock:
+            self.calls.append(("put", key))
+            self._check(key)
+            self.objects[key] = StoredObject(payload, content_type, dict(metadata))
         etag = hashlib.sha256(payload).hexdigest()[:32]
         return StoreObject(key=key, size_bytes=len(payload), etag=etag)
 
     def _get_bytes(self, key: str) -> bytes | None:
-        self.calls.append(("get", key))
-        self._check(key)
-        stored = self.objects.get(key)
+        with self._lock:
+            self.calls.append(("get", key))
+            self._check(key)
+            stored = self.objects.get(key)
         return None if stored is None else stored.payload
 
     def _exists(self, key: str) -> bool:
-        self.calls.append(("exists", key))
-        self._check(key)
-        return key in self.objects
+        with self._lock:
+            self.calls.append(("exists", key))
+            self._check(key)
+            return key in self.objects
 
     def _list_keys(self, prefix: str) -> Iterator[StoreObject]:
-        self.calls.append(("list", prefix))
-        for key in sorted(self.objects):
-            if key.startswith(prefix):
-                yield StoreObject(key=key, size_bytes=len(self.objects[key].payload))
+        with self._lock:
+            self.calls.append(("list", prefix))
+            listed = [
+                StoreObject(key=key, size_bytes=len(stored.payload))
+                for key, stored in sorted(self.objects.items())
+                if key.startswith(prefix)
+            ]
+        yield from listed
 
     def _delete_many(self, keys: tuple[str, ...]) -> DeleteOutcome[str]:
-        self.calls.append(("delete", keys))
         deleted: list[str] = []
         missing: list[str] = []
         failed: dict[str, str] = {}
-        for key in keys:
-            if key in self.unreported_delete_keys:
-                continue
-            if key in self.fail_delete_keys:
-                failed[key] = INJECTED_FAILURE
-            elif self.objects.pop(key, None) is not None:
-                deleted.append(key)
-            else:
-                missing.append(key)
+        with self._lock:
+            self.calls.append(("delete", keys))
+            for key in keys:
+                if key in self.unreported_delete_keys:
+                    continue
+                if key in self.fail_delete_keys:
+                    failed[key] = INJECTED_FAILURE
+                elif self.objects.pop(key, None) is not None:
+                    deleted.append(key)
+                else:
+                    missing.append(key)
         return DeleteOutcome(
             deleted=tuple(deleted), missing=tuple(missing), failed=failed
         )
@@ -334,9 +354,15 @@ class RecordingSink(ContentSink):
         except StoreError as exc:
             # A failed write is an outcome, not an exception (F18): the
             # coordinator counts it and keeps the previous manifest entry.
+            # Permanence is carried through, as ObjectStoreSink does, so the
+            # systemic-failure abort (F19) sees what the store said.
             return UpsertOutcome(
                 document_id=record.document_id,
-                status=UpsertStatus.FAILED_RETRYABLE,
+                status=(
+                    UpsertStatus.FAILED_PERMANENT
+                    if exc.permanent
+                    else UpsertStatus.FAILED_RETRYABLE
+                ),
                 chunks_written=written,
                 metadata_only=chunks is None,
                 detail=str(exc),
@@ -391,6 +417,15 @@ class RecordingSink(ContentSink):
 
     def _sweep_stale(self, before: datetime) -> DeleteOutcome[str]:
         raise NotSupported("RecordingSink keeps no synced_at index")
+
+    def _holds_agency_content(self) -> bool:
+        prefix = f"{self.PREFIX}/agencies/{self.agency_id}/documents/"
+        # Parse, never count (D12): only a record or a chunk is content.
+        return any(
+            obj.key.endswith("/metadata.json")
+            or _CHUNK_NAME.fullmatch(obj.key.rsplit("/", 1)[1]) is not None
+            for obj in self.store.list_keys(prefix)
+        )
 
     def _read_document(self, document_id: str) -> DocumentProbe | None:
         record_present = self.store.exists(self._metadata_key(document_id))
@@ -556,6 +591,8 @@ def patch_wiring(
             work_dir=work_dir,
             max_chunks_per_document=5000,
             bootstrap_checkpoint_every=checkpoint_every,
+            concurrency=4,
+            sink_failure_abort_threshold=25,
             run_state=run_state,
         )
 
