@@ -78,6 +78,9 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.bootstrap_checkpoint_every == 250
     assert settings.max_document_bytes == 20_971_520
     assert settings.max_chunks_per_document == 5_000
+    assert settings.ckb_resql_timeout == 30.0
+    assert settings.ckb_s3_connect_timeout == 5.0
+    assert settings.ckb_s3_read_timeout == 60.0
     assert settings.ruuter_internal == "http://ruuter-internal:8089"
     assert settings.ckb_resql == "http://resql-ckb:8090/ckb"
     assert settings.vault_addr == "http://vault:8200"
@@ -636,6 +639,12 @@ def test_enum_and_string_fields_reject_bad_values(field: str, value: str) -> Non
         ("export_concurrency", "four"),
         ("export_page_size", 0),
         ("export_page_size", -1),
+        ("ckb_resql_timeout", 0),
+        ("ckb_resql_timeout", -1),
+        ("ckb_s3_connect_timeout", 0),
+        ("ckb_s3_connect_timeout", -1),
+        ("ckb_s3_read_timeout", 0),
+        ("ckb_s3_read_timeout", -1),
         ("max_document_bytes", -1),
         ("max_chunks_per_document", 0),
         ("bootstrap_checkpoint_every", 0),

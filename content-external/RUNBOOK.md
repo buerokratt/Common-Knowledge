@@ -6,18 +6,20 @@ Operator notes for running the exporter. Design and configuration are in
 ## Export query ceiling (#320)
 
 Enumeration makes one watermark call and one document call per page, from
-`exporter/services/document_source.py` with `RESQL_TIMEOUT_SECONDS = 30`:
+`exporter/services/document_source.py`, each with the `CKB_RESQL_TIMEOUT`
+timeout (default 30 s). `CKB_RESQL` is the exporter's Resql base URL setting;
+its default is in `exporter/api/config.py`.
 
-- `GET /ckb/agency/get_agency_export_watermark` (one row)
-- `GET /ckb/source_file/list_agency_export_documents` (up to `EXPORT_PAGE_SIZE` documents)
+- `GET $CKB_RESQL/agency/get_agency_export_watermark` (one row)
+- `GET $CKB_RESQL/source_file/list_agency_export_documents` (up to `EXPORT_PAGE_SIZE` documents)
 
 Both take the latest row per `base_id`, so their cost grows with **every
 version row** of the agency, not with its document count. `source_file` gets a
 new row on every status change. Document pages use an exclusive `base_id` cursor,
 starting at `NIL_UUID` from `document_source.py`; a short page ends the listing.
 An exact multiple of the page size requires a final empty page. All pages must
-succeed before any documents are returned. Each call keeps the 30 s timeout
-and the current single-attempt behaviour. Successful enumeration logs the
+succeed before any documents are returned. Each call keeps the `CKB_RESQL_TIMEOUT`
+timeout and the current single-attempt behaviour. Successful enumeration logs the
 agency, page count (including an empty terminal page), and total row count.
 
 ### Before pagination — measured 2026-10-20, commit 1c483d3
@@ -107,8 +109,8 @@ What the numbers show:
 ### Ceiling and conclusion
 
 - **Ceiling**: ≥ 50k documents (about 990k version rows) at the default page
-  size; 200k not measured. The budget is 15 s per HTTP call, half of
-  `RESQL_TIMEOUT_SECONDS`. At 50k the slowest call was the watermark at 4.5 s
+  size; 200k not measured. The budget is 15 s per HTTP call, half of the
+  default `CKB_RESQL_TIMEOUT` (30 s). At 50k the slowest call was the watermark at 4.5 s
   (30%), and the slowest document page took 1.53 s. This is not an
   extrapolation beyond 50k.
 - **Before pagination the margin at 50k was thin**, and this is what paging
@@ -187,14 +189,14 @@ itself, and use the target deployment's Postgres settings.
    ```bash
    curl -s -o /dev/null --max-time 300 \
      -w 'watermark %{http_code} %{time_total}s %{size_download}B\n' \
-     'http://<resql-ckb>:8090/ckb/agency/get_agency_export_watermark?agency_base_id=<agency>'
+     "$CKB_RESQL/agency/get_agency_export_watermark?agency_base_id=<agency>"
    curl -s --get --max-time 300 \
      --data-urlencode 'agency_base_id=<agency>' \
      --data-urlencode 'after_base_id=<cursor>' \
      --data-urlencode 'page_size=<page-size>' \
-     -o /tmp/export-page.json \
+     -o <output-file> \
      -w 'documents %{http_code} %{time_total}s %{size_download}B\n' \
-     'http://<resql-ckb>:8090/ckb/source_file/list_agency_export_documents'
+     "$CKB_RESQL/source_file/list_agency_export_documents"
    ```
 
 4. **Compare** against the table above.
@@ -210,15 +212,47 @@ itself, and use the target deployment's Postgres settings.
    timeout to compensate. Update the default and the tables from these results.
 
 To reproduce the synthetic ladder on a **local, disposable** database only,
-use `scripts/measure_export_queries.sql`. It refuses to run without
-`-v measure_local_only=yes`, and its header lists the commands. Never run it
-against a shared, staging or production database: it inserts millions of rows
-into `data_collection.source_file`. Remove the data afterwards with
-`-v action=cleanup`. Reproduce the 50k step with `-v n_docs=50000` and
-`-v others_n_docs=10000` after loading the 10k step, always with
-`-v measure_local_only=yes`. After cleanup, verify the seed watermark has
-`maxUpdatedAt` at 12:00 and `liveCount` 3, and that following the paged endpoint
-to a short page yields the seed's four rows.
+use `scripts/measure_export_queries.sql`. Never run it against a shared,
+staging or production database: it inserts millions of rows into
+`data_collection.source_file`.
+
+- It refuses to run without `-v measure_local_only=yes` and
+  `-v measure_agency_id=<agency-uuid>`. Loading also requires
+  `-v bucket=<bucket>`, the bucket name written into the generated `s3://` URLs.
+- The four other agencies are derived from `<agency-uuid>`, so cleanup needs
+  the same value to find them.
+- `<db-container>`, `<db-user>` and `<db-name>` are the Postgres container,
+  user and database; the local compose values are in `docker-compose.yml`.
+
+```bash
+# 10k step
+docker exec -i <db-container> psql -U <db-user> -d <db-name> \
+  -v measure_local_only=yes -v measure_agency_id=<agency-uuid> -v bucket=<bucket> \
+  -v n_docs=10000 \
+  -f - < content-external/scripts/measure_export_queries.sql
+
+# 50k step, after the 10k step
+docker exec -i <db-container> psql -U <db-user> -d <db-name> \
+  -v measure_local_only=yes -v measure_agency_id=<agency-uuid> -v bucket=<bucket> \
+  -v n_docs=50000 -v others_n_docs=10000 \
+  -f - < content-external/scripts/measure_export_queries.sql
+
+# Remove everything both steps created
+docker exec -i <db-container> psql -U <db-user> -d <db-name> \
+  -v measure_local_only=yes -v measure_agency_id=<agency-uuid> -v action=cleanup \
+  -f - < content-external/scripts/measure_export_queries.sql
+```
+
+The generator's shape (version depth, outcome shares, history dates, URL
+format) is a block of `\set` defaults at the top of the script. Those defaults
+produced the tables above, and any of them can be overridden with `-v`. Every
+generated value is hashed from the agency id, so a different `<agency-uuid>`
+gives the same distributions but slightly different row counts than the
+tables show.
+
+After cleanup, verify the seed watermark has `maxUpdatedAt` at 12:00 and
+`liveCount` 3, and that following the paged endpoint to a short page yields the
+seed's four rows.
 
 ## Signs the ceiling is being hit
 
@@ -241,8 +275,8 @@ to a short page yields the seed's four rows.
 
 1. Find the agency's version-row count (step 1 above) and compare it with the
    table.
-2. Cancel export queries that have run longer than `RESQL_TIMEOUT_SECONDS`
-   (30 s). Their exporter request has already timed out. Resql keeps its
+2. Cancel export queries that have run longer than `CKB_RESQL_TIMEOUT`
+   (30 s by default). Their exporter request has already timed out. Resql keeps its
    database connection open, so a client that has gone is not visible in
    `pg_stat_activity`; the age of the query is the signal:
 
@@ -252,7 +286,7 @@ to a short page yields the seed's four rows.
    WHERE state = 'active'
      AND (query LIKE '%retain removal and hold signals%'
           OR query LIKE '%advance the export watermark%')
-     AND now() - query_start > interval '30 seconds'
+     AND now() - query_start > interval '<CKB_RESQL_TIMEOUT> seconds'
      AND pid <> pg_backend_pid();
    ```
 
@@ -262,7 +296,7 @@ to a short page yields the seed's four rows.
    them. The file names themselves do not appear in the query text. If a
    description changes, update the pattern.
 3. Re-measure as above. If a document page is over 15 s, reduce the page
-   size and inspect its query plan. Raising `RESQL_TIMEOUT_SECONDS` only hides the problem until
+   size and inspect its query plan. Raising `CKB_RESQL_TIMEOUT` only hides the problem until
    the next growth step.
 
 ## Do not retry immediately after a timeout

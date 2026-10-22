@@ -58,21 +58,27 @@ ROW = {
 
 
 @pytest.fixture
-def source(monkeypatch: pytest.MonkeyPatch) -> CkbDocumentSource:
+def resql_settings() -> Settings:
+    return Settings(
+        content_work_dir="/var/lib/content-external",
+        ckb_resql="http://resql.test/ckb",
+        ckb_resql_timeout=12.5,
+        export_page_size=2,
+        s3_endpoint_url="invalid://unused",
+        s3_bucket_name="",
+    )
+
+
+@pytest.fixture
+def source(
+    monkeypatch: pytest.MonkeyPatch, resql_settings: Settings
+) -> CkbDocumentSource:
     def no_client(*_args: object, **_kwargs: object) -> None:
         pytest.fail("enumeration must not create an S3 client")
 
     monkeypatch.setattr(boto3, "client", no_client)
     monkeypatch.setattr(boto3.session.Session, "client", no_client)
-    return CkbDocumentSource(
-        Settings(
-            content_work_dir="/var/lib/content-external",
-            ckb_resql="http://resql.test/ckb",
-            export_page_size=2,
-            s3_endpoint_url="invalid://unused",
-            s3_bucket_name="",
-        )
-    )
+    return CkbDocumentSource(resql_settings)
 
 
 def _stub(
@@ -98,7 +104,10 @@ def _stub(
 
 @pytest.mark.parametrize("envelope", [False, True])
 def test_enumeration_maps_every_column_without_reading(
-    monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, envelope: bool
+    monkeypatch: pytest.MonkeyPatch,
+    source: CkbDocumentSource,
+    resql_settings: Settings,
+    envelope: bool,
 ) -> None:
     payload = [ROW]
     captured = _stub(monkeypatch, {"response": payload} if envelope else payload)
@@ -127,7 +136,7 @@ def test_enumeration_maps_every_column_without_reading(
             "after_base_id": document_source.NIL_UUID,
             "page_size": 2,
         },
-        "timeout": 30.0,
+        "timeout": resql_settings.ckb_resql_timeout,
     }
 
 
@@ -399,6 +408,7 @@ def test_malformed_or_duplicate_rows_fail_the_enumeration(
 def test_watermark(
     monkeypatch: pytest.MonkeyPatch,
     source: CkbDocumentSource,
+    resql_settings: Settings,
     envelope: bool,
     timestamp: str | None,
     count: int,
@@ -409,7 +419,7 @@ def test_watermark(
     assert captured == {
         "url": "http://resql.test/ckb/agency/get_agency_export_watermark",
         "params": {"agency_base_id": AGENCY},
-        "timeout": 30.0,
+        "timeout": resql_settings.ckb_resql_timeout,
     }
 
 
@@ -492,6 +502,8 @@ def read_settings() -> Settings:
         aws_access_key_id="read-key",
         aws_secret_access_key="read-secret",
         aws_region="eu-north-1",
+        ckb_s3_connect_timeout=2.5,
+        ckb_s3_read_timeout=7.5,
         require_metadata_sidecar=False,
         max_document_bytes=100,
     )
@@ -885,6 +897,7 @@ def test_body_read_failure_raises_and_closes(
 
 def test_client_is_lazy_reused_and_given_explicit_credentials(
     monkeypatch: pytest.MonkeyPatch,
+    read_settings: Settings,
     reader: CkbDocumentSource,
     unread_ref: DocumentRef,
     s3: Stubber,
@@ -910,6 +923,8 @@ def test_client_is_lazy_reused_and_given_explicit_credentials(
     kwargs = client_factory.call_args.kwargs
     assert kwargs["endpoint_url"] == "http://source.invalid:9000"
     assert kwargs["config"].retries == {"total_max_attempts": 1}
+    assert kwargs["config"].connect_timeout == read_settings.ckb_s3_connect_timeout
+    assert kwargs["config"].read_timeout == read_settings.ckb_s3_read_timeout
 
 
 def test_concurrent_first_reads_share_one_client(

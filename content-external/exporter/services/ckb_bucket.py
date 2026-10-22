@@ -20,10 +20,6 @@ if TYPE_CHECKING:
     from exporter.api.config import Settings
 
 
-CONNECT_TIMEOUT_SECONDS = 5
-READ_TIMEOUT_SECONDS = 60
-
-
 class ObjectTooLargeError(Exception):
     """A size guard rejected the object before decoding."""
 
@@ -88,8 +84,8 @@ class CkbBucket:
                     config=Config(
                         signature_version="s3v4",
                         s3={"addressing_style": "path"},
-                        connect_timeout=CONNECT_TIMEOUT_SECONDS,
-                        read_timeout=READ_TIMEOUT_SECONDS,
+                        connect_timeout=settings.ckb_s3_connect_timeout,
+                        read_timeout=settings.ckb_s3_read_timeout,
                         # The coordinator decides whether to retry a failed read.
                         retries={"total_max_attempts": 1},
                     ),

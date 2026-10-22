@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-RESQL_TIMEOUT_SECONDS = 30.0
 NIL_UUID = "00000000-0000-0000-0000-000000000000"
 
 _DOCUMENT_COLUMNS = {
@@ -106,7 +105,7 @@ class CkbDocumentSource(DocumentSource):
             response = requests.get(
                 url,
                 params={"agency_base_id": agency_id, **params},
-                timeout=RESQL_TIMEOUT_SECONDS,
+                timeout=self._settings.ckb_resql_timeout,
             )
             response.raise_for_status()
         except requests.RequestException as exc:
