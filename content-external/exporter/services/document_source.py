@@ -25,7 +25,8 @@ on, so a retry would run alongside the abandoned one and stack load
 (RUNBOOK.md, "Do not retry immediately after a timeout"). That holds whether
 the timeout hits before the response or while its body streams in, which
 requests reports as a ConnectionError. A connect timeout never reached Resql
-and is retried.
+and is retried. The classifier, is_retryable_resql, lives in services/backoff.py
+because agency_guard's run-start check applies the same carve-out.
 """
 
 import logging
@@ -34,7 +35,6 @@ from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
 import requests
-from urllib3.exceptions import ReadTimeoutError
 
 from exporter.core.metadata import MAX_SIDECAR_BYTES, SidecarRejection, parse_sidecar
 from exporter.core.schemas import AgencyWatermark, DocumentRef, ReadDocument
@@ -42,7 +42,7 @@ from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
 from exporter.services.backoff import (
     DEFAULT_POLICY,
     BackoffPolicy,
-    is_retryable_http,
+    is_retryable_resql,
     retry_with_backoff,
 )
 from exporter.services.ckb_bucket import (
@@ -104,22 +104,6 @@ class DocumentSource(ABC):
     @abstractmethod
     def read(self, ref: DocumentRef) -> ReadDocument:
         raise NotImplementedError
-
-
-def _read_timed_out(exc: BaseException) -> bool:
-    """A read timeout, in either form requests raises it: ReadTimeout while
-    waiting for the response, or ConnectionError wrapping urllib3's
-    ReadTimeoutError once the body has started (requests/models.py)."""
-    if isinstance(exc, requests.ReadTimeout):
-        return True
-    return isinstance(exc, requests.ConnectionError) and any(
-        isinstance(arg, ReadTimeoutError) for arg in exc.args
-    )
-
-
-def is_retryable_resql(exc: BaseException) -> bool:
-    """F8's rule, less a read timeout: see the module docstring."""
-    return not _read_timed_out(exc) and is_retryable_http(exc)
 
 
 def _validate_row(row: object, columns: dict[str, tuple[type, ...]]) -> dict[str, Any]:

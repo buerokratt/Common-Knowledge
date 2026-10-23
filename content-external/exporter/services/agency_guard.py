@@ -53,6 +53,7 @@ from exporter.services.backoff import (
     DEFAULT_POLICY,
     NO_RETRY,
     BackoffPolicy,
+    is_retryable_resql,
     retry_with_backoff,
 )
 
@@ -110,7 +111,9 @@ def count_agencies(
     matters here.
 
     `policy` is F8's backoff. NO_RETRY by default, which is what the startup
-    check wants; the run-start check retries a transient Resql blip.
+    check wants; the run-start check retries a transient Resql blip. A read
+    timeout is never retried, as for every Resql query: Resql does not cancel
+    the abandoned query, so a retry would stack a second one in Postgres.
     """
     url = f"{settings.ckb_resql}/agency/list_agencies"
     params = {"page": 1, "page_size": _PAGE_SIZE, "sorting": _SORTING}
@@ -122,7 +125,10 @@ def count_agencies(
 
     try:
         response = retry_with_backoff(
-            get, describe="Resql list_agencies", policy=policy
+            get,
+            describe="Resql list_agencies",
+            policy=policy,
+            is_retryable=is_retryable_resql,
         )
     except requests.RequestException as exc:
         raise AgencyCountUnavailableError(f"could not reach Resql: {exc}") from exc

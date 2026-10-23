@@ -18,14 +18,17 @@ fails the call now; the next tick is the retry.
 
 WHERE IT IS APPLIED, AND WHERE IT IS DELIBERATELY NOT.
 
-- Every `requests` call: the run-start agency check, Stage E's Resql queries
+- Every `requests` call: the run-start agency check
+  (services/agency_guard.py), Stage E's Resql queries
   (services/document_source.py), and Stage L's llm-module push when it
   lands. A timeout is retried, and a timed-out request may have been applied,
   so this is for idempotent calls: GETs, and an upsert keyed by coordinate
   chunk ids, whose replay overwrites rather than adds. A caller with a
   non-idempotent request, or one whose timed-out request keeps running on the
-  far side, passes its own `is_retryable`: the Resql queries do, because
-  Resql does not cancel a query whose client gave up.
+  far side, passes its own `is_retryable`: every Resql query passes
+  `is_retryable_resql`, because Resql does not cancel a query whose client
+  gave up, so a retry would run alongside the abandoned one and stack load
+  (RUNBOOK.md, "Do not retry immediately after a timeout").
 - NOT either S3 client. botocore's `retries={"mode": "standard"}` already
   backs off with jitter on throttles, 5xx and connection errors
   (exporter/stores/s3_store.py for the destination,
@@ -51,6 +54,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 import requests
+from urllib3.exceptions import ReadTimeoutError
 
 __all__ = [
     "DEFAULT_POLICY",
@@ -58,6 +62,7 @@ __all__ = [
     "BackoffPolicy",
     "full_jitter_delay",
     "is_retryable_http",
+    "is_retryable_resql",
     "retry_after_seconds",
     "retry_with_backoff",
 ]
@@ -113,6 +118,23 @@ def is_retryable_http(exc: BaseException) -> bool:
     if status in _PERMANENT_5XX:
         return False
     return status in _RETRYABLE_STATUSES or status >= 500
+
+
+def _read_timed_out(exc: BaseException) -> bool:
+    """A read timeout, in either form requests raises it: ReadTimeout while
+    waiting for the response, or ConnectionError wrapping urllib3's
+    ReadTimeoutError once the body has started (requests/models.py)."""
+    if isinstance(exc, requests.ReadTimeout):
+        return True
+    return isinstance(exc, requests.ConnectionError) and any(
+        isinstance(arg, ReadTimeoutError) for arg in exc.args
+    )
+
+
+def is_retryable_resql(exc: BaseException) -> bool:
+    """F8's rule, less a read timeout: see the module docstring. A connect
+    timeout never reached Resql and is still retried."""
+    return not _read_timed_out(exc) and is_retryable_http(exc)
 
 
 def retry_after_seconds(

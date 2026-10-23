@@ -361,6 +361,41 @@ def test_run_start_retries_a_transient_failure(
     assert len(calls) == 3
 
 
+def test_run_start_does_not_retry_a_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Resql does not cancel a query whose client gave up, so a retry would
+    run alongside the abandoned one in Postgres. The run fails instead, and
+    the next tick is the retry — the same carve-out Stage E's queries take."""
+    calls: list[int] = []
+
+    def fake_get(_url: str, **_kwargs: object) -> object:
+        calls.append(1)
+        raise requests.ReadTimeout("resql is slow")
+
+    monkeypatch.setattr(GUARD, fake_get)
+    with pytest.raises(AgencyCountUnavailableError):
+        require_single_agency(_settings(), policy=_INSTANT)
+    assert len(calls) == 1
+
+
+def test_run_start_retries_a_connect_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connect timeout never reached Resql, so there is nothing to stack."""
+    calls: list[int] = []
+
+    def fake_get(_url: str, **_kwargs: object) -> object:
+        calls.append(1)
+        if len(calls) == 1:
+            raise requests.ConnectTimeout("resql is not accepting")
+        return _Response(_rows(1))
+
+    monkeypatch.setattr(GUARD, fake_get)
+    assert require_single_agency(_settings(), policy=_INSTANT) == 1
+    assert len(calls) == 2
+
+
 def test_startup_does_not_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     """Boot must stay fast: one attempt, then warn and serve."""
     calls = _flaky(monkeypatch, failures=1)

@@ -34,7 +34,11 @@ from exporter.core.schemas import (
     ReadDocument,
 )
 from exporter.services import document_source
-from exporter.services.backoff import BackoffPolicy, is_retryable_http
+from exporter.services.backoff import (
+    BackoffPolicy,
+    is_retryable_http,
+    is_retryable_resql,
+)
 from exporter.services.document_source import CkbDocumentSource, DocumentSourceError
 from exporter.stores.base import StoreError
 
@@ -613,7 +617,7 @@ def test_a_read_timeout_mid_body_is_not_retried(resql_settings: Settings) -> Non
         assert not isinstance(cause, requests.ReadTimeout)
         # F8's general rule would retry it; the carve-out is what stops it.
         assert is_retryable_http(cause)
-        assert not document_source.is_retryable_resql(cause)
+        assert not is_retryable_resql(cause)
         assert len(connections) == 1
     finally:
         stop.set()
