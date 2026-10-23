@@ -1,0 +1,112 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Send the agency's latest data hash with a fresh presigned url to CentOps and record it"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: agencyId
+        type: string
+        description: "Agency base ID"
+
+extractRequestData:
+  assign:
+    agency_base_id: ${incoming.body.agencyId}
+
+validateInput:
+  switch:
+    - condition: ${!agency_base_id}
+      next: returnMissingInput
+  next: getAgencyZipStatus
+
+getAgencyZipStatus:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/get_agency_zip_status"
+    query:
+      base_id: ${agency_base_id}
+  result: agencyRes
+
+checkAgencyReady:
+  switch:
+    - condition: ${agencyRes.response.body.length > 0 && agencyRes.response.body[0].zippedDataUrl && agencyRes.response.body[0].dataHash && !agencyRes.response.body[0].isZipping}
+      next: assignAgencyData
+  next: returnSkipped
+
+assignAgencyData:
+  assign:
+    data_hash: ${agencyRes.response.body[0].dataHash}
+    zipped_data_url: ${agencyRes.response.body[0].zippedDataUrl}
+
+createPresignedUrl:
+  call: http.post
+  args:
+    url: "[#CKB_FILE_MANAGER]/download-urls"
+    headers:
+      Content-Type: application/json
+    body:
+      paths: ${[zipped_data_url]}
+  result: downloadRes
+  logging:
+    response: false
+  error: logPresignedUrlFailure
+
+checkPresignedUrl:
+  switch:
+    - condition: ${200 <= downloadRes.response.statusCodeValue && downloadRes.response.statusCodeValue < 300 && !!downloadRes.response.body.download_urls[0].download_url}
+      next: syncToCentops
+  next: logPresignedUrlFailure
+
+syncToCentops:
+  template: "[#CKB_PROJECT_LAYER]/agency/sync-to-centops"
+  requestType: templates
+  body:
+    presigned_url: ${downloadRes.response.body.download_urls[0].download_url}
+    presigned_url_etag: ${data_hash}
+  result: centopsStatus
+
+checkCentopsStatus:
+  switch:
+    - condition: ${200 <= centopsStatus && centopsStatus < 300}
+      next: saveCentopsReport
+  next: logCentopsFailure
+
+saveCentopsReport:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/agency/upsert_centops_report"
+    headers:
+      type: json
+    body:
+      agency_base_id: ${agency_base_id}
+      reported_data_hash: ${data_hash}
+      presigned_url_expires_at: ${downloadRes.response.body.download_urls[0].expires_at}
+  result: saveRes
+  next: returnReported
+
+logPresignedUrlFailure:
+  log: "Could not create presigned url for agency ${agency_base_id}"
+  next: returnFailed
+
+logCentopsFailure:
+  log: "CentOps sync failed for agency ${agency_base_id} with status ${centopsStatus}"
+  next: returnFailed
+
+returnReported:
+  return: "reported"
+  next: end
+
+returnSkipped:
+  return: "skipped"
+  next: end
+
+returnFailed:
+  return: "failed"
+  next: end
+
+returnMissingInput:
+  return: "missing agencyId"
+  next: end
