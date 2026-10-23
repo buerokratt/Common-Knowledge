@@ -57,27 +57,66 @@ declaration:
       - field: is_deleted
         type: boolean
         description: "Whether the file is deleted"
+      - field: type
+        type: string
+        description: "scraped_file, uploaded_file or api_file"
+      - field: source_is_deleted
+        type: boolean
+        description: "Whether the latest version of the file's source is deleted"
       - field: updated_at
         type: timestamp
         description: "Timestamp of the latest version"
 */
-SELECT DISTINCT ON (base_id)
-    base_id,
-    source_base_id,
-    url,
-    page_title,
-    subsector,
-    status,
-    cleaned_data_url,
-    cleaned_metadata_url,
-    edited_data_url,
-    edited_metadata_url,
-    file_size,
-    is_excluded,
-    is_deleted,
-    updated_at
-FROM data_collection.source_file
-WHERE agency_base_id = :agency_base_id::UUID
-  AND base_id > :after_base_id::UUID
-ORDER BY base_id, updated_at DESC
-LIMIT :page_size::INTEGER;
+-- Deleting a source marks only the source row, never its files, so each file
+-- carries its source's latest is_deleted as a separate deletion signal. A file
+-- whose source row is missing is not treated as deleted.
+WITH page AS (
+    SELECT DISTINCT ON (base_id)
+        base_id,
+        source_base_id,
+        url,
+        page_title,
+        subsector,
+        status,
+        cleaned_data_url,
+        cleaned_metadata_url,
+        edited_data_url,
+        edited_metadata_url,
+        file_size,
+        is_excluded,
+        is_deleted,
+        type,
+        updated_at
+    FROM data_collection.source_file
+    WHERE agency_base_id = :agency_base_id::UUID
+      AND base_id > :after_base_id::UUID
+    ORDER BY base_id, updated_at DESC
+    LIMIT :page_size::INTEGER
+)
+
+SELECT
+    p.base_id,
+    p.source_base_id,
+    p.url,
+    p.page_title,
+    p.subsector,
+    p.status,
+    p.cleaned_data_url,
+    p.cleaned_metadata_url,
+    p.edited_data_url,
+    p.edited_metadata_url,
+    p.file_size,
+    p.is_excluded,
+    p.is_deleted,
+    p.type,
+    COALESCE(ls.is_deleted, FALSE) AS source_is_deleted,
+    p.updated_at
+FROM page AS p
+LEFT JOIN LATERAL (
+    SELECT s.is_deleted
+    FROM data_collection.source AS s
+    WHERE s.base_id = p.source_base_id
+    ORDER BY s.updated_at DESC
+    LIMIT 1
+) AS ls ON TRUE
+ORDER BY p.base_id;

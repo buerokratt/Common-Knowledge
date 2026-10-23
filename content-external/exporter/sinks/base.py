@@ -77,6 +77,18 @@ class SinkCapabilities:
     # it by write order instead.
     atomic_per_document: bool
     supports_agency_scoped_delete: bool
+    # F16. The most documents this destination should take in parallel. The
+    # sink states it because the bottleneck is the destination's: an object
+    # store absorbs 8-16 writers, while the llm-module embeds every chunk it
+    # receives, so its ceiling is its owner's to state (Open item 9). The
+    # coordinator runs min(EXPORT_CONCURRENCY, this).
+    max_concurrency: int
+
+    def __post_init__(self) -> None:
+        if isinstance(self.max_concurrency, bool) or self.max_concurrency < 1:
+            raise ValueError(
+                f"max_concurrency must be an int >= 1, got {self.max_concurrency!r}"
+            )
 
 
 class UpsertStatus(StrEnum):
@@ -281,8 +293,10 @@ class ContentSink(ABC):
         ONLY VALID AFTER A RUN THAT OBSERVED THE FULL CORPUS. After a
         `--limit` run, or one that ended early, everything it did not touch
         is "stale" and this would delete live content. The guard belongs to
-        the caller (F20's `run_observed_full_corpus`); this method cannot
-        know how the run went, so it must never be called speculatively.
+        the caller: services/corpus_guard.py's require_observed_full_corpus
+        (F20), which reads the run's `run_observed_full_corpus` and never
+        re-derives it. This method cannot know how the run went, so it must
+        never be called speculatively.
 
         No D0 capability gates this verb: the llm-module sink sweeps by
         `synced_at` without being able to list (L10), so neither `can_list`
@@ -308,6 +322,20 @@ class ContentSink(ABC):
         Requires `can_read_back`; without it, reconcile is `unverifiable`."""
         self._require(self.capabilities.can_read_back, "can_read_back")
         return self._read_document(document_id)
+
+    def holds_agency_content(self) -> bool:
+        """True when the destination holds any document of the bound agency.
+
+        F21's probe: a `first_run` decision is refused against a destination
+        that already holds content, because a missing manifest in a mature
+        deployment means something deleted it, and a cold start would then
+        republish the corpus and permanently orphan every document CKB
+        deleted while it was gone. Requires `can_list`. A non-listable sink
+        raises NotSupported, and the coordinator falls back to read-back
+        probes or reports the check unverifiable.
+        """
+        self._require(self.capabilities.can_list, "can_list")
+        return self._holds_agency_content()
 
     # -- sink hooks --------------------------------------------------------
 
@@ -339,6 +367,12 @@ class ContentSink(ABC):
     @abstractmethod
     def _read_document(self, document_id: str) -> DocumentProbe | None:
         """Read-back for one document. Capability already checked."""
+
+    @abstractmethod
+    def _holds_agency_content(self) -> bool:
+        """Whether any of the bound agency's documents is present. Capability
+        already checked. Stop at the first document found: this is a probe,
+        not a count."""
 
     # -- helpers -----------------------------------------------------------
 

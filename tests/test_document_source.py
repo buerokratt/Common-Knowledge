@@ -34,6 +34,11 @@ from exporter.core.schemas import (
     ReadDocument,
 )
 from exporter.services import document_source
+from exporter.services.backoff import (
+    BackoffPolicy,
+    is_retryable_http,
+    is_retryable_resql,
+)
 from exporter.services.document_source import CkbDocumentSource, DocumentSourceError
 from exporter.stores.base import StoreError
 
@@ -53,6 +58,8 @@ ROW = {
     "fileSize": 42,
     "isExcluded": False,
     "isDeleted": False,
+    "type": "scraped_file",
+    "sourceIsDeleted": False,
     "updatedAt": TIMESTAMP,
 }
 
@@ -69,6 +76,10 @@ def resql_settings() -> Settings:
     )
 
 
+# F8's retry with no delay between attempts, so a retried test does not sleep.
+FAST_RETRY = BackoffPolicy(max_attempts=3, base_delay=0, max_delay=0)
+
+
 @pytest.fixture
 def source(
     monkeypatch: pytest.MonkeyPatch, resql_settings: Settings
@@ -78,7 +89,7 @@ def source(
 
     monkeypatch.setattr(boto3, "client", no_client)
     monkeypatch.setattr(boto3.session.Session, "client", no_client)
-    return CkbDocumentSource(resql_settings)
+    return CkbDocumentSource(resql_settings, backoff=FAST_RETRY)
 
 
 def _stub(
@@ -100,6 +111,21 @@ def _stub(
 
     monkeypatch.setattr(document_source.requests, "get", fake_get)
     return captured
+
+
+def _manifest(entry: ManifestDocumentEntry) -> Manifest:
+    """A committed manifest that has published document-1 as `entry`."""
+    return Manifest(
+        schema_version=1,
+        manifest_schema_version=1,
+        agency_id=AGENCY,
+        sink_id="test",
+        corpus_watermark=TIMESTAMP,
+        document_count=1,
+        chunker_fingerprint=entry.chunker_fingerprint,
+        committed_at=TIMESTAMP,
+        documents={"document-1": entry},
+    )
 
 
 @pytest.mark.parametrize("envelope", [False, True])
@@ -153,6 +179,8 @@ def _stub_pages(
         page = next(remaining)
         if isinstance(page, requests.RequestException):
             raise page
+        if isinstance(page, requests.Response):
+            return page
         response = requests.Response()
         response.status_code = 200
         response._content = json.dumps(page).encode()
@@ -283,6 +311,54 @@ def test_uploaded_file_nullable_fields_pass_through(
     assert ref.url is ref.page_title is ref.subsector is ref.file_size is None
 
 
+@pytest.mark.parametrize("file_type", ["scraped_file", "api_file"])
+def test_only_uploaded_files_are_skipped_at_enumeration(
+    monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, file_type: str
+) -> None:
+    _stub(monkeypatch, [ROW | {"type": file_type}])
+    assert source.list_documents(AGENCY)[0].skip_reason is None
+
+
+@pytest.mark.parametrize("published", [True, False])
+def test_an_uploaded_file_is_skipped_unread_and_held(
+    monkeypatch: pytest.MonkeyPatch,
+    source: CkbDocumentSource,
+    published_entry: ManifestDocumentEntry,
+    published: bool,
+) -> None:
+    """Never read on any run, so it costs no S3 call, and never deleted."""
+    _stub(monkeypatch, [ROW | {"type": "uploaded_file", "url": None}])
+    refs = source.list_documents(AGENCY)
+    fingerprint = published_entry.chunker_fingerprint
+    entry = published_entry if published else None
+    assert refs[0].skip_reason == document_source.UPLOADED_FILE_UNCITABLE
+    assert not needs_read(entry, refs[0], chunker_fingerprint=fingerprint)
+    result = classify(
+        _manifest(published_entry) if published else None, refs, fingerprint
+    )
+    assert [change.document_id for change in result.skipped] == ["document-1"]
+    assert result.skipped[0].reason == document_source.UPLOADED_FILE_UNCITABLE
+    assert result.skipped[0].held is published
+
+
+@pytest.mark.parametrize("file_type", ["scraped_file", "uploaded_file"])
+def test_a_deleted_source_deletes_its_files(
+    monkeypatch: pytest.MonkeyPatch,
+    source: CkbDocumentSource,
+    published_entry: ManifestDocumentEntry,
+    file_type: str,
+) -> None:
+    """CKB marks only the source deleted. The file row still says live and
+    finished, so without this signal its chunks would stay published."""
+    _stub(monkeypatch, [ROW | {"sourceIsDeleted": True, "type": file_type}])
+    refs = source.list_documents(AGENCY)
+    assert refs[0].is_deleted is True
+    result = classify(
+        _manifest(published_entry), refs, published_entry.chunker_fingerprint
+    )
+    assert [change.document_id for change in result.deleted] == ["document-1"]
+
+
 def test_empty_enumeration_is_a_list(
     monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource
 ) -> None:
@@ -377,6 +453,9 @@ def test_every_document_column_is_required_and_typed(
         ("updatedAt", None),
         ("isExcluded", None),
         ("isDeleted", None),
+        ("type", None),
+        ("sourceIsDeleted", None),
+        ("sourceIsDeleted", 0),
         ("fileSize", True),
         ("fileSize", "42"),
         ("isDeleted", 0),
@@ -477,16 +556,111 @@ def test_http_and_json_errors_fail(
 
 
 @pytest.mark.parametrize("method", ["watermark", "list_documents"])
-@pytest.mark.parametrize("error", [requests.Timeout, requests.ConnectionError])
-def test_unreachable_resql_fails(
+@pytest.mark.parametrize(
+    "error, attempts",
+    [
+        (requests.ConnectionError, FAST_RETRY.max_attempts),
+        (requests.ConnectTimeout, FAST_RETRY.max_attempts),
+        # The query is still running in Postgres: never stack a second one.
+        (requests.ReadTimeout, 1),
+    ],
+)
+def test_unreachable_resql_fails_after_f8s_retries(
     monkeypatch: pytest.MonkeyPatch,
     source: CkbDocumentSource,
     method: str,
     error: type[requests.RequestException],
+    attempts: int,
 ) -> None:
-    _stub_pages(monkeypatch, [error("unreachable")])
+    captured = _stub_pages(monkeypatch, [error("unreachable")] * attempts)
     with pytest.raises(DocumentSourceError):
         getattr(source, method)(AGENCY)
+    assert len(captured) == attempts
+
+
+def test_a_read_timeout_mid_body_is_not_retried(resql_settings: Settings) -> None:
+    """requests reports a timeout after the headers as ConnectionError, not
+    ReadTimeout (requests/models.py). A real server that sends headers and
+    then stalls the body proves the carve-out still holds: one attempt."""
+    import socket
+    import threading
+
+    listener = socket.create_server(("127.0.0.1", 0))
+    connections: list[socket.socket] = []
+    stop = threading.Event()
+
+    def serve() -> None:
+        listener.settimeout(0.1)
+        while not stop.is_set():
+            try:
+                conn, _ = listener.accept()
+            except TimeoutError:
+                continue
+            connections.append(conn)
+            conn.recv(65536)
+            conn.sendall(
+                b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"
+                b"Content-Length: 100\r\n\r\n["
+            )
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+    port = listener.getsockname()[1]
+    settings = resql_settings.model_copy(
+        update={"ckb_resql": f"http://127.0.0.1:{port}/ckb", "ckb_resql_timeout": 0.3}
+    )
+    try:
+        with pytest.raises(DocumentSourceError) as excinfo:
+            CkbDocumentSource(settings, backoff=FAST_RETRY).watermark(AGENCY)
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, requests.ConnectionError)
+        assert not isinstance(cause, requests.ReadTimeout)
+        # F8's general rule would retry it; the carve-out is what stops it.
+        assert is_retryable_http(cause)
+        assert not is_retryable_resql(cause)
+        assert len(connections) == 1
+    finally:
+        stop.set()
+        thread.join(timeout=5)
+        for conn in connections:
+            conn.close()
+        listener.close()
+
+
+def _http(status: int) -> requests.Response:
+    response = requests.Response()
+    response.status_code = status
+    response._content = b"{}"
+    return response
+
+
+@pytest.mark.parametrize(
+    "transient",
+    [requests.ConnectionError("blip"), _http(503), _http(429), _http(502)],
+    ids=["connection", "503", "429", "502"],
+)
+def test_a_transient_resql_failure_is_retried(
+    monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, transient: object
+) -> None:
+    captured = _stub_pages(monkeypatch, [transient, [ROW]])
+    assert [ref.document_id for ref in source.list_documents(AGENCY)] == ["document-1"]
+    assert len(captured) == 2
+
+
+@pytest.mark.parametrize("status", [400, 404, 501])
+def test_a_permanent_resql_error_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, status: int
+) -> None:
+    captured = _stub_pages(monkeypatch, [_http(status)])
+    with pytest.raises(DocumentSourceError):
+        source.watermark(AGENCY)
+    assert len(captured) == 1
+
+
+def test_the_default_policy_is_f8s(resql_settings: Settings) -> None:
+    from exporter.services.backoff import DEFAULT_POLICY
+
+    assert CkbDocumentSource(resql_settings)._backoff is DEFAULT_POLICY
 
 
 def test_document_source_has_no_destination_setting() -> None:
@@ -629,8 +803,8 @@ def test_needs_read_gates_s3_fetches_for_enumerated_timestamps(
 ) -> None:
     _stub(monkeypatch, [ROW | {"updatedAt": updated_at}])
     if expected_read:
-        _object(s3, "uploads/cleaned.txt", b"text")
         _object(s3, "uploads/cleaned.meta.json", b"{}")
+        _object(s3, "uploads/cleaned.txt", b"text")
     fingerprint = published_entry.chunker_fingerprint
     results = [
         reader.read(ref)
@@ -649,10 +823,10 @@ def test_read_normalises_and_hashes_without_changing_source_fields(
     ref = replace(unread_ref, metadata_key="s3://ckb/uploads/cleaned.meta.json")
     raw = "\ufeffO\u0303pe\r\n".encode()
     metadata = {"title": "Õpe", "source_url": ref.url}
-    content_body = _object(s3, "uploads/edited.txt", raw)
     sidecar_body = _object(
         s3, "uploads/cleaned.meta.json", json.dumps(metadata).encode()
     )
+    content_body = _object(s3, "uploads/edited.txt", raw)
     result = reader.read(ref)
     assert result.text == "Õpe"
     assert unicodedata.is_normalized("NFC", result.text)
@@ -684,8 +858,8 @@ def test_both_key_formats(
     content_key: str,
     metadata_key: str,
 ) -> None:
-    _object(s3, "uploads/edited.txt", b"text")
     _object(s3, "metadata.json", b"{}")
+    _object(s3, "uploads/edited.txt", b"text")
     result = reader.read(
         replace(unread_ref, content_key=content_key, metadata_key=metadata_key)
     )
@@ -721,13 +895,11 @@ def test_invalid_keys_skip_without_reading_the_invalid_object(
     field: str,
     key: str,
 ) -> None:
+    """unread_ref has no sidecar, so neither case reads anything: an invalid
+    sidecar key is refused before the content is fetched."""
     ref = replace(unread_ref, **{field: key})
-    if field == "metadata_key":
-        _object(s3, "uploads/edited.txt", b"text")
     _assert_skip(reader.read(ref), ref, f"{field}_invalid")
-    assert client_factory.return_value.get_object.call_count == (
-        1 if field == "metadata_key" else 0
-    )
+    assert client_factory.return_value.get_object.call_count == 0
 
 
 @pytest.mark.parametrize("declared_oversize", [True, False])
@@ -780,7 +952,6 @@ def test_absent_sidecar_is_parsed_according_to_policy(
         read_settings.model_copy(update={"require_metadata_sidecar": required})
     )
     ref = replace(unread_ref, metadata_key="metadata.json" if missing_object else None)
-    _object(s3, "uploads/edited.txt", b"text")
     if missing_object:
         s3.add_client_error(
             "get_object",
@@ -788,6 +959,9 @@ def test_absent_sidecar_is_parsed_according_to_policy(
             http_status_code=404,
             expected_params={"Bucket": "ckb", "Key": "metadata.json"},
         )
+    if not required:
+        # A required sidecar that is absent skips before the content is read.
+        _object(s3, "uploads/edited.txt", b"text")
     result = reader.read(ref)
     if required:
         _assert_skip(result, ref, SidecarRejection.MISSING.value)
@@ -808,19 +982,31 @@ def test_absent_sidecar_is_parsed_according_to_policy(
         (b"x", MAX_SIDECAR_BYTES + 1, SidecarRejection.TOO_LARGE),
         (b"x" * (MAX_SIDECAR_BYTES + 2), 1, SidecarRejection.TOO_LARGE),
     ],
+    # Short ids: the oversize body would otherwise become a test id longer
+    # than Windows allows in PYTEST_CURRENT_TEST.
+    ids=[
+        "invalid-json",
+        "undecodable",
+        "not-an-object",
+        "declared-oversize",
+        "oversize",
+    ],
 )
 def test_rejected_sidecar_skips_and_closes_body(
     reader: CkbDocumentSource,
     unread_ref: DocumentRef,
     s3: Stubber,
+    client_factory: Mock,
     metadata: bytes,
     length: int | None,
     reason: SidecarRejection,
 ) -> None:
+    """The sidecar is checked first, so its rejection costs one small GET
+    and the content is never downloaded."""
     ref = replace(unread_ref, metadata_key="metadata.json")
-    _object(s3, "uploads/edited.txt", b"text")
     body = _object(s3, "metadata.json", metadata, length=length)
     _assert_skip(reader.read(ref), ref, reason.value)
+    assert client_factory.return_value.get_object.call_count == 1
     assert body.closed
     assert body.read_sizes == (
         [] if length and length > MAX_SIDECAR_BYTES else [MAX_SIDECAR_BYTES + 1]
@@ -858,8 +1044,8 @@ def test_s3_failures_raise_instead_of_skipping(
     status: int,
 ) -> None:
     ref = replace(unread_ref, metadata_key="metadata.json")
-    if sidecar_error:
-        _object(s3, "uploads/edited.txt", b"text")
+    if not sidecar_error:
+        _object(s3, "metadata.json", b"{}")
     s3.add_client_error("get_object", code, http_status_code=status)
     with pytest.raises(StoreError):
         reader.read(ref)
@@ -922,9 +1108,75 @@ def test_client_is_lazy_reused_and_given_explicit_credentials(
     assert client_factory.call_args.args == ("s3",)
     kwargs = client_factory.call_args.kwargs
     assert kwargs["endpoint_url"] == "http://source.invalid:9000"
-    assert kwargs["config"].retries == {"total_max_attempts": 1}
+    # F8 for CKB's bucket: botocore's standard mode, as for the destination.
+    assert kwargs["config"].retries == {"mode": "standard", "total_max_attempts": 3}
     assert kwargs["config"].connect_timeout == read_settings.ckb_s3_connect_timeout
     assert kwargs["config"].read_timeout == read_settings.ckb_s3_read_timeout
+
+
+class _Raw(io.BytesIO):
+    """A raw HTTP body as botocore reads it: streamed and read."""
+
+    def stream(self, **_kwargs: object) -> Iterator[bytes]:
+        yield self.getvalue()
+
+
+_SLOW_DOWN = (503, b"<Error><Code>SlowDown</Code></Error>")
+_INTERNAL = (500, b"<Error><Code>InternalError</Code></Error>")
+_DENIED = (403, b"<Error><Code>AccessDenied</Code></Error>")
+_TEXT = (200, b"text")
+
+
+@pytest.mark.parametrize(
+    "answers, attempts, outcome",
+    [
+        ([_SLOW_DOWN, _TEXT], 2, "read"),
+        ([_INTERNAL, _TEXT], 2, "read"),
+        ([_DENIED], 1, "raised"),
+        # Three in all, counting the first: total_max_attempts, not botocore's
+        # max_attempts, which would be read as retries and make it four.
+        ([_SLOW_DOWN] * 4, 3, "raised"),
+    ],
+    ids=["throttled", "server-error", "denied", "throttled-every-time"],
+)
+def test_ckb_reads_retry_transient_s3_errors_through_botocore(
+    read_settings: Settings,
+    unread_ref: DocumentRef,
+    answers: list[tuple[int, bytes]],
+    attempts: int,
+    outcome: str,
+) -> None:
+    """F8 for CKB's bucket, through botocore's real retry handler. Stubber
+    returns before that handler runs, so it cannot show a retry; a
+    before-send response is processed exactly like one off the wire."""
+    from botocore.awsrequest import AWSResponse
+
+    responses = [
+        AWSResponse(
+            "http://source.invalid",
+            status,
+            {"Content-Length": str(len(body))} if status == 200 else {},
+            _Raw(body),
+        )
+        for status, body in answers
+    ]
+    sent: list[object] = []
+
+    def respond(request: object, **_kwargs: object) -> AWSResponse:
+        sent.append(request)
+        return responses[len(sent) - 1]
+
+    source = CkbDocumentSource(read_settings)
+    bucket = source._bucket
+    bucket._ensure_client()
+    bucket._client.meta.events.register("before-send.s3.GetObject", respond)
+
+    if outcome == "read":
+        assert source.read(unread_ref).text == "text"
+    else:
+        with pytest.raises(StoreError):
+            source.read(unread_ref)
+    assert len(sent) == attempts
 
 
 def test_concurrent_first_reads_share_one_client(

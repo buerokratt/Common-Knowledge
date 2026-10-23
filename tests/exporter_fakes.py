@@ -17,19 +17,46 @@ pytest puts it on sys.path.
 - live_s3_store_or_skip builds an S3Store from CONFORMANCE_S3_* or skips the
   calling test. It is the only thing here that reaches a network, and only
   when those variables are set.
+- FakeDocumentSource stands in for Stage E's Resql+S3 document source. It
+  hashes and parses with the real core functions, so the coordinator sees
+  exactly what a real read would hand it.
+- patch_wiring points the worker task — and through it the CLI and the
+  endpoint's child — at these fakes, with A17's agency check stubbed.
 """
 
 import hashlib
+import json
 import os
 import re
+import threading
 from collections.abc import Iterable, Iterator, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
-from exporter.core.ids import document_chunk_key, document_metadata_key
-from exporter.core.schemas import Chunk, DocumentRecord
+from exporter.core.chunking import Chunker
+from exporter.core.constants import CHUNK_PROFILES
+from exporter.core.ids import (
+    chunker_fingerprint,
+    document_chunk_key,
+    document_metadata_key,
+)
+from exporter.core.metadata import SidecarRejection, parse_sidecar
+from exporter.core.schemas import (
+    AgencyWatermark,
+    Chunk,
+    DocumentRecord,
+    DocumentRef,
+    ReadDocument,
+)
+from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
+from exporter.services.document_source import DocumentSource
+from exporter.services.manifest_service import ManifestService
+from exporter.services.manifest_store import ManifestStore
+from exporter.services.publish_service import PublishCoordinator
+from exporter.services.run_state import RunStateStore
 from exporter.sinks.base import (
     ContentSink,
     DocumentProbe,
@@ -59,6 +86,7 @@ FULL_SINK_CAPABILITIES = SinkCapabilities(
     supports_batch_delete=True,
     atomic_per_document=False,
     supports_agency_scoped_delete=True,
+    max_concurrency=16,
 )
 
 INJECTED_FAILURE = "InjectedFailure"
@@ -85,10 +113,15 @@ class InMemoryStore(ExternalStoreClient):
     """A dict-backed ExternalStoreClient with injectable failures.
 
     - `fail_keys`: get/exists/put on these raise StoreError — an outage, not
-      an absence.
+      an absence. Retryable.
+    - `permanent_fail_keys`: the same, but the StoreError is permanent — a
+      refused credential, a missing bucket (F19).
     - `fail_delete_keys`: delete_many reports these as failed, per item.
     - `unreported_delete_keys`: the backend "forgets" these in its outcome,
       which the base class must turn into failures.
+
+    Thread-safe, because the coordinator upserts from worker threads (F16):
+    every operation holds one lock, and a listing is a snapshot.
     """
 
     def __init__(
@@ -96,22 +129,27 @@ class InMemoryStore(ExternalStoreClient):
         *,
         capabilities: StoreCapabilities = FULL_STORE_CAPABILITIES,
         fail_keys: Iterable[str] = (),
+        permanent_fail_keys: Iterable[str] = (),
         fail_delete_keys: Iterable[str] = (),
         unreported_delete_keys: Iterable[str] = (),
     ) -> None:
         self._capabilities = capabilities
         self.fail_keys = set(fail_keys)
+        self.permanent_fail_keys = set(permanent_fail_keys)
         self.fail_delete_keys = set(fail_delete_keys)
         self.unreported_delete_keys = set(unreported_delete_keys)
         self.objects: dict[str, StoredObject] = {}
         # (verb, key-or-keys) in the order the backend saw them.
         self.calls: list[tuple[str, object]] = []
+        self._lock = threading.Lock()
 
     @property
     def capabilities(self) -> StoreCapabilities:
         return self._capabilities
 
     def _check(self, key: str) -> None:
+        if key in self.permanent_fail_keys:
+            raise StoreError(f"{INJECTED_FAILURE} for {key}", permanent=True)
         if key in self.fail_keys:
             raise StoreError(f"{INJECTED_FAILURE} for {key}")
 
@@ -123,43 +161,51 @@ class InMemoryStore(ExternalStoreClient):
         content_type: str,
         metadata: Mapping[str, str],
     ) -> StoreObject:
-        self.calls.append(("put", key))
-        self._check(key)
-        self.objects[key] = StoredObject(payload, content_type, dict(metadata))
+        with self._lock:
+            self.calls.append(("put", key))
+            self._check(key)
+            self.objects[key] = StoredObject(payload, content_type, dict(metadata))
         etag = hashlib.sha256(payload).hexdigest()[:32]
         return StoreObject(key=key, size_bytes=len(payload), etag=etag)
 
     def _get_bytes(self, key: str) -> bytes | None:
-        self.calls.append(("get", key))
-        self._check(key)
-        stored = self.objects.get(key)
+        with self._lock:
+            self.calls.append(("get", key))
+            self._check(key)
+            stored = self.objects.get(key)
         return None if stored is None else stored.payload
 
     def _exists(self, key: str) -> bool:
-        self.calls.append(("exists", key))
-        self._check(key)
-        return key in self.objects
+        with self._lock:
+            self.calls.append(("exists", key))
+            self._check(key)
+            return key in self.objects
 
     def _list_keys(self, prefix: str) -> Iterator[StoreObject]:
-        self.calls.append(("list", prefix))
-        for key in sorted(self.objects):
-            if key.startswith(prefix):
-                yield StoreObject(key=key, size_bytes=len(self.objects[key].payload))
+        with self._lock:
+            self.calls.append(("list", prefix))
+            listed = [
+                StoreObject(key=key, size_bytes=len(stored.payload))
+                for key, stored in sorted(self.objects.items())
+                if key.startswith(prefix)
+            ]
+        yield from listed
 
     def _delete_many(self, keys: tuple[str, ...]) -> DeleteOutcome[str]:
-        self.calls.append(("delete", keys))
         deleted: list[str] = []
         missing: list[str] = []
         failed: dict[str, str] = {}
-        for key in keys:
-            if key in self.unreported_delete_keys:
-                continue
-            if key in self.fail_delete_keys:
-                failed[key] = INJECTED_FAILURE
-            elif self.objects.pop(key, None) is not None:
-                deleted.append(key)
-            else:
-                missing.append(key)
+        with self._lock:
+            self.calls.append(("delete", keys))
+            for key in keys:
+                if key in self.unreported_delete_keys:
+                    continue
+                if key in self.fail_delete_keys:
+                    failed[key] = INJECTED_FAILURE
+                elif self.objects.pop(key, None) is not None:
+                    deleted.append(key)
+                else:
+                    missing.append(key)
         return DeleteOutcome(
             deleted=tuple(deleted), missing=tuple(missing), failed=failed
         )
@@ -310,9 +356,15 @@ class RecordingSink(ContentSink):
         except StoreError as exc:
             # A failed write is an outcome, not an exception (F18): the
             # coordinator counts it and keeps the previous manifest entry.
+            # Permanence is carried through, as ObjectStoreSink does, so the
+            # systemic-failure abort (F19) sees what the store said.
             return UpsertOutcome(
                 document_id=record.document_id,
-                status=UpsertStatus.FAILED_RETRYABLE,
+                status=(
+                    UpsertStatus.FAILED_PERMANENT
+                    if exc.permanent
+                    else UpsertStatus.FAILED_RETRYABLE
+                ),
                 chunks_written=written,
                 metadata_only=chunks is None,
                 detail=str(exc),
@@ -368,6 +420,15 @@ class RecordingSink(ContentSink):
     def _sweep_stale(self, before: datetime) -> DeleteOutcome[str]:
         raise NotSupported("RecordingSink keeps no synced_at index")
 
+    def _holds_agency_content(self) -> bool:
+        prefix = f"{self.PREFIX}/agencies/{self.agency_id}/documents/"
+        # Parse, never count (D12): only a record or a chunk is content.
+        return any(
+            obj.key.endswith("/metadata.json")
+            or _CHUNK_NAME.fullmatch(obj.key.rsplit("/", 1)[1]) is not None
+            for obj in self.store.list_keys(prefix)
+        )
+
     def _read_document(self, document_id: str) -> DocumentProbe | None:
         record_present = self.store.exists(self._metadata_key(document_id))
         ordinals = tuple(self._chunk_ordinals(document_id))
@@ -379,3 +440,163 @@ class RecordingSink(ContentSink):
             chunk_count=len(ordinals),
             chunk_ordinals=ordinals,
         )
+
+
+def make_row(
+    document_id: str,
+    *,
+    agency_id: str = "agency-1",
+    updated_at: str = "2026-10-01T09:00:00Z",
+    status: str = "finished",
+    is_deleted: bool = False,
+    is_excluded: bool = False,
+    content_origin: str | None = "cleaned",
+    source_base_id: str = "source-1",
+) -> DocumentRef:
+    """An unread row as list_agency_export_documents.sql would return it."""
+    has_content = content_origin is not None
+    return DocumentRef(
+        document_id=document_id,
+        source_base_id=source_base_id,
+        agency_id=agency_id,
+        url=f"https://www.eesti.ee/{document_id}",
+        page_title=f"Title {document_id}",
+        subsector="",
+        status=status,
+        is_excluded=is_excluded,
+        is_deleted=is_deleted,
+        updated_at=updated_at,
+        content_key=f"uploads/{document_id}/{content_origin}.md"
+        if has_content
+        else None,
+        metadata_key=(
+            f"uploads/{document_id}/{content_origin}.meta.json" if has_content else None
+        ),
+        content_origin=content_origin,
+        file_size=None,
+    )
+
+
+@dataclass
+class FakeDocument:
+    row: DocumentRef
+    text: str
+    sidecar: Mapping[str, object] | None
+    skip_reason: str | None = None
+
+
+class FakeDocumentSource(DocumentSource):
+    """Rows plus each document's text and sidecar, with a read log and
+    injectable read failures. A read normalises and hashes with the real
+    core functions and parses the sidecar with the real parser."""
+
+    def __init__(self) -> None:
+        self.documents: dict[str, FakeDocument] = {}
+        self.reads: list[str] = []
+        self.fail_reads: set[str] = set()
+        self.listed = 0
+
+    def put(
+        self,
+        row: DocumentRef,
+        text: str = "",
+        *,
+        sidecar: Mapping[str, object] | None = None,
+        skip_reason: str | None = None,
+    ) -> DocumentRef:
+        """Add or replace a document. The default sidecar cites the row."""
+        if sidecar is None:
+            sidecar = {"source_url": row.url, "page_title": row.page_title}
+        self.documents[row.document_id] = FakeDocument(row, text, sidecar, skip_reason)
+        return row
+
+    def remove(self, document_id: str) -> None:
+        del self.documents[document_id]
+
+    def watermark(self, agency_id: str) -> AgencyWatermark:
+        rows = [d.row for d in self.documents.values() if d.row.agency_id == agency_id]
+        return AgencyWatermark(
+            max_updated_at=max((r.updated_at for r in rows), default=None),
+            live_count=sum(1 for r in rows if not r.is_deleted),
+        )
+
+    def list_documents(self, agency_id: str) -> list[DocumentRef]:
+        self.listed += 1
+        return [d.row for d in self.documents.values() if d.row.agency_id == agency_id]
+
+    def read(self, ref: DocumentRef) -> ReadDocument:
+        self.reads.append(ref.document_id)
+        if ref.document_id in self.fail_reads:
+            raise StoreError(f"{INJECTED_FAILURE} reading {ref.document_id}")
+        document = self.documents[ref.document_id]
+        if document.skip_reason is not None:
+            return ReadDocument(
+                replace(ref, skip_reason=document.skip_reason), None, None
+            )
+        data = None if document.sidecar is None else json.dumps(document.sidecar)
+        parsed = parse_sidecar(
+            None if data is None else data.encode("utf-8"),
+            row_url=ref.url,
+            require_sidecar=True,
+        )
+        if isinstance(parsed, SidecarRejection):
+            return ReadDocument(replace(ref, skip_reason=parsed.value), None, None)
+        raw = document.text.encode("utf-8")
+        text = normalise_nfc(document.text)
+        return ReadDocument(
+            replace(
+                ref,
+                raw_sha256=sha256_hex(raw),
+                content_sha256=sha256_text(text),
+                metadata_sha256=parsed.metadata_sha256,
+            ),
+            text,
+            parsed,
+        )
+
+
+MANIFEST_PREFIX = "manifests"
+
+
+def patch_wiring(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    source: DocumentSource,
+    sink: ContentSink,
+    manifest_client: ExternalStoreClient,
+    checkpoint_every: int = 250,
+) -> None:
+    """Make exporter.worker.tasks build its coordinator over these fakes, and
+    stub A17's agency check, so the task, the CLI and the endpoint's child
+    run end to end with no network. The compact profile keeps chunks small."""
+    profile = CHUNK_PROFILES["compact"]
+
+    def build(
+        _settings: object,
+        *,
+        agency_id: str,
+        work_dir: Path,
+        run_state: RunStateStore | None,
+        source_factory: object = None,
+    ) -> PublishCoordinator:
+        assert agency_id == sink.agency_id
+        return PublishCoordinator(
+            sink=sink,
+            manifests=ManifestService(
+                ManifestStore(manifest_client, prefix=MANIFEST_PREFIX),
+                sink_id=sink.sink_id,
+                on_missing="first_run",
+            ),
+            source=source,
+            chunker=Chunker.from_profile(profile),
+            chunker_fingerprint=chunker_fingerprint(profile),
+            work_dir=work_dir,
+            max_chunks_per_document=5000,
+            bootstrap_checkpoint_every=checkpoint_every,
+            concurrency=4,
+            sink_failure_abort_threshold=25,
+            run_state=run_state,
+        )
+
+    monkeypatch.setattr("exporter.worker.tasks.build_coordinator", build)
+    monkeypatch.setattr("exporter.worker.tasks.require_single_agency", lambda _s: 1)

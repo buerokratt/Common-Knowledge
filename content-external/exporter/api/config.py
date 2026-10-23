@@ -230,9 +230,9 @@ class Settings(BaseSettings):
     llm_module_vault_secret_path: str = ""
 
     # --- this service's own durable volume ---------------------------------
-    # Holds only the run lock (F2) and the deferred-deletion journal. Both
-    # must survive a restart, and it must never be under a scrapped-data tree
-    # (rule 1).
+    # Holds the run lock (F2) and the deferred-deletion journal, which must
+    # survive a restart, plus the last-run and dead-letter records, which are
+    # rebuilt if lost. It must never be under a scrapped-data tree (rule 1).
     #
     # REQUIRED, with no default, on purpose. A code default is what makes a
     # deployment that forgets to set it fail silently: the process would come
