@@ -33,8 +33,9 @@ report's skipped count and its reasons, rather than comparing totals alone.
 
 This deployment is configured for `CONTENT_SINK=object_store`. Confirm the
 running value using [Which sink is this deployment running?](README.md#which-sink-is-this-deployment-running).
-On a non-listable sink such as `llm_module`, reconcile reports `unverifiable`
-rather than `clean`. A failed run may mean the destination is down rather
+On a non-listable sink such as `llm_module`, reconcile (not built yet) can
+only report `unverifiable`, never `clean`; see
+[Sink parity](README.md#sink-parity--what-each-sink-can-and-cant-do). A failed run may mean the destination is down rather
 than that CKB is wrong.
 
 If `duration_seconds` routinely approaches the schedule interval, or

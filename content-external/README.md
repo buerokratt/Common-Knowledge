@@ -30,7 +30,7 @@ it is checked against anything else.
 The `scheduler-gate` workflow runs `tests/test_scheduler_yml.py` on every
 change to `DSL/CronManager/` or `DSL/CronManagerScripts/`, so a broken
 `scheduler.yml` or any edit to `trigger_zipping`, the Classifier's producer,
-fails before merge.
+fails the PR's `scheduler-gate` check.
 
 ## Setup
 
@@ -472,12 +472,12 @@ existence-checked and returns `409 Conflict`. This service **asserts it
 anyway**, because it is the one place where "one agency is N=1, not a special
 case" is not true.
 
-The scheduled trigger fans out from `list_agencies` and POSTs one export per
-agency, and the export takes a **single whole-run lock**. With two agencies,
-the second POST finds the lock held, reports `busy` and **exits 0** — every
-hour, forever, with nothing logged as an error, because a concurrent run is by
-design not a failure. The second agency would simply never be exported, and
-nothing would say so.
+The scheduled trigger reads `list_agencies` with `page_size: 1` and
+`name asc` and POSTs only that first agency. With two agencies the second is
+**never posted**: the first agency's runs keep succeeding, every hour,
+forever, with nothing logged as an error. The second agency would simply never
+be exported, and nothing would say so. The check below makes every run fail
+instead.
 
 The check runs in two places, deliberately asymmetric:
 
