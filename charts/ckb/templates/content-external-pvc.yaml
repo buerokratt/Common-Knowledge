@@ -1,6 +1,7 @@
 {{- if .Values.contentExternal.enabled }}
 # A14: this PVC is not optional — it holds F2's run lock and the deletion
-# journal. It must be block/local-backed (RWO), never RWX (NFS/EFS/CephFS),
+# journal (and the last-run and dead-letter records, which are rebuilt if
+# lost). It must be block/local-backed (RWO), never RWX (NFS/EFS/CephFS),
 # because flock is only sound within one kernel.
 #
 # Rule 1 is asserted in _helpers.tpl (ckb.contentExternal.workDir), which the

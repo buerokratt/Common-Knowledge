@@ -1,7 +1,7 @@
 """Advisory file locking on CONTENT_WORK_DIR.
 
-This is the primitive F2 builds the whole-run lock on, written here because
-A14 needs the same mechanism for its startup self-test. One flock
+This is the primitive F2's whole-run lock (`run_lock`, below) is built on,
+written here because A14 needs the same mechanism for its startup self-test. One flock
 implementation, not two: if the self-test and the real lock could diverge,
 the self-test would stop being evidence about the real lock.
 
@@ -121,6 +121,23 @@ def try_exclusive_lock(path: Path) -> Iterator[bool]:
         if acquired:
             _unlock_fd(fd)
         os.close(fd)
+
+
+RUN_LOCK_FILENAME = ".run.lock"
+
+
+@contextmanager
+def run_lock(work_dir: Path) -> Iterator[bool]:
+    """F2's whole-run lock: yield whether this process may run.
+
+    One lock per volume, taken before anything else a run does. False means
+    another export or drain holds it, and the caller reports `busy` and exits
+    0 having written nothing. `drain_deletions` (J1) must take this same lock
+    and not one of its own: a drain deleting a key an export has just
+    re-published is the overlap that corrupts state (flagged risk 8).
+    """
+    with try_exclusive_lock(work_dir / RUN_LOCK_FILENAME) as acquired:
+        yield acquired
 
 
 def filesystem_type(path: Path) -> str | None:

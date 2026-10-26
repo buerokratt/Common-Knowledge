@@ -71,7 +71,7 @@ from exporter.sinks.base import (
 )
 from exporter.stores.base import DeleteOutcome, ExternalStoreClient
 
-__all__ = ["NOT_ATTEMPTED_REASON", "ObjectStoreSink", "roll_up"]
+__all__ = ["MAX_CONCURRENCY", "NOT_ATTEMPTED_REASON", "ObjectStoreSink", "roll_up"]
 
 # The key remainder after `.../documents/`: one document segment, then either
 # its record or one five-digit chunk. Anything else is not ours to count.
@@ -90,6 +90,11 @@ _MAX_ROLLED_UP_REASONS = 3
 
 # Reported for each document a failed store call left unattempted.
 NOT_ATTEMPTED_REASON = "not-attempted-after-store-error"
+
+# F16. An object store absorbs 8-16 parallel writers without self-inflicted
+# throttling, and each in-flight document is a handful of small PUTs. The top
+# of that range, so EXPORT_CONCURRENCY (itself capped at 16) is what decides.
+MAX_CONCURRENCY = 16
 
 
 def roll_up[T: Hashable](item: T, outcome: DeleteOutcome[str]) -> DeleteOutcome[T]:
@@ -155,6 +160,7 @@ class ObjectStoreSink(ContentSink):
             supports_batch_delete=store.supports_batch_delete,
             atomic_per_document=False,
             supports_agency_scoped_delete=store.can_list,
+            max_concurrency=MAX_CONCURRENCY,
         )
 
     # -- layout ------------------------------------------------------------
@@ -351,6 +357,15 @@ class ObjectStoreSink(ContentSink):
             "the object-store sink sweeps orphans by the ordinal tail rule "
             "(read_document + delete_chunks, J5); the synced_at sweep is the "
             "non-listable sinks' path (L10)"
+        )
+
+    def _holds_agency_content(self) -> bool:
+        """F21. The first listed key that parses as a record or a chunk
+        answers; a pseudo-directory or a stray does not (D12). Scoped to
+        `documents/`, so an inherited manifest beside it never counts."""
+        return any(
+            self._parse(obj.key) is not None
+            for obj in self._store.list_keys(self._documents_prefix)
         )
 
     def _read_document(self, document_id: str) -> DocumentProbe | None:

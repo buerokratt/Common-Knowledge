@@ -16,8 +16,10 @@ from exporter.core.constants import (
 from exporter.core.schemas import (
     Chunk,
     DocumentRecord,
+    DocumentRef,
     Manifest,
     ManifestDocumentEntry,
+    ParsedSidecar,
     RunReport,
     TextSpan,
     to_json_dict,
@@ -85,7 +87,9 @@ def record(source: dict[str, Any]) -> DocumentRecord:
 def test_every_schema_is_found() -> None:
     names = {cls.__name__ for cls in SCHEMA_CLASSES}
     assert names >= {
+        "AgencyWatermark",
         "DocumentRef",
+        "ReadDocument",
         "Chunk",
         "TextSpan",
         "Manifest",
@@ -193,6 +197,27 @@ def test_chunk_serialises_its_span_as_an_object() -> None:
     }
 
 
+def test_a_chunk_repr_carries_no_text() -> None:
+    """F13. A Chunk in an f-string, an assertion message or a traceback must
+    not carry document text — it is Estonian government content."""
+    chunk = Chunk(
+        chunk_id="c1",
+        document_id="d1",
+        ordinal=0,
+        text="Taotluse esitamise tähtaeg",
+        span=TextSpan(0, 26),
+    )
+    assert "Taotluse" not in repr(chunk)
+    assert "d1" in repr(chunk)
+
+
+def test_a_record_repr_carries_no_sidecar() -> None:
+    """F13. The sidecar holds the title and other document text."""
+    rendered = repr(record({"title": "Elamisloa taotlus"}))
+    assert "Elamisloa" not in rendered
+    assert "d1" in rendered
+
+
 @pytest.mark.parametrize("cls", SCHEMA_CLASSES, ids=lambda cls: cls.__name__)
 def test_to_json_dict_leaves_nothing_json_cannot_take(cls: type) -> None:
     """Every field type, filled with a representative value, survives
@@ -200,14 +225,21 @@ def test_to_json_dict_leaves_nothing_json_cannot_take(cls: type) -> None:
     samples: dict[Any, Any] = {
         str: "x",
         int: 1,
+        float: 1.5,
         bool: True,
         str | None: None,
         int | None: None,
         TextSpan: TextSpan(0, 1),
         Mapping[str, Any]: {"k": {"n": [1]}},
         Mapping[str, str]: {"k": "v"},
+        Mapping[str, int]: {"k": 1},
         Mapping[str, ManifestDocumentEntry]: {"d1": entry()},
+        ParsedSidecar | None: None,
     }
+    ref_hints = typing.get_type_hints(DocumentRef)
+    samples[DocumentRef] = DocumentRef(
+        **{f.name: samples[ref_hints[f.name]] for f in dataclasses.fields(DocumentRef)}
+    )
     hints = typing.get_type_hints(cls)
     instance = cls(**{f.name: samples[hints[f.name]] for f in dataclasses.fields(cls)})
     json.dumps(to_json_dict(instance))

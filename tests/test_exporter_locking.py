@@ -21,8 +21,10 @@ import pytest
 
 from exporter.api.config import ConfigurationError, Settings, assert_work_dir_usable
 from exporter.services.locking import (
+    RUN_LOCK_FILENAME,
     filesystem_type,
     probe_lockable,
+    run_lock,
     try_exclusive_lock,
     warn_if_locking_is_unreliable,
 )
@@ -138,6 +140,33 @@ def test_a_lock_held_by_another_process_is_refused(tmp_path: Path) -> None:
     # a crashed run cannot wedge the next one.
     with try_exclusive_lock(lock) as after:
         assert after is True
+
+
+# --------------------------------------------------------------------------
+# run_lock — F2's whole-run lock
+# --------------------------------------------------------------------------
+
+
+def test_run_lock_excludes_a_second_run_on_the_same_volume(tmp_path: Path) -> None:
+    """An export and a drain call run_lock on the same work dir; the second
+    must be told no rather than run beside the first."""
+    with run_lock(tmp_path) as first:
+        assert first is True
+        with run_lock(tmp_path) as second:
+            assert second is False
+    with run_lock(tmp_path) as again:
+        assert again is True
+
+
+def test_run_lock_is_one_file_under_the_work_dir(tmp_path: Path) -> None:
+    """One well-known file, so every caller of run_lock contends on the same
+    inode. A second lock file would be a second lock."""
+    with run_lock(tmp_path):
+        assert (tmp_path / RUN_LOCK_FILENAME).exists()
+    with try_exclusive_lock(tmp_path / RUN_LOCK_FILENAME) as raw:
+        assert raw is True
+        with run_lock(tmp_path) as acquired:
+            assert acquired is False
 
 
 # --------------------------------------------------------------------------

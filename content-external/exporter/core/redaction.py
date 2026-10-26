@@ -3,14 +3,19 @@
 Pure: no I/O, no network, and it names no destination — so it belongs under
 core/ alongside the rest of the unit-tested heart.
 
-This is a verbatim re-implementation of `sanitize_sensitive_text` from
+This is a re-implementation of `sanitize_sensitive_text` from
 cleaning/worker/utils.py:41 (which is itself mirrored in
 scrapper/scrapper/utils.py). The cross-cutting Logging rule says "reuse
 sanitize_sensitive_text", and that cannot be taken literally: each service is
 its own Docker root with its own top-level package, so a cross-service import
 is impossible without the sys.path mutation the Imports rule forbids. Same
-name and same behaviour is the closest available thing to reuse — if the
-regexes are improved in one place they should be improved in all three.
+name and same behaviour is the closest available thing to reuse.
+
+ONE DELIBERATE SUPERSET. This copy also redacts the signing parameters of a
+presigned URL (S3 SigV4 and SigV2, GCS, Azure SAS). F13 says "never a signed
+URL", and this service handles them where the other two do not. The CKB
+copies are left alone because this pipeline makes no CKB changes; port the
+extra names there if they are ever wanted.
 """
 
 import re
@@ -29,6 +34,17 @@ _SENSITIVE_PARAM_NAMES = (
     "session",
     "sessionid",
     "sid",
+    # Presigned URLs (F13): the names core/metadata.py's _SIGNED_URL_PARAMS
+    # refuses as citations. The signature is the credential; the access key
+    # id and the session token identify and extend it.
+    "x-amz-signature",
+    "x-amz-credential",
+    "x-amz-security-token",
+    "awsaccesskeyid",
+    "signature",
+    "x-goog-signature",
+    "x-goog-credential",
+    "sig",
 )
 
 _USERINFO_RE = re.compile(r"://[^\s/@]+:[^\s/@]+@")

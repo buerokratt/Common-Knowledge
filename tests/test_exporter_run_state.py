@@ -10,6 +10,7 @@ make visible.
 
 import json
 import logging
+import threading
 from dataclasses import asdict
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -20,12 +21,15 @@ from exporter.api.models import LastRunSummary
 from exporter.services.run_log import (
     DIFF_BUCKETS,
     RUN_LOG_PREFIX,
+    UPSERT_OUTCOMES,
     format_run_line,
     log_run_outcome,
     reserved_field_names,
 )
+from exporter.services.locking import try_exclusive_lock
 from exporter.services.run_state import (
     LAST_RUN_FILENAME,
+    RECORD_LOCK_FILENAME,
     RunStateStore,
     utc_now_iso,
 )
@@ -104,6 +108,76 @@ def test_no_temp_file_is_left_behind(tmp_path: Path) -> None:
     store = _store(tmp_path)
     store.record(outcome="success", run_id="r-1", agency_id="a-1", duration_seconds=1.0)
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_concurrent_records_lose_no_update(tmp_path: Path) -> None:
+    """A `busy` child records without the run lock. Unserialised, two writers
+    each read the same previous record and the counter undercounts; with a
+    shared temp name one writer's os.replace can lose the other's file."""
+    writers = 16
+    barrier = threading.Barrier(writers)
+
+    def record_busy(index: int) -> None:
+        barrier.wait()
+        _store(tmp_path).record(
+            outcome="busy", run_id=f"r-{index}", agency_id="a-1", duration_seconds=0.0
+        )
+
+    threads = [
+        threading.Thread(target=record_busy, args=(index,)) for index in range(writers)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    run = _store(tmp_path).read()
+    assert run is not None
+    assert run.consecutive_busy == writers
+    assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_a_busy_record_reads_the_previous_record_under_the_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The lost update the lock closes: a success lands between a `busy`
+    run's decision to record and its write. The busy record must build on
+    the success, not on the failure it would have read before it."""
+    store = _store(tmp_path)
+    store.record(outcome="failed", run_id="r-1", agency_id="a-1", duration_seconds=1.0)
+    assert store.read() is not None  # warm the cache with the failure
+
+    _store(tmp_path).record(
+        outcome="success", run_id="r-2", agency_id="a-1", duration_seconds=1.0
+    )
+    # Pin the cache to the stale failure, as if the write landed within one
+    # timestamp tick; record() must not trust it.
+    monkeypatch.setattr(store, "read", lambda: pytest.fail("record() used the cache"))
+    run = store.record(
+        outcome="busy", run_id="r-3", agency_id="a-1", duration_seconds=0.0
+    )
+
+    assert run.consecutive_failures == 0
+    assert run.consecutive_busy == 1
+
+
+def test_a_wedged_record_lock_still_records(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Observability only: a lock nobody releases costs the serialisation,
+    never the record."""
+    monkeypatch.setattr(
+        "exporter.services.run_state._RECORD_LOCK_TIMEOUT_SECONDS", 0.05
+    )
+    with try_exclusive_lock(tmp_path / RECORD_LOCK_FILENAME) as acquired:
+        assert acquired
+        _store(tmp_path).record(
+            outcome="success", run_id="r-1", agency_id="a-1", duration_seconds=1.0
+        )
+
+    run = _store(tmp_path).read()
+    assert run is not None
+    assert run.run_id == "r-1"
 
 
 def test_an_unknown_outcome_is_rejected(tmp_path: Path) -> None:
@@ -440,6 +514,61 @@ def test_no_bucket_can_shadow_a_reserved_field() -> None:
     assert not set(DIFF_BUCKETS) & reserved_field_names()
 
 
+def test_every_upsert_outcome_appears_even_at_zero() -> None:
+    """F18: the per-document sink outcomes, always present, so "nine items
+    failed" is one log query away."""
+    line = _line(upsert_outcomes={"published": 7, "failed_permanent": 2})
+    for status in UPSERT_OUTCOMES:
+        assert f"upsert_{status}=" in line
+    assert "upsert_published=7" in line
+    assert "upsert_failed_permanent=2" in line
+    assert "upsert_deferred=0" in line
+
+
+def test_an_unknown_upsert_outcome_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unknown upsert outcomes"):
+        _line(upsert_outcomes={"ok": 1})
+
+
+def test_the_line_says_whether_the_run_saw_the_whole_corpus() -> None:
+    """F20: a limited `success` is not a full one, and an alert or a sweep
+    reading the log must be able to tell."""
+    assert "full_corpus=false" in _line()
+    assert "full_corpus=true" in _line(full_corpus=True)
+
+
+def test_the_full_corpus_flag_survives_a_round_trip(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.record(
+        outcome="success",
+        run_id="r",
+        agency_id="a-1",
+        duration_seconds=0.1,
+        run_observed_full_corpus=False,
+    )
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    assert last.run_observed_full_corpus is False
+
+
+def test_a_record_from_before_f20_reads_the_flag_as_unknown(tmp_path: Path) -> None:
+    (tmp_path / LAST_RUN_FILENAME).write_text(
+        json.dumps(
+            {
+                "outcome": "success",
+                "run_id": "r",
+                "agency_id": "a-1",
+                "finished_at": "2026-10-01T00:00:00Z",
+                "duration_seconds": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    assert last.run_observed_full_corpus is None
+
+
 def test_fields_are_sorted_so_two_runs_diff_line_for_line() -> None:
     body = _line().removeprefix(RUN_LOG_PREFIX).strip()
     keys = [field.split("=", 1)[0] for field in body.split(" ")]
@@ -470,6 +599,73 @@ def test_an_empty_value_becomes_a_placeholder() -> None:
 
 def test_deletions_recorded_is_reported() -> None:
     assert "deletions_recorded=7" in _line(deletions_recorded=7)
+
+
+def test_error_type_is_always_present() -> None:
+    """F12. Present as `-` on a run that did not fail, by the same rule as
+    the bucket counts: an alert query must be able to rely on the field."""
+    assert "error_type=-" in _line()
+    assert "error_type=ManifestMissing" in _line(
+        outcome="failed", error_type="ManifestMissing"
+    )
+
+
+# --------------------------------------------------------------------------
+# error_type in the last-run record (F12)
+# --------------------------------------------------------------------------
+
+
+def test_a_failure_records_its_error_type(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.record(
+        outcome="failed",
+        run_id="r-1",
+        agency_id="a-1",
+        duration_seconds=1.0,
+        error_type="ConfigurationError",
+    )
+    run = _store(tmp_path).read()
+    assert run is not None
+    assert run.error_type == "ConfigurationError"
+
+
+def test_a_later_success_clears_the_error_type(tmp_path: Path) -> None:
+    """A stale type beside a success would read as a current fault."""
+    store = _store(tmp_path)
+    store.record(
+        outcome="failed",
+        run_id="r-1",
+        agency_id="a-1",
+        duration_seconds=1.0,
+        error_type="StoreError",
+    )
+    run = store.record(
+        outcome="success",
+        run_id="r-2",
+        agency_id="a-1",
+        duration_seconds=1.0,
+        error_type="StoreError",
+    )
+    assert run.error_type is None
+
+
+def test_a_record_written_before_error_type_still_reads(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.path.write_text(
+        json.dumps(
+            {
+                "outcome": "failed",
+                "run_id": "r-1",
+                "agency_id": "a-1",
+                "finished_at": "2026-10-20T10:00:00Z",
+                "duration_seconds": 1.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    run = store.read()
+    assert run is not None
+    assert run.error_type is None
 
 
 # --------------------------------------------------------------------------

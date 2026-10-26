@@ -230,9 +230,9 @@ class Settings(BaseSettings):
     llm_module_vault_secret_path: str = ""
 
     # --- this service's own durable volume ---------------------------------
-    # Holds only the run lock (F2) and the deferred-deletion journal. Both
-    # must survive a restart, and it must never be under a scrapped-data tree
-    # (rule 1).
+    # Holds the run lock (F2) and the deferred-deletion journal, which must
+    # survive a restart, plus the last-run and dead-letter records, which are
+    # rebuilt if lost. It must never be under a scrapped-data tree (rule 1).
     #
     # REQUIRED, with no default, on purpose. A code default is what makes a
     # deployment that forgets to set it fail silently: the process would come
@@ -265,13 +265,17 @@ class Settings(BaseSettings):
     # --- CKB ---------------------------------------------------------------
     ruuter_internal: str = "http://ruuter-internal:8089"
     ckb_resql: str = "http://resql-ckb:8090/ckb"
+    ckb_resql_timeout: Annotated[float, Field(gt=0)] = 30.0
+    export_page_size: Annotated[int, Field(ge=1)] = 1_000
 
     # --- reading CKB's own bucket — read-only credentials -------------------
     s3_endpoint_url: str = ""
     s3_bucket_name: str = ""
     aws_access_key_id: SecretStr = SecretStr("")
     aws_secret_access_key: SecretStr = SecretStr("")
-    aws_region: str = ""
+    aws_region: str = "us-east-1"
+    ckb_s3_connect_timeout: Annotated[float, Field(gt=0)] = 5.0
+    ckb_s3_read_timeout: Annotated[float, Field(gt=0)] = 60.0
 
     # --- the external destination — a DIFFERENT bucket and credentials ------
     # Not required at startup: nothing builds the destination store until a

@@ -54,9 +54,12 @@ it — see the note in the table below.
 
 | Variable | Required | Description |
 |---|---|---|
-| `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds only the run lock and the deletion journal. Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
+| `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds the run lock, the deletion journal, the last-run record and the dead-letter record (`_dead_letter/`). Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
 | `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | no | Vault Agent sidecar, credentials fetched per task. `VAULT_SECRET_PATH` has no default — the Stage-H Azure value is `blob/connections/azure_blob/content` |
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
+| `EXPORT_PAGE_SIZE` | no (default `1000`, minimum `1`) | Documents per Resql keyset page. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
+| `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit). For the same reason a read timeout is never retried, while connection errors, 429 and 5xx are (F8) |
+| `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each attempt to read from CKB's own bucket. Throttles, 5xx, connection errors and timeouts are retried by botocore's standard mode, up to 3 attempts in all (F8); a read that still fails fails the run, and the next tick is the retry |
 | `CHUNK_PROFILE` | required for `llm_module`; optional for `object_store` (default `azure_native`) | Chunk geometry preset: `azure_native` (target 1200 / overlap 200 / min 200 / max 2000 chars) or `compact` (450 / 80 / 120 / 700). Overlap is capped at min − 1 so no chunk can fall wholly inside the one before it, which makes `azure_native`'s effective overlap 199. Pinned per deployment alongside the sink, because whoever embeds the chunks decides what fits: on `llm_module` a chunk over the embedder's token budget is silently truncated. An unknown name is refused at startup. Changing it re-chunks the whole corpus on the next run via the chunker fingerprint — and on `llm_module` re-embeds it, so do it as an announced, operator-driven run. A new preset is a reviewed row in `exporter/core/constants.py`, never four separate settings |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
 | `EXTERNAL_S3_ENDPOINT_URL` / `EXTERNAL_S3_BUCKET_NAME` | for a run on `object_store` + `s3` | The destination: any S3-compatible endpoint (SeaweedFS, MinIO, AWS), chosen by URL alone. Path-style addressing. Not checked at startup, so `/health` comes up before a destination exists. A run refuses and names every missing variable |
@@ -66,6 +69,29 @@ it — see the note in the table below.
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
+| `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; the llm-module's is its owner's to state), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
+| `SINK_FAILURE_ABORT_THRESHOLD` | no (default `25`) | Consecutive **permanent** upsert failures (a refused credential, a missing bucket, a wrong base URL) after which the run aborts with nothing committed and reports `failed` / `SystemicSinkFailure`. A published document resets the count, and retryable failures never count. One permanent failure is a document's problem: it is held and retried. This many in a row is the destination's |
+| `DIFF_ON_MISSING_MANIFEST` | no (default `first_run`) | `first_run` treats a missing manifest as a bootstrap. `fail` refuses it. Flip to `fail` once the bootstrap is done. Even under `first_run`, a first run refuses a destination that already holds the agency's content (see *Running an export*) |
+| `BOOTSTRAP_CHECKPOINT_EVERY` | no (default `250`) | On a first run, commit the manifest every N published documents, with the watermark withheld, so a killed bootstrap resumes |
+
+### Reading CKB's bucket
+
+Set `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`,
+`AWS_SECRET_ACCESS_KEY` and `AWS_REGION` for CKB's own bucket. Compose takes
+these from the root `.env`; the chart uses `contentExternal.sourceBucket`,
+with the access key and secret supplied through its `secret` reference.
+The client is created on the first document read, so enumeration needs no
+bucket credentials. Missing endpoint, bucket or credentials fail that read.
+
+Use a dedicated key with **`s3:GetObject` only**. Enumeration comes from
+Resql, so no `s3:ListBucket` permission is needed. Without it, S3 can answer
+403 for a missing object; that is indistinguishable from denied access and
+therefore fails the run. A definitive object 404 is handled as missing.
+
+These are a different bucket and credentials from `EXTERNAL_S3_*`, which
+publishes the output. Reusing file-processing's keys is acceptable for
+**local development only**. The reader always uses its own boto3 client
+and never calls file-processing (Global Classifier rule 6).
 
 ### The startup validation matrix
 
@@ -145,10 +171,20 @@ curl -s localhost:8125/health | jq
     "finished_at": "2026-09-16T17:04:11Z",
     "duration_seconds": 251.4,
     "consecutive_failures": 3,
-    "consecutive_busy": 0
+    "consecutive_busy": 0,
+    "error_type": "StoreError",
+    "run_observed_full_corpus": false
   }
 }
 ```
+
+`error_type` is the exception class behind a `failed` run, and only that: this
+endpoint is unauthenticated. The sanitised message is in the
+`content-external error` log line (below).
+
+`run_observed_full_corpus` is true only for a run that classified every row.
+A `--limit` run, an aborted run and any `busy` or `failed` run report false.
+It is `null` on a record written before the field existed.
 
 `last_run` is `null` until a run completes — an hourly job that has never run
 is not the same as one that ran and succeeded.
@@ -162,7 +198,7 @@ is not the same as one that ran and succeeded.
 > surface.
 
 The record lives in `{CONTENT_WORK_DIR}/last_run.json` rather than in memory,
-because an export runs in a forked process and the CLI is a different process
+because an export runs in a spawned process and the CLI is a different process
 again — an in-memory value would read `null` forever in production. It is one
 record, overwritten; **history outliving the container is deferred work**, not
 this.
@@ -176,15 +212,31 @@ docker logs content-external | grep 'content-external run'
 ```
 content-external run agency_id=… deletions_recorded=0 docs_content_changed=4 \
   docs_deleted=1 docs_metadata_changed=0 docs_new=12 docs_skipped=3 \
-  docs_unchanged=340 duration_seconds=251.400 outcome=success \
-  run_id=r-2026-09-16T17 sink=object_store
+  docs_unchanged=340 duration_seconds=251.400 error_type=- full_corpus=true \
+  outcome=success run_id=r-2026-09-16T17 sink=object_store upsert_deferred=0 \
+  upsert_failed_permanent=1 upsert_failed_retryable=0 upsert_published=15
 ```
+
+The `upsert_*` fields count every upsert by its outcome. A `success` with
+non-zero failures is a run whose failed documents keep their previous
+manifest entry and are retried next tick. The report names each one in
+`publish_failures`, with its status, or with `rechunk_count_mismatch` for a
+document held because re-chunking its unchanged content disagreed with the
+published count. `full_corpus` is `run_observed_full_corpus`.
 
 Stable prefix, sorted `key=value` fields, every bucket present even at zero —
 so an alert rule is a log query and not a code change, and two runs diff
 line-for-line. `failed` lands at `ERROR` and everything else at `INFO`,
 including `busy`, which is by design not an error. The startup config echo
 follows the same convention under `content-external config`.
+
+A run that fails **before** the export can report itself — a configuration
+refusal, the agency check, a factory error — adds one more line, under
+`content-external error`, with the exception type and its sanitised message.
+It is recorded as a `failed` run too, so `/health` and the alert rule see it.
+Nothing is written to CKB: cleaning's `send_error` posts to Ruuter's
+`reports/logs/add`, which belongs to a scrape's run report, and this service
+is read-only against CKB.
 
 Counts never carry document text: ids, hex hash prefixes, counts and
 durations only. On the llm-module sink the body of a failed request *is*
@@ -207,6 +259,129 @@ colliding with an export) becomes indistinguishable from normal operation.
 > A `busy` outcome deliberately **does not** clear the failure streak. A run
 > that did not happen is no evidence that whatever was failing has stopped, so
 > a drain colliding with an export cannot mask a real failure streak.
+
+## Running an export
+
+> Both entry points below read CKB through Stage E's document source: the
+> Resql enumeration and read-only S3 reads of CKB's bucket. A run therefore
+> needs `CKB_RESQL` reachable and the `AWS_*` / `S3_*` read keys set, as well
+> as a configured destination.
+
+**The production surface is the HTTP endpoint**, which CronManager calls
+through Ruuter (Stage G):
+
+```bash
+curl -s -X POST localhost:8125/export_agency_async \
+  -H 'Content-Type: application/json' \
+  -d '{"agency_base_id":"…","run_id":"r1"}'
+# {"status":"started","agency_base_id":"…","run_id":"r1"}
+```
+
+It starts the export in its own process and returns at once. `run_id` is
+generated when omitted. The outcome is not in the response: read it from
+`/health` or the `content-external run` line. A second export while one is
+running reports `busy`. If the export this service started last is still
+alive, the response itself says `{"status":"busy",…}` and no process starts,
+so a misfiring cron cannot pile up children; otherwise the run lock in the
+child decides, and the `busy` shows up in `/health`. Either way it is
+recorded and counted in `consecutive_busy`.
+`POST /drain_deletions` answers 501 until Stage J builds the drain.
+
+**The CLI is an operations tool**: the first end-to-end run, a bootstrap
+checked on a slice, a re-export by hand.
+
+```bash
+python -m exporter.run_sync --agency-id … [--run-id …] [--force] [--limit N] \
+  [--accept-existing-content] [--output-json PATH|-]
+```
+
+The report is JSON on stdout (or the file); logs go to stderr. Exit codes are
+`0` for `success`/`unchanged`/`busy`, `1` for `failed`, and `2` for a usage or
+configuration error. CLI runs take the same lock and show up in `/health`.
+
+- **`--limit N`** reads at most N documents. It never truncates the
+  enumeration, because a row left out would read as deleted. Rows past the cap
+  are held (`skipped`, reason `limit_reached`) with their published state
+  untouched. **The corpus watermark is withheld**, so the next full run still
+  walks every row, with Gate 2 sparing the unchanged ones at zero reads. This
+  holds on an incremental run too, not only a bootstrap. Without it,
+  `--limit 25` would record the full watermark and the next tick would
+  report `unchanged` while every other changed document stayed unpublished.
+  The report says `run_observed_full_corpus: false`. The flag is false only
+  when the cap actually held a row back: a `--limit` larger than the reads
+  the run needed skipped nothing, so it counts as a full run.
+- **Sweeps need a clean full run.** Every sweep (Stage J's orphan sweep and
+  `run_purge`, the llm-module's `synced_at` sweep) must check the run through
+  `exporter/services/corpus_guard.py`. It refuses unless the run succeeded,
+  `run_observed_full_corpus` is true, and `documents_held_back` is 0. A
+  held-back document is one that was not published, had a tail delete left
+  unconfirmed, or was skipped by a size guard. It keeps its old state and old
+  `synced_at`, so a sweep would delete it as stale.
+- **Gate 1 makes a quiet tick cheap.** When the agency's watermark, live
+  document count and chunker fingerprint all match the committed manifest,
+  the run ends `unchanged` after one watermark query and one manifest read:
+  no enumeration, no S3 reads, no commit. It still walks the rows when a
+  deletion journal is unclosed or awaiting its mirror, since only a walking
+  run settles those. An `unchanged` run reports
+  `run_observed_full_corpus: false` and never drives a sweep.
+- **`--force`** bypasses Gate 1 and walks every row. A chunker-geometry
+  change never needs it.
+- **Stuck documents are dead-lettered.** A document skipped for a fault of its
+  own — over `MAX_DOCUMENT_BYTES` or `MAX_CHUNKS_PER_DOCUMENT`, undecodable, a
+  sidecar that is missing, too large or does not parse, an uncitable
+  `source_url` — never fails the run. It is listed in
+  `$CONTENT_WORK_DIR/_dead_letter/<agency_id>.json` with its reason, when it
+  was first and last seen, and how many runs in a row found it. The report's
+  `dead_lettered_count` and the run line's `dead_lettered=` give the size. It
+  leaves the record when a run publishes, deletes or finds it unchanged.
+  Rows that are only not ready yet, uploaded files and `--limit` skips are
+  not faults and are never listed. See
+  [RUNBOOK.md](RUNBOOK.md#dead-lettered-documents).
+- **A first run checkpoints.** With no previous manifest, the manifest is
+  committed every `BOOTSTRAP_CHECKPOINT_EVERY` published documents (default
+  250), with the watermark withheld. A killed bootstrap then resumes where it
+  stopped instead of starting over. An incremental run never checkpoints.
+- **A first run refuses a populated destination.** With no manifest, the run
+  first checks whether the destination already holds this agency's content.
+  On a listable sink it lists; otherwise it reads back the first 25
+  enumerated documents. If any content is there, the run fails with
+  `NonEmptyDestination` and publishes nothing. In a mature deployment a
+  missing manifest means something deleted it, and a cold start would
+  republish the corpus **and permanently orphan every document CKB deleted
+  while it was gone**. So `DIFF_ON_MISSING_MANIFEST=first_run` cannot do that
+  damage even if the flip to `fail` was forgotten. The report's
+  `first_run_probe` says how the check came out:
+  - `empty`: the check found nothing.
+  - `populated`: the check found content, and the run was refused.
+  - `resumed`: a bootstrap of this service's own died before its first
+    checkpoint.
+    - A marker at `{CONTENT_WORK_DIR}/_bootstrap/{agency}.inprogress` exists
+      from the first upsert to the first commit, and the log line names the
+      run that wrote it.
+    - It may exist only while no manifest does. Every run that finds a
+      manifest removes it first, and that run **fails** if it cannot.
+    - A lost volume loses the marker, which refuses: the safe direction.
+  - `overridden`: see the next bullet.
+  - `unverifiable`: a sink that can neither list nor read back. The config
+    flip is then the only defence.
+- **`--accept-existing-content`** lets a first run publish into a populated
+  destination anyway: it overwrites what it publishes and keeps the rest. Use
+  it only when that content is known to be safe to overwrite.
+  - It is CLI only. The HTTP endpoint, and so the cron, can never set it.
+  - Such a run never writes a marker and removes any it finds, because the
+    destination's content is no longer all this service's own. If it fails,
+    the retry needs the flag again.
+
+**Interrupting a run.** On SIGTERM or Ctrl-C the export stops submitting
+documents and waits for the ones already in flight. One stuck S3 call can
+take up to about 3 × (5 s connect + 60 s read). A container stop grace period
+shorter than that ends in SIGKILL. That is safe: nothing commits before the
+end, the lock dies with the process, and every upsert is replayed next tick.
+
+Retries: Resql calls back off with full jitter on connection errors and
+408/429/5xx, honouring `Retry-After` up to 120 s. Past that, the call fails
+and the next tick is the retry. S3 calls use botocore's own standard-mode
+retries, deliberately not doubled.
 
 ## Deployment constraints — never scale this service
 
@@ -305,8 +480,10 @@ contract, not a bug in this service.
 
 - **`exporter/sinks/base.py` — `ContentSink`.** The coordinator's only
   destination interface: `upsert_document`, `delete_documents`,
-  `delete_chunks`, `delete_agency`, `sweep_stale`, `read_document`, plus
-  declared `SinkCapabilities`. A sink is bound to one agency when it is
+  `delete_chunks`, `delete_agency`, `sweep_stale`, `read_document`,
+  `holds_agency_content` (the first-run probe, needs `can_list`), plus
+  declared `SinkCapabilities`. Those include `max_concurrency`, the sink's own
+  ceiling on parallel documents. A sink is bound to one agency when it is
   built. Any capability a sink has not declared raises `NotSupported`; it
   never silently does nothing.
 - **`exporter/stores/base.py` — `ExternalStoreClient`.** A key-value view of

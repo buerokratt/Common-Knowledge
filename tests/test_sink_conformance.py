@@ -54,7 +54,7 @@ from exporter.sinks.base import (
     SinkCapabilities,
     UpsertStatus,
 )
-from exporter.sinks.object_store_sink import ObjectStoreSink
+from exporter.sinks.object_store_sink import MAX_CONCURRENCY, ObjectStoreSink
 from exporter.stores.base import StoreCapabilities
 
 AGENCY = "agency-1"
@@ -440,10 +440,18 @@ def test_an_agency_delete_removes_documents_and_not_the_manifest(
 
 # Capability -> the verb it gates, called against a published document "d1".
 _GATED: dict[str, Callable[[ContentSink], object]] = {
+    "can_list": lambda sink: sink.holds_agency_content(),
     "can_read_back": lambda sink: sink.read_document("d1"),
     "supports_metadata_only_merge": lambda sink: sink.upsert_document(_record(), None),
     "supports_agency_scoped_delete": lambda sink: sink.delete_agency(AGENCY),
 }
+
+
+def _knows_it_holds_content(sink: ContentSink) -> None:
+    """F21's probe: true while a document is there, false once it is gone."""
+    assert sink.holds_agency_content() is True
+    assert sink.delete_documents(["d1"]).is_complete
+    assert sink.holds_agency_content() is False
 
 
 def _reads_back(sink: ContentSink) -> None:
@@ -468,6 +476,7 @@ def _deletes_the_agency(sink: ContentSink) -> None:
 
 # Capability -> what declaring it promises, checked against a published "d1".
 _PROMISES: dict[str, Callable[[ContentSink], None]] = {
+    "can_list": _knows_it_holds_content,
     "can_read_back": _reads_back,
     "supports_metadata_only_merge": _merges_metadata,
     "supports_agency_scoped_delete": _deletes_the_agency,
@@ -476,6 +485,22 @@ _PROMISES: dict[str, Callable[[ContentSink], None]] = {
 
 def test_every_gated_capability_has_a_promise() -> None:
     assert sorted(_PROMISES) == sorted(_GATED)
+
+
+def test_an_empty_destination_holds_no_content_whatever_sits_beside_it(
+    harness: Harness,
+) -> None:
+    """F21: only a record or a chunk is content. A manifest an inherited
+    manifest store keeps beside the documents (D17), or a stray object that
+    parses as neither, must not make a fresh destination read as populated."""
+    if not harness.sink.capabilities.can_list:
+        pytest.skip("the probe needs a listing")
+    assert harness.sink.holds_agency_content() is False
+    harness.plant_manifest()
+    harness.plant_stray("d1", "notes.txt")
+    assert harness.sink.holds_agency_content() is False
+    _publish(harness)
+    assert harness.sink.holds_agency_content() is True
 
 
 @pytest.mark.parametrize("capability", sorted(_PROMISES))
@@ -511,6 +536,7 @@ def _degraded_sinks() -> dict[str, ContentSink]:
                 supports_batch_delete=False,
                 atomic_per_document=False,
                 supports_agency_scoped_delete=False,
+                max_concurrency=1,
             ),
         ),
     }
@@ -539,6 +565,7 @@ def test_an_object_store_sink_declares_only_what_its_store_can_do() -> None:
         supports_batch_delete=False,
         atomic_per_document=False,
         supports_agency_scoped_delete=False,
+        max_concurrency=MAX_CONCURRENCY,
     )
 
 

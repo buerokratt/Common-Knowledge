@@ -472,6 +472,14 @@ services:
       - EXTERNAL_S3_REGION=${EXTERNAL_S3_REGION:-us-east-1}
       # false for a store without a working DeleteObjects (D11).
       - EXTERNAL_S3_SUPPORTS_BATCH_DELETE=${EXTERNAL_S3_SUPPORTS_BATCH_DELETE:-true}
+      # CKB's own bucket: a read-only s3:GetObject key, separate from the
+      # EXTERNAL_S3_* bucket and keys (rule 6). Set these in the root .env.
+      # Reusing file-processing's keys is for local development only.
+      - S3_ENDPOINT_URL=${S3_ENDPOINT_URL:-}
+      - S3_BUCKET_NAME=${S3_BUCKET_NAME:-}
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+      - AWS_REGION=${AWS_REGION:-us-east-1}
       # MANIFEST_STORE_* is deliberately unset. On the object_store sink an
       # empty MANIFEST_STORE_BACKEND means the manifest lives in the sink's
       # own store, bucket and prefix — endpoint, bucket AND prefix inherited

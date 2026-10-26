@@ -646,6 +646,17 @@ contentExternal:
       name: ""
       accessKeyIdKey: access_key_id
       secretAccessKeyKey: secret_access_key
+  # CKB's own bucket, separate from externalStore. The Secret must grant only
+  # s3:GetObject; reusing file-processing's keys is for local development only.
+  # Empty credentials are allowed until the first document read.
+  sourceBucket:
+    endpointUrl: ""
+    bucket: ""
+    region: "us-east-1"
+    secret:
+      name: ""
+      accessKeyIdKey: access_key_id
+      secretAccessKeyKey: secret_access_key
   # A16. Peak memory is a PRODUCT, and both of its factors are configured
   # elsewhere:
   #

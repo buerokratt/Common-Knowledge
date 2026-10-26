@@ -642,3 +642,51 @@ def test_the_destination_honours_the_batch_delete_declaration() -> None:
     store = build_destination_store(settings)
     assert not store.capabilities.supports_batch_delete
     assert store._client.meta.config.max_pool_connections == 32  # pyright: ignore[reportAttributeAccessIssue]
+
+
+# --------------------------------------------------------------------------
+# F8: botocore's retry, counted
+# --------------------------------------------------------------------------
+
+
+class _Raw(io.BytesIO):
+    """A raw HTTP body as botocore reads it: streamed and read."""
+
+    def stream(self, **_kwargs: object) -> Iterator[bytes]:
+        yield self.getvalue()
+
+
+@pytest.mark.parametrize(
+    "statuses, attempts, outcome",
+    [
+        ([503, 200], 2, "read"),
+        # Three in all, counting the first: total_max_attempts, not
+        # botocore's max_attempts, which would be read as retries.
+        ([503, 503, 503, 503], 3, "raised"),
+    ],
+    ids=["throttled-once", "throttled-every-time"],
+)
+def test_reads_retry_through_botocore_exactly_three_times(
+    store: S3Store, statuses: list[int], attempts: int, outcome: str
+) -> None:
+    """Stubber returns before botocore's retry handler runs, so it cannot
+    count attempts; a before-send response is processed like one off the wire."""
+    from botocore.awsrequest import AWSResponse
+
+    sent: list[object] = []
+
+    def respond(request: object, **_kwargs: object) -> AWSResponse:
+        sent.append(request)
+        status = statuses[len(sent) - 1]
+        body = b"data" if status == 200 else b"<Error><Code>SlowDown</Code></Error>"
+        headers = {"Content-Length": str(len(body))} if status == 200 else {}
+        return AWSResponse("http://store.invalid", status, headers, _Raw(body))
+
+    store._client.meta.events.register("before-send.s3.GetObject", respond)
+
+    if outcome == "read":
+        assert store.get_bytes("documents/d1/metadata.json") == b"data"
+    else:
+        with pytest.raises(StoreError):
+            store.get_bytes("documents/d1/metadata.json")
+    assert len(sent) == attempts
