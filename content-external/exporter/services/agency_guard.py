@@ -48,6 +48,15 @@ from typing import TYPE_CHECKING
 
 import requests
 
+from exporter.core.redaction import sanitize_sensitive_text
+from exporter.services.backoff import (
+    DEFAULT_POLICY,
+    NO_RETRY,
+    BackoffPolicy,
+    is_retryable_resql,
+    retry_with_backoff,
+)
+
 if TYPE_CHECKING:
     from exporter.api.config import Settings
 
@@ -89,7 +98,10 @@ def _explain(count: int) -> str:
 
 
 def count_agencies(
-    settings: "Settings", *, timeout: float = STARTUP_TIMEOUT_SECONDS
+    settings: "Settings",
+    *,
+    timeout: float = STARTUP_TIMEOUT_SECONDS,
+    policy: BackoffPolicy = NO_RETRY,
 ) -> int:
     """The number of live, non-api agencies in CKB.
 
@@ -97,13 +109,27 @@ def count_agencies(
     answer. The query already filters `is_deleted = FALSE AND type <> 'api'`
     and takes the latest row per base_id, so its total is the count that
     matters here.
+
+    `policy` is F8's backoff. NO_RETRY by default, which is what the startup
+    check wants; the run-start check retries a transient Resql blip. A read
+    timeout is never retried, as for every Resql query: Resql does not cancel
+    the abandoned query, so a retry would stack a second one in Postgres.
     """
     url = f"{settings.ckb_resql}/agency/list_agencies"
     params = {"page": 1, "page_size": _PAGE_SIZE, "sorting": _SORTING}
 
-    try:
+    def get() -> requests.Response:
         response = requests.get(url, params=params, timeout=timeout)
         response.raise_for_status()
+        return response
+
+    try:
+        response = retry_with_backoff(
+            get,
+            describe="Resql list_agencies",
+            policy=policy,
+            is_retryable=is_retryable_resql,
+        )
     except requests.RequestException as exc:
         raise AgencyCountUnavailableError(f"could not reach Resql: {exc}") from exc
 
@@ -158,7 +184,7 @@ def check_single_agency_at_startup(
             "Serving anyway, because Resql may still be starting and a "
             "service that refuses to boot is worse than one that warns. The "
             "check is repeated authoritatively at the start of every export.",
-            exc,
+            sanitize_sensitive_text(str(exc)),
         )
         return None
 
@@ -170,16 +196,20 @@ def check_single_agency_at_startup(
 
 
 def require_single_agency(
-    settings: "Settings", *, timeout: float = STARTUP_TIMEOUT_SECONDS
+    settings: "Settings",
+    *,
+    timeout: float = STARTUP_TIMEOUT_SECONDS,
+    policy: BackoffPolicy = DEFAULT_POLICY,
 ) -> int:
     """Authoritative N=1 assertion, for the start of a run.
 
     Raises on both failure modes. Stage F calls this before taking the lock:
     at that point the run needs the agency list regardless, so an unreachable
     Resql is a failed run and not something to tolerate — and a failed run is
-    visible, which silent starvation is not.
+    visible, which silent starvation is not. A transient failure is retried
+    with backoff first (F8), so a Resql restart costs seconds, not a run.
     """
-    count = count_agencies(settings, timeout=timeout)
+    count = count_agencies(settings, timeout=timeout, policy=policy)
     if count > 1:
         raise MultipleAgenciesError(_explain(count))
     return count

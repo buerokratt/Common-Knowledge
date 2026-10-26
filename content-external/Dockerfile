@@ -11,8 +11,9 @@ COPY --from=ghcr.io/astral-sh/uv:0.11.8 /uv /uvx /usr/local/bin/
 
 WORKDIR /app
 
-# CONTENT_WORK_DIR: the run lock and the deferred-deletion journal. Never under
-# /scrapped-data, which is zipped into the Global Classifier's payload (rule 1).
+# CONTENT_WORK_DIR: the run lock, the deferred-deletion journal and the last-run
+# and dead-letter records. Never under /scrapped-data, which is zipped into the
+# Global Classifier's payload (rule 1).
 RUN mkdir /var/lib/content-external
 
 COPY pyproject.toml uv.lock /app/

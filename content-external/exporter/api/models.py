@@ -11,7 +11,9 @@ retyped.
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from exporter.core.ids import validate_segment
 
 
 class LastRunSummary(BaseModel):
@@ -46,6 +48,13 @@ class LastRunSummary(BaseModel):
     # normal operation.
     consecutive_failures: int = 0
     consecutive_busy: int = 0
+    # F12. The exception class name behind a `failed` outcome, never its
+    # message: this endpoint is unauthenticated.
+    error_type: str | None = None
+    # F20. Whether the last run classified every row; null when unknown. A
+    # `success` with false is a --limit run: the watermark was withheld, and
+    # no sweep may treat that run as having seen the corpus.
+    run_observed_full_corpus: bool | None = None
 
 
 class HealthResponse(BaseModel):
@@ -64,3 +73,42 @@ class HealthResponse(BaseModel):
     chunk_profile: str
     work_dir: str
     last_run: LastRunSummary | None = None
+
+
+class ExportRequest(BaseModel):
+    """POST /export_agency_async's body, as G1's Ruuter step sends it.
+
+    Both ids become path segments — the agency id in every key, the run id in
+    the deletion journal's filename — so a value that would escape its folder
+    ("../x", "a/b") is a 422 here, before any process starts.
+    """
+
+    agency_base_id: str
+    # Generated when absent: the cron trigger need not invent one.
+    run_id: str | None = None
+    # Bypasses Gate 1 once E4 builds it; echoed in the report until then.
+    force: bool = False
+
+    @field_validator("agency_base_id")
+    @classmethod
+    def _check_agency(cls, value: str) -> str:
+        return validate_segment("agency_base_id", value)
+
+    @field_validator("run_id")
+    @classmethod
+    def _check_run_id(cls, value: str | None) -> str | None:
+        return None if value is None else validate_segment("run_id", value)
+
+
+class ExportStarted(BaseModel):
+    """`started`: the export is running in its own process. Its outcome is
+    not here: it lands in /health's last_run and the `content-external run`
+    log line, and a started export can still turn out `busy` at the run lock.
+
+    `busy`: the export this service started last is still running, so
+    nothing was started and `busy` was recorded as that run's outcome. The
+    caller treats both the same way; the next tick is the retry."""
+
+    status: Literal["started", "busy"]
+    agency_base_id: str
+    run_id: str

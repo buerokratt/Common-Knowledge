@@ -1,7 +1,8 @@
--- Synthetic source_file history for measuring the two Stage E export queries
--- (#320). LOCAL DATABASES ONLY: it inserts millions of rows straight into
--- data_collection.source_file. Never run it against a shared, staging or
--- production database. See content-external/RUNBOOK.md.
+-- Synthetic source_file and source history for measuring the two Stage E export
+-- queries (#320). LOCAL DATABASES ONLY: it inserts millions of rows straight
+-- into data_collection.source_file and data_collection.source. Never run it
+-- against a shared, staging or production database. See
+-- content-external/RUNBOOK.md.
 --
 -- Load (idempotent per step; documents 1..n_docs that already exist are kept):
 --   docker exec -i <db-container> psql -U <db-user> -d <db-name> \
@@ -68,6 +69,14 @@ END $$;
 \if :{?page_title_format} \else \set page_title_format 'Teenuse kirjeldus %s – %s' \endif
 \if :{?subsectors} \else \set subsectors 'tax,health,education,transport,social' \endif
 \if :{?sources_per_agency} \else \set sources_per_agency 25 \endif
+-- Source history. Every scrape writes the source row about five times
+-- (is_running, running, finished, next run, zip-dirty finished), so one scrape
+-- a day over history_span gives the default. Raise it for sources scraped more
+-- often. The first round(sources_per_agency * source_deleted_share) sources of
+-- each agency end deleted, and their files stay live rows, as
+-- source/delete_source.sql leaves them.
+\if :{?source_versions} \else \set source_versions 1650 \endif
+\if :{?source_deleted_share} \else \set source_deleted_share 0.04 \endif
 \if :{?min_file_size} \else \set min_file_size 1000 \endif
 \if :{?file_size_spread} \else \set file_size_spread 200000 \endif
 
@@ -84,10 +93,64 @@ SELECT CASE WHEN ord = 1 THEN :'measure_agency_id'::uuid
        ord
 FROM generate_series(1, 5) AS ord;
 
+-- Refuse an agency this script did not make, for load and cleanup alike:
+-- cleanup deletes every source_file and source row of these five agencies.
+-- Generated rows are recognisable because their base_ids are hashes of the
+-- agency and a contiguous counter, so a real agency id fails here: it has an
+-- agency row, or rows whose base_id no counter produces.
+WITH counts AS (
+    SELECT m.agency_base_id,
+           (SELECT count(DISTINCT f.base_id) FROM data_collection.source_file AS f
+            WHERE f.agency_base_id = m.agency_base_id) AS n_files,
+           (SELECT count(DISTINCT s.base_id) FROM data_collection.source AS s
+            WHERE s.agency_base_id = m.agency_base_id) AS n_sources
+    FROM measure_agencies AS m
+),
+expected_files AS (
+    SELECT c.agency_base_id, md5(c.agency_base_id::text || ':' || d)::uuid AS base_id
+    FROM counts AS c
+    CROSS JOIN LATERAL generate_series(1, c.n_files) AS d
+),
+expected_sources AS (
+    SELECT c.agency_base_id,
+           md5(c.agency_base_id::text || ':source:' || k)::uuid AS base_id
+    FROM counts AS c
+    CROSS JOIN LATERAL generate_series(0, c.n_sources - 1) AS k
+)
+SELECT
+    EXISTS (
+        SELECT 1 FROM agency_management.agency AS a
+        JOIN measure_agencies AS m ON a.base_id = m.agency_base_id
+    )
+    OR EXISTS (
+        SELECT 1 FROM data_collection.source_file AS f
+        JOIN measure_agencies AS m ON f.agency_base_id = m.agency_base_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM expected_files AS e
+            WHERE e.agency_base_id = f.agency_base_id AND e.base_id = f.base_id
+        )
+    )
+    OR EXISTS (
+        SELECT 1 FROM data_collection.source AS s
+        JOIN measure_agencies AS m ON s.agency_base_id = m.agency_base_id
+        WHERE NOT EXISTS (
+            SELECT 1 FROM expected_sources AS e
+            WHERE e.agency_base_id = s.agency_base_id AND e.base_id = s.base_id
+        )
+    ) AS foreign_rows \gset
+\if :foreign_rows
+DO $$ BEGIN RAISE EXCEPTION
+  'refusing to run: measure_agency_id, or an agency derived from it, has an agency row or rows this script did not generate. Pass a fresh UUID that no real agency uses.';
+END $$;
+\endif
+
 \if :is_cleanup
 DELETE FROM data_collection.source_file
 WHERE agency_base_id IN (SELECT agency_base_id FROM measure_agencies);
+DELETE FROM data_collection.source
+WHERE agency_base_id IN (SELECT agency_base_id FROM measure_agencies);
 VACUUM (FULL, ANALYZE) data_collection.source_file;
+VACUUM (FULL, ANALYZE) data_collection.source;
 \else
 
 \if :{?bucket}
@@ -200,15 +263,62 @@ CROSS JOIN LATERAL (
 ) AS s
 ORDER BY t.at;
 
+-- Sources, once per agency: they do not depend on n_docs, so a later step keeps
+-- them. base_id matches the source_base_id the files above were given.
+INSERT INTO data_collection.source (
+    base_id, agency_base_id, url, subsector, created_at, updated_at,
+    last_scraped_at, next_scrapping_at, is_deleted, type, status,
+    update_automatically, cron_schedule
+)
+SELECT
+    src.base_id,
+    src.agency_base_id,
+    format('https://www.asutus%s.ee/et/allikas-%s', src.ord, src.k),
+    c.subsectors[1 + src.k % cardinality(c.subsectors)],
+    t0.at, t.at, t.at, t.at + interval '1 day',
+    v.v = :source_versions AND src.deleted,
+    'url_to_scrape',
+    (ARRAY['running', 'finished'])[1 + v.v % 2]::source_status_type,
+    TRUE,
+    '0 0 3 * * ?'
+FROM (
+    SELECT a.agency_base_id,
+           a.ord,
+           k,
+           md5(a.agency_base_id::text || ':source:' || k)::uuid AS base_id,
+           k < round(:sources_per_agency * :source_deleted_share) AS deleted
+    FROM measure_agencies AS a
+    CROSS JOIN generate_series(0, :sources_per_agency - 1) AS k
+) AS src
+CROSS JOIN (SELECT string_to_array(:'subsectors', ',') AS subsectors) AS c
+CROSS JOIN LATERAL (
+    SELECT :'history_start'::timestamptz
+           + ((hashtext(src.base_id::text) & 2147483647) / 2147483647.0)
+             * :'start_spread'::interval AS at
+) AS t0
+CROSS JOIN LATERAL generate_series(1, :source_versions) AS v(v)
+CROSS JOIN LATERAL (
+    SELECT t0.at + (v.v - 1) * (:'history_span'::interval / :source_versions) AS at
+) AS t
+WHERE NOT EXISTS (
+    SELECT 1 FROM data_collection.source AS s WHERE s.base_id = src.base_id
+)
+ORDER BY t.at;
+
 ANALYZE data_collection.source_file;
+ANALYZE data_collection.source;
 
 SELECT a.ord,
        a.agency_base_id,
-       count(DISTINCT f.base_id) AS documents,
-       count(f.*) AS rows
+       (SELECT count(DISTINCT f.base_id) FROM data_collection.source_file AS f
+        WHERE f.agency_base_id = a.agency_base_id) AS documents,
+       (SELECT count(*) FROM data_collection.source_file AS f
+        WHERE f.agency_base_id = a.agency_base_id) AS rows,
+       (SELECT count(DISTINCT s.base_id) FROM data_collection.source AS s
+        WHERE s.agency_base_id = a.agency_base_id) AS sources,
+       (SELECT count(*) FROM data_collection.source AS s
+        WHERE s.agency_base_id = a.agency_base_id) AS source_rows
 FROM measure_agencies AS a
-LEFT JOIN data_collection.source_file AS f ON f.agency_base_id = a.agency_base_id
-GROUP BY a.ord, a.agency_base_id
 ORDER BY a.ord;
 
 \endif
@@ -218,5 +328,7 @@ SELECT count(*) AS total_rows,
        pg_size_pretty(pg_indexes_size('data_collection.source_file')) AS indexes,
        pg_size_pretty(pg_total_relation_size('data_collection.source_file')) AS total,
        pg_size_pretty(pg_relation_size('data_collection.idx_source_file_agency_base_updated'))
-           AS export_index
+           AS export_index,
+       (SELECT count(*) FROM data_collection.source) AS total_source_rows,
+       pg_size_pretty(pg_total_relation_size('data_collection.source')) AS source_total
 FROM data_collection.source_file;

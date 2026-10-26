@@ -103,9 +103,10 @@ def _deleted_keys(store: InMemoryStore) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def test_sink_capabilities_declares_exactly_the_six_d0_fields() -> None:
+def test_sink_capabilities_declares_exactly_the_d0_fields_plus_f16s_ceiling() -> None:
     """Widening the capability set is a parity-matrix change and must be a
-    visible act, not a quiet field addition."""
+    visible act, not a quiet field addition. F16 added max_concurrency: the
+    destination states how many documents it takes in parallel."""
     assert [f.name for f in dataclasses.fields(SinkCapabilities)] == [
         "can_list",
         "can_read_back",
@@ -113,7 +114,15 @@ def test_sink_capabilities_declares_exactly_the_six_d0_fields() -> None:
         "supports_batch_delete",
         "atomic_per_document",
         "supports_agency_scoped_delete",
+        "max_concurrency",
     ]
+
+
+@pytest.mark.parametrize("value", [0, -1, True])
+def test_a_sink_cannot_declare_a_concurrency_below_one(value: int) -> None:
+    values = dataclasses.asdict(FULL_SINK_CAPABILITIES) | {"max_concurrency": value}
+    with pytest.raises(ValueError, match="max_concurrency"):
+        SinkCapabilities(**values)
 
 
 def test_upsert_status_is_the_f18_vocabulary() -> None:
