@@ -11,18 +11,18 @@ declaration:
       - field: presigned_url
         type: string
         description: "Fresh presigned link to the agency zip"
-      - field: presigned_url_etag
+      - field: data_hash
         type: string
         description: "Checksum of the zip (SHA-1 data_hash)"
 
 extractRequestData:
   assign:
     presigned_url: ${incoming.body.presigned_url}
-    presigned_url_etag: ${incoming.body.presigned_url_etag}
+    data_hash: ${incoming.body.data_hash}
 
 validateInput:
   switch:
-    - condition: ${!presigned_url || !presigned_url_etag}
+    - condition: ${!presigned_url || !data_hash}
       next: returnMissingInput
   next: buildAuthHeader
 
@@ -55,7 +55,7 @@ sendToCentops:
       authorization: ${encodedAuthHeader.response.body.cipher}
     body:
       presigned_url: ${presigned_url}
-      presigned_url_etag: ${presigned_url_etag}
+      presigned_url_data_hash: ${data_hash}
   result: centopsRes
   timeout: 10000
   logging:

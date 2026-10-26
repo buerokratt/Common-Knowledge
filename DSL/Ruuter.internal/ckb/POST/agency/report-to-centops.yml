@@ -65,7 +65,7 @@ syncToCentops:
   requestType: templates
   body:
     presigned_url: ${downloadRes.response.body.download_urls[0].download_url}
-    presigned_url_etag: ${data_hash}
+    data_hash: ${data_hash}
   result: centopsStatus
 
 checkCentopsStatus:
