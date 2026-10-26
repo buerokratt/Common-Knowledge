@@ -468,7 +468,7 @@ not a fault in this run.
 | `list` | yes | no | Reconcile degrades to manifest-trusted reporting; the orphan sweep uses `synced_at` instead of a listing |
 | Batch delete | yes, or per-key fallback | per-document / per-agency delete | `DeleteOutcome` is identical either way — a missing batch API stays a performance note |
 | Metadata-only merge | 1 small blob write, 0 chunk writes | merge on N chunk payloads, `content` not resent | If unsupported, `metadata_changed` degrades to a full re-push and a re-embed. Always reported, never hidden |
-| Atomic per document | no — publish write order provides it | yes, when the document fits one request | No chunk is ever retrievable before its document's metadata, regardless of sink |
+| Atomic per document | no — publish write order provides it | when the document fits one request; a larger one is split into ordered parts, **each carrying the full record** | No chunk is ever retrievable before its document's metadata, regardless of sink |
 | Holds the manifest | yes | no | Manifest store is configured separately for `llm_module` |
 | Read-back for reconcile | via `list` | only if the llm-module exposes one | Reconcile reports **"unverifiable"** rather than "clean" |
 
@@ -505,8 +505,20 @@ Two rules an operator reading a report should know:
 `exporter/stores/factory.py` the only place a store backend is. Startup does
 not call either yet; Stage F wires them into the run. `object_store` builds
 `ObjectStoreSink` over the `s3` backend (`exporter/stores/s3_store.py`).
-`llm_module` (Stage L), `azure_blob` (Stage H) and a `local` manifest store
-(D19) each refuse, naming the task that builds them.
+`azure_blob` (Stage H) and a `local` manifest store (D19) each refuse, naming
+the task that builds them. `llm_module` refuses too, naming L9: the sink
+exists (`exporter/sinks/llm_module_sink.py`, L1–L8 — push, batching,
+per-item partial failure, idempotency keys, metadata-only merge), but it
+cannot delete yet, and a run that sees a deletion would fail on it.
+
+The llm-module wire contract is
+[`docs/llm-module-ingest-contract.md`](docs/llm-module-ingest-contract.md),
+with its models in `exporter/sinks/llm_module_contract.py`. It is a
+**proposal** until the llm-module owner agrees it. What the far side has
+promised lives in one constant, `AGREED_TERMS`, which starts at the safe
+value for each item: no metadata-only merge (a metadata change is re-pushed
+in full and counted as `metadata_full_repush_count`) and at most 2 documents
+in parallel.
 
 What the object-store sink does and doesn't touch:
 

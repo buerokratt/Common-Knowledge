@@ -528,10 +528,11 @@ def test_read_document_reports_what_the_destination_holds() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_factory_names_the_task_that_builds_the_llm_module_sink() -> None:
-    """Until L1 lands, a request for that sink is a clear refusal."""
+def test_the_factory_names_the_task_that_makes_the_llm_module_sink_selectable() -> None:
+    """The sink exists (L1-L8) but cannot delete until L9, so a request for it
+    is still a clear refusal naming the task that unblocks it."""
     settings = Settings.model_construct(content_sink="llm_module")
-    with pytest.raises(ConfigurationError, match="task L1"):
+    with pytest.raises(ConfigurationError, match="task L9"):
         build_sink(settings, agency_id=AGENCY)
 
 
@@ -594,11 +595,18 @@ def test_the_store_layer_does_not_import_the_sink_layer() -> None:
 
 
 @pytest.mark.parametrize(
-    "relative", ["sinks/base.py", "stores/base.py", "sinks/object_store_sink.py"]
+    "relative",
+    [
+        "sinks/base.py",
+        "stores/base.py",
+        "sinks/object_store_sink.py",
+        "sinks/llm_module_contract.py",
+    ],
 )
 def test_the_interfaces_import_no_transport(relative: str) -> None:
-    """The ABCs and the object-store sink are transport-free; boto3 lives in
-    the s3 backend only, requests arrives in L."""
+    """The ABCs, the object-store sink and the llm-module wire models are
+    transport-free; boto3 lives in the s3 backend only, and requests in the
+    llm-module sink."""
     roots = {name.split(".")[0] for name in _imports(relative)}
     assert not roots & {"boto3", "botocore", "azure", "requests", "httpx"}
 

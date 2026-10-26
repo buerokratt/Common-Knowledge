@@ -6,10 +6,13 @@ dispatch table on a sink name here, in stores/factory.py and in api/config.py,
 and nowhere else.
 
 `object_store` is built over the destination store from stores/factory.py
-(D7, D14). `llm_module` still maps to the task that builds it (L1) and
-refuses with a message naming it. Nothing calls this at startup yet — Stage F
-wires it into the run — so neither the refusal nor a missing EXTERNAL_S3_*
-value can affect /health.
+(D7, D14). `llm_module` still refuses, naming L9: the sink itself exists
+(sinks/llm_module_sink.py, L1-L8), but it cannot delete yet, and the
+coordinator deletes on any run that sees a deletion — so selecting it now
+would fail the first such run. It is registered here, with its run id and its
+Vault-backed token provider (L11), when L9 lands. Nothing calls this at
+startup, so neither the refusal nor a missing EXTERNAL_S3_* value can affect
+/health.
 
 THE SINK ID IS THE CONTENT_SINK VALUE. The manifest records it (F17), and a
 mismatch fails the run rather than reading as a first run. Bucket and endpoint
@@ -41,7 +44,7 @@ _SINKS: dict[str, Callable[[Settings, str], ContentSink]] = {
 
 # CONTENT_SINK value -> the task that will register an implementation.
 _NOT_YET_BUILT: dict[str, str] = {
-    "llm_module": "L1",
+    "llm_module": "L9",
 }
 
 
