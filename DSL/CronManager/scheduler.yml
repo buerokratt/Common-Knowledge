@@ -12,3 +12,9 @@ trigger_zipping:
   trigger: "0 0 */1 * * ?"
   type: exec
   command: "/bin/bash ../app/scripts/trigger_zipping.sh"
+
+# Enable with "0 17 */1 * * ?".
+trigger_content_export:
+  trigger: false
+  type: exec
+  command: "/bin/bash ../app/scripts/trigger_content_export.sh"
