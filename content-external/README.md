@@ -27,6 +27,11 @@ is no error, no log line, just a Classifier that quietly goes stale.
 Any change to this service should be checked against these six rules before
 it is checked against anything else.
 
+The `scheduler-gate` workflow runs `tests/test_scheduler_yml.py` on every
+change to `DSL/CronManager/` or `DSL/CronManagerScripts/`, so a broken
+`scheduler.yml` or any edit to `trigger_zipping`, the Classifier's producer,
+fails before merge.
+
 ## Setup
 
 ### Docker (matches how CKB runs it)
