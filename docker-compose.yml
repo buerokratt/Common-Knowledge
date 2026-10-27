@@ -541,6 +541,11 @@ services:
       #   EXTERNAL_S3_SECRET_ACCESS_KEY above — required at startup here)
       # - LLM_MODULE_BASE_URL=            # https:// only — the body is
       #                                   # Estonian government document text
+      # - LLM_MODULE_COLLECTION=          # L19: the NEW physical collection,
+      #                                   # never the retrieval alias and never
+      #                                   # contextual_chunks_* (refused)
+      # - LLM_MODULE_PROTECTED_COLLECTIONS= # the retrieval alias (+ any live
+      #                                   # collection), comma-separated: refused
       # - LLM_MODULE_VAULT_SECRET_PATH=content-external/llm_module
       #                                   # fetched per task, never cached;
       #                                   # needs the llm-module profile up

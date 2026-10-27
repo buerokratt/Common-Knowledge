@@ -69,6 +69,8 @@ it — see the note in the table below.
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. `LLM_MODULE_VAULT_SECRET_PATH` names the KV v2 secret holding `{"token": …}` (compose: `content-external/llm_module`), read through `VAULT_TOKEN_PATH` on every operation. Not used by the `object_store` sink |
+| `LLM_MODULE_COLLECTION` | required for `llm_module` | L19: the **physical** collection this deployment writes to, in every request path (`/ingest/v1/collections/{collection}/…`). A new one beside the live corpus, never the retrieval alias, and never `contextual_chunks_azure` / `contextual_chunks_aws` (refused at startup). 1–64 of `A-Z a-z 0-9 _ -`. Part of the manifest's sink_id (`llm_module:<collection>`), so changing it against an existing manifest fails the run; a re-bootstrap into another collection also takes a fresh `MANIFEST_STORE_PREFIX`. See [docs/llm-module-cutover.md](docs/llm-module-cutover.md) |
+| `LLM_MODULE_PROTECTED_COLLECTIONS` | no (default empty) | Comma-separated names `LLM_MODULE_COLLECTION` may never be, case-insensitive, on top of the built-in `contextual_chunks_*`. Put the **retrieval alias** here, and any other live collection on that llm-module: startup refuses them, and so does the sink factory |
 | `LLM_MODULE_ALLOW_PROPOSED_CONTRACT` | no (default `false`) | Development only. `llm_module` is refused at startup while the ingest contract is PROPOSED; this lets it run against the stub regardless |
 | `STALE_SWEEP_ENABLED` | no (default `false`) | L10. After a committed run that saw the whole corpus and held nothing back, ask the destination to delete what was synced before the run and is not in the committed manifest's keep list. Never changes a run's outcome; reported as `stale_sweep=` (`disabled`, `refused`, `not_supported`, `failed`, `done`) |
 | `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; the llm-module's is its owner's to state), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
@@ -106,7 +108,8 @@ so, which is indistinguishable from never having run.
 |---|---|
 | `object_store`, no `MANIFEST_STORE_*` | **OK** — inherits the sink's own store, bucket and prefix. Zero new configuration for this deployment |
 | `llm_module`, no manifest store | **refuses to start** — names `MANIFEST_STORE_BACKEND` |
-| `llm_module`, no `LLM_MODULE_BASE_URL` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
+| `llm_module`, no `LLM_MODULE_BASE_URL`, no `LLM_MODULE_COLLECTION` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
+| `llm_module` with `LLM_MODULE_COLLECTION` set to `contextual_chunks_*`, or not one plain path segment | **refuses to start** — L19: bootstrap beside, never in place |
 | `MANIFEST_STORE_BACKEND=local` without `MANIFEST_STORE_ALLOW_LOCAL=true` | **refuses to start** |
 | `MANIFEST_STORE_BACKEND=azure_blob` | **refuses to start** — names Stage H, which builds that backend |
 | `llm_module` with no explicit `CHUNK_PROFILE` | **refuses to start** — names `CHUNK_PROFILE`; the default was chosen for a destination that embeds its own chunks |
@@ -164,6 +167,7 @@ curl -s localhost:8125/health | jq
 {
   "status": "ok",
   "sink": "object_store",
+  "sink_id": "object_store",
   "store_backend": "s3",
   "chunk_profile": "azure_native",
   "work_dir": "/var/lib/content-external",
@@ -180,6 +184,12 @@ curl -s localhost:8125/health | jq
   }
 }
 ```
+
+`sink_id` is the destination's identity as the manifest records it, and it is
+the same value every `content-external run` and `content-external error`
+line carries as `sink=`. On `object_store` it equals `sink`. On `llm_module`
+it is `llm_module:<LLM_MODULE_COLLECTION>`, which tells you which collection
+this deployment writes to at a cutover swap or rollback (L19).
 
 `error_type` is the exception class behind a `failed` run, and only that: this
 endpoint is unauthenticated. The sanitised message is in the
@@ -559,8 +569,15 @@ uv run uvicorn --app-dir tests llm_module_stub:app --port 8443 \
     --ssl-keyfile stub.key --ssl-certfile stub.crt
 # then, for the exporter:
 CONTENT_SINK=llm_module LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true \
-LLM_MODULE_BASE_URL=https://localhost:8443 REQUESTS_CA_BUNDLE=$PWD/stub.crt ...
+LLM_MODULE_BASE_URL=https://localhost:8443 LLM_MODULE_COLLECTION=ckb_chunks_v1 \
+REQUESTS_CA_BUNDLE=$PWD/stub.crt ...
 ```
+
+**The cutover (L19–L25)** — bootstrapping beside the llm-module's existing
+corpus, the retrieval comparison, the swap and its rollback, and dropping the
+old corpus — is planned in
+[`docs/llm-module-cutover.md`](docs/llm-module-cutover.md). The hourly ZIP
+job is not part of it and keeps running (L24).
 
 The stub serves a well-behaved llm-module; its failure scripting is for the
 tests, which run it in-process with no network.

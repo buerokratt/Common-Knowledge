@@ -104,7 +104,7 @@ def export_agency_task(
     with catch_error(
         run_id=task.run_id,
         agency_id=task.agency_id,
-        sink=settings.content_sink,
+        sink=settings.sink_id,
         run_state=run_state,
     ):
         # A17, authoritative: a second agency would starve behind the

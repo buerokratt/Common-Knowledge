@@ -10,7 +10,10 @@
   chunks by point id, and a whole agency;
 - the stale sweep (L10): the agency's documents synced before `before` and
   absent from the keep list;
-- read-back (L17): the record and the ordinals held for a document.
+- read-back (L17): the record and the ordinals held for a document;
+- collections (L19): every path is under /ingest/v1/collections/{c}/, and
+  each collection's records and points are held apart, so a bootstrap
+  beside a live collection can be shown to leave it untouched.
 
 Every write and delete lands in `events` as ("put" | "delete", document_id,
 ordinal | None), None being the record, so the conformance suite can assert
@@ -42,12 +45,22 @@ import requests
 from requests.adapters import BaseAdapter
 from requests.structures import CaseInsensitiveDict
 
-__all__ = ["Event", "FakeLlmModule", "Reply", "Seen", "session_for"]
+__all__ = [
+    "TEST_COLLECTION",
+    "Event",
+    "FakeLlmModule",
+    "Reply",
+    "Seen",
+    "session_for",
+]
 
 # ("put" | "delete", document_id, ordinal | None); None is the record.
 Event = tuple[str, str, int | None]
 
-_PREFIX = "/ingest/v1"
+# The collection the tests write to unless they say otherwise (L19).
+TEST_COLLECTION = "ckb_chunks_test"
+
+_PREFIX = "/ingest/v1/collections/"
 
 
 @dataclass(frozen=True)
@@ -69,7 +82,14 @@ class Seen:
     timeout: object
     verify: object
     method: str = "POST"
-    path: str = f"{_PREFIX}/documents"
+    path: str = f"{_PREFIX}{TEST_COLLECTION}/documents"
+
+    @property
+    def collection(self) -> str | None:
+        """The collection segment of the path (L19), or None if it has none."""
+        if not self.path.startswith(_PREFIX):
+            return None
+        return self.path.removeprefix(_PREFIX).split("/", 1)[0]
 
     @property
     def chunk_ids(self) -> list[str]:
@@ -77,8 +97,15 @@ class Seen:
 
     @property
     def key(self) -> str:
-        """The Idempotency-Key less its trailing body digest."""
-        return self.headers["Idempotency-Key"].rsplit(":", 1)[0]
+        """The Idempotency-Key less its leading collection and its trailing
+        body digest: the run, document, part and round. A collection name
+        cannot contain ":" (COLLECTION_PATTERN), so the split is exact."""
+        return self.headers["Idempotency-Key"].rsplit(":", 1)[0].split(":", 1)[1]
+
+    @property
+    def key_collection(self) -> str:
+        """The collection the Idempotency-Key is scoped to (L19)."""
+        return self.headers["Idempotency-Key"].split(":", 1)[0]
 
     @property
     def key_digest(self) -> str:
@@ -90,12 +117,35 @@ def _parse_time(value: str) -> datetime:
 
 
 class FakeLlmModule:
-    """The llm-module's ingest API, held in memory."""
+    """The llm-module's ingest API, held in memory.
 
-    def __init__(self, *, schema_version: int = 1) -> None:
+    State is held per collection (L19). By default a collection is created by
+    the first request that names it; `require_existing_collections()` makes
+    the fake answer a whole-request 404 for one never `create_collection`ed
+    instead — the other answer to the contract's §13 q15.
+
+    `records` and `points` are the collection the request being handled in
+    the calling thread names, and `collection` (TEST_COLLECTION unless given)
+    otherwise, so a test reading them while a worker thread is mid-request
+    never sees the worker's collection. `held_in` reads any collection
+    without creating it; `collections` is every collection a request named.
+    `events` and `requests` span all of them.
+    """
+
+    def __init__(
+        self, *, schema_version: int = 1, collection: str = TEST_COLLECTION
+    ) -> None:
         self.schema_version = schema_version
-        self.records: dict[str, dict[str, Any]] = {}
-        self.points: dict[str, dict[str, Any]] = {}
+        self.collection = collection
+        # collection -> (records, points)
+        self._held: dict[
+            str, tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]
+        ] = {}
+        # The collection the request in this thread names, while handled.
+        self._local = threading.local()
+        self._touched: set[str] = set()
+        self._create_on_write = True
+        self._existing: set[str] = set()
         self.requests: list[Seen] = []
         self.events: list[Event] = []
         self._replies: deque[Reply | BaseException] = deque()
@@ -106,6 +156,46 @@ class FakeLlmModule:
         self._delay: float | None = None
         self._max_body: int | None = None
         self._lock = threading.Lock()
+
+    # -- per-collection state (L19) ----------------------------------------
+
+    def held_in(
+        self, collection: str
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        """(records, points) of `collection` — empty, and NOT created, if
+        nothing was ever held there. A read never brings a collection into
+        being."""
+        return self._held.get(collection, ({}, {}))
+
+    @property
+    def collections(self) -> frozenset[str]:
+        """Every collection a request has named."""
+        return frozenset(self._touched)
+
+    def require_existing_collections(self) -> None:
+        """From now on, a request naming a collection that was never
+        `create_collection`ed gets a whole-request 404."""
+        self._create_on_write = False
+
+    def create_collection(self, name: str) -> None:
+        self._existing.add(name)
+
+    def _state(
+        self, collection: str
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+        return self._held.setdefault(collection, ({}, {}))
+
+    @property
+    def _active(self) -> str | None:
+        return getattr(self._local, "collection", None)
+
+    @property
+    def records(self) -> dict[str, dict[str, Any]]:
+        return self._state(self._active or self.collection)[0]
+
+    @property
+    def points(self) -> dict[str, dict[str, Any]]:
+        return self._state(self._active or self.collection)[1]
 
     # -- scripting ---------------------------------------------------------
 
@@ -176,7 +266,19 @@ class FakeLlmModule:
                 return reply.status, dict(reply.headers), reply.body or b""
             if self._max_body is not None and len(raw) > self._max_body:
                 return 413, {}, b""
-            return self._route(method, path, body)
+            if not path.startswith(_PREFIX):
+                return 404, {}, b""
+            collection, _, rest = path.removeprefix(_PREFIX).partition("/")
+            self._touched.add(collection)
+            if not self._create_on_write and collection not in self._existing:
+                # The whole request, never an item: a missing collection is a
+                # wrong address, not "already gone" (contract §9).
+                return 404, {}, b""
+            self._local.collection = collection
+            try:
+                return self._route(method, rest, body)
+            finally:
+                self._local.collection = None
 
     def _wait(self, timeout: object) -> None:
         if self._delay is None:
@@ -186,9 +288,10 @@ class FakeLlmModule:
             raise requests.ReadTimeout("the fake llm-module answered too slowly")
 
     def _route(
-        self, method: str, path: str, body: dict[str, Any] | None
+        self, method: str, rest: str, body: dict[str, Any] | None
     ) -> tuple[int, dict[str, str], bytes]:
-        parts = path.removeprefix(_PREFIX).strip("/").split("/")
+        """`rest` is the path after /ingest/v1/collections/{collection}/."""
+        parts = rest.strip("/").split("/")
         if method == "GET" and len(parts) == 2 and parts[0] == "documents":
             probe = self.probe(parts[1])
             if probe is None:
@@ -369,7 +472,8 @@ class FakeLlmModule:
         }
 
     def probe(self, document_id: str) -> dict[str, Any] | None:
-        """What GET /ingest/v1/documents/{id} answers, or None for a 404."""
+        """What GET .../collections/{c}/documents/{id} answers, or None for a
+        404."""
         ordinals = sorted(p["ordinal"] for p in self.points_of(document_id).values())
         if document_id not in self.records and not ordinals:
             return None

@@ -51,7 +51,7 @@ from exporter_fakes import (
     empty_prefix,
     live_s3_store_or_skip,
 )
-from llm_module_fake import FakeLlmModule, session_for
+from llm_module_fake import TEST_COLLECTION, FakeLlmModule, session_for
 
 from exporter.core.ids import make_chunk_id, manifest_key
 from exporter.core.schemas import Chunk, DocumentRecord, TextSpan
@@ -273,8 +273,9 @@ _ALL_TERMS = ContractTerms(
 def _llm_module_sink(fake: FakeLlmModule, terms: ContractTerms) -> LlmModuleSink:
     return LlmModuleSink(
         base_url="https://llm-module.invalid",
+        collection=TEST_COLLECTION,
         agency_id=AGENCY,
-        sink_id="llm_module",
+        sink_id=f"llm_module:{TEST_COLLECTION}",
         run_id="conformance",
         token_provider=lambda: "conformance-token",
         ingest_schema_version=1,

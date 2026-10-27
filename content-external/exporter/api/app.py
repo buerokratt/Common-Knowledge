@@ -170,7 +170,7 @@ def _start_export(
             outcome="busy",
             run_id=task.run_id,
             agency_id=task.agency_id,
-            sink=settings.content_sink,
+            sink=settings.sink_id,
             duration_seconds=0.0,
         )
         run_state.record(
@@ -226,6 +226,7 @@ def health(
     return HealthResponse(
         status="ok",
         sink=settings.content_sink,
+        sink_id=settings.sink_id,
         store_backend=settings.content_external_store_backend,
         chunk_profile=settings.chunk_profile,
         work_dir=settings.content_work_dir,

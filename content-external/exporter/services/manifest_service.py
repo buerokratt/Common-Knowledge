@@ -115,10 +115,17 @@ class ManifestService:
             return None
         if manifest.sink_id != self._sink_id:
             # Both are sink names, never secrets, so naming them is safe.
+            # A sink_id carries the llm-module collection (L19), so this is
+            # also what a changed LLM_MODULE_COLLECTION looks like. A
+            # deliberate re-bootstrap into a new collection takes a fresh
+            # MANIFEST_STORE_PREFIX; the old manifest is kept, never deleted.
             raise SinkMismatch(
                 f"manifest at {self._store.key_for(agency_id)!r} describes sink "
                 f"{manifest.sink_id!r}, but this deployment runs "
-                f"{self._sink_id!r}; refusing to diff against it"
+                f"{self._sink_id!r}; refusing to diff against it. If the "
+                "destination changed on purpose (a new LLM_MODULE_COLLECTION "
+                "for a re-bootstrap), point MANIFEST_STORE_PREFIX at a fresh "
+                "prefix and keep this manifest"
             )
         return manifest
 

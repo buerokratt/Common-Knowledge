@@ -20,6 +20,8 @@ answer — never to make a deployment work. A capability lie is worse than a
 missing capability (D0).
 """
 
+import re
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal, Self
 
@@ -27,8 +29,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "AGREED_TERMS",
-    "DOCUMENT_DELETE_PATH",
-    "INGEST_PATH",
+    "COLLECTION_PATTERN",
+    "LEGACY_COLLECTIONS",
     "RECORD_REF",
     "SUPPORTED_INGEST_SCHEMA_VERSIONS",
     "AgencyDeleteRequest",
@@ -51,29 +53,84 @@ __all__ = [
     "chunk_delete_path",
     "classify_delete_status",
     "classify_item_status",
+    "document_delete_path",
     "document_path",
+    "ingest_path",
     "sweep_path",
+    "validate_collection",
 ]
 
-INGEST_PATH = "/ingest/v1/documents"
-DOCUMENT_DELETE_PATH = "/ingest/v1/documents/delete"
+# THE COLLECTION IS IN EVERY PATH (L19). The cutover bootstraps beside the
+# live corpus, into a new collection, so the exporter must name the one it
+# writes to — the PHYSICAL collection, never the retrieval alias: rollback
+# moves the alias back, and an exporter that followed it would start writing
+# into the old corpus. It is a path segment rather than a body field so a GET
+# probe carries it the same way a POST does.
+COLLECTION_PATTERN = re.compile(r"[A-Za-z0-9_-]{1,64}")
+
+# The llm-module's existing corpora (contract review §2): chunked by its own
+# chunker, keyed on `document_hash`, and live until the cutover swap. No point
+# in them maps to one of ours, so writing into one would mix two id spaces in
+# the collection retrieval is answering from. Bootstrap beside, never in place.
+LEGACY_COLLECTIONS = frozenset({"contextual_chunks_azure", "contextual_chunks_aws"})
 
 
-def chunk_delete_path(document_id: str) -> str:
-    return f"/ingest/v1/documents/{document_id}/chunks/delete"
+def validate_collection(name: str, protected: Collection[str] = ()) -> str:
+    """`name` if the exporter may write to it, else ValueError (L19).
+
+    `protected` is the deployment's own list (LLM_MODULE_PROTECTED_COLLECTIONS)
+    on top of LEGACY_COLLECTIONS: the retrieval alias, and any other live
+    collection this module cannot know the name of. Both compare without case.
+    """
+    if not isinstance(name, str) or not COLLECTION_PATTERN.fullmatch(name):
+        raise ValueError(
+            f"LLM_MODULE_COLLECTION must be 1-64 characters of A-Z, a-z, 0-9, "
+            f"'_' or '-', got {name!r}"
+        )
+    if name.casefold() in LEGACY_COLLECTIONS:
+        raise ValueError(
+            f"LLM_MODULE_COLLECTION={name} is one of the llm-module's existing "
+            "collections, chunked by its own chunker and keyed on document_hash. "
+            "L19: bootstrap beside, never in place — name a new collection."
+        )
+    if name.casefold() in {p.casefold() for p in protected}:
+        raise ValueError(
+            f"LLM_MODULE_COLLECTION={name} is listed in "
+            "LLM_MODULE_PROTECTED_COLLECTIONS — the retrieval alias or another "
+            "live collection. The exporter writes to its own physical "
+            "collection only: through the alias, a rollback would send its "
+            "writes into the old corpus (L19)."
+        )
+    return name
 
 
-def document_path(document_id: str) -> str:
+def _root(collection: str) -> str:
+    return f"/ingest/v1/collections/{collection}"
+
+
+def ingest_path(collection: str) -> str:
+    return f"{_root(collection)}/documents"
+
+
+def document_delete_path(collection: str) -> str:
+    return f"{_root(collection)}/documents/delete"
+
+
+def chunk_delete_path(collection: str, document_id: str) -> str:
+    return f"{_root(collection)}/documents/{document_id}/chunks/delete"
+
+
+def document_path(collection: str, document_id: str) -> str:
     """The read-back probe for one document (L17)."""
-    return f"/ingest/v1/documents/{document_id}"
+    return f"{_root(collection)}/documents/{document_id}"
 
 
-def agency_delete_path(agency_id: str) -> str:
-    return f"/ingest/v1/agencies/{agency_id}/delete"
+def agency_delete_path(collection: str, agency_id: str) -> str:
+    return f"{_root(collection)}/agencies/{agency_id}/delete"
 
 
-def sweep_path(agency_id: str) -> str:
-    return f"/ingest/v1/agencies/{agency_id}/sweep"
+def sweep_path(collection: str, agency_id: str) -> str:
+    return f"{_root(collection)}/agencies/{agency_id}/sweep"
 
 
 # The versions LlmModuleSink can speak. LLM_MODULE_INGEST_SCHEMA_VERSION must
@@ -100,8 +157,12 @@ class ContractTerms:
     # question for each is given alongside.
     #
     # Open item 8 (§13 q3): merge the record onto existing points without
-    # content and without a re-embed (L8). False until confirmed — the
-    # coordinator then re-pushes the document in full and counts it.
+    # content and without a re-embed (L8), ALL-OR-NOTHING per document (L25):
+    # one `record` item, applied to every point or to none. True only when
+    # both halves are answered yes — a merge that can land on 8 of 12 points
+    # leaves a document inconsistent across its own passages, and once in the
+    # manifest it is never retried. False until confirmed — the coordinator
+    # then re-pushes the document in full and counts it.
     supports_metadata_only_merge: bool
     # Open item 9 (§13 q5): the most documents it will take in parallel (F16).
     # It embeds every chunk it receives, so the ceiling is its owner's to state.

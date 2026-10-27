@@ -18,6 +18,7 @@ from exporter.services.run_state import LAST_RUN_FILENAME, RunStateStore
 HEALTH_KEYS = {
     "status",
     "sink",
+    "sink_id",
     "store_backend",
     "chunk_profile",
     "work_dir",
@@ -56,6 +57,7 @@ def test_health_returns_ok_and_the_configured_identity(work_dir_env: Path) -> No
     assert set(body) == HEALTH_KEYS
     assert body["status"] == "ok"
     assert body["sink"] == "object_store"
+    assert body["sink_id"] == "object_store"
     assert body["store_backend"] == "s3"
     assert body["chunk_profile"] == "azure_native"
     assert body["work_dir"] == work_dir_env.as_posix()
@@ -83,12 +85,15 @@ def test_health_reports_the_configured_sink(
     monkeypatch.setenv("EXTERNAL_S3_ACCESS_KEY_ID", "manifest-key-id")
     monkeypatch.setenv("EXTERNAL_S3_SECRET_ACCESS_KEY", "manifest-secret")
     monkeypatch.setenv("LLM_MODULE_BASE_URL", "https://llm.example/ingest")
+    monkeypatch.setenv("LLM_MODULE_COLLECTION", "ckb_chunks_v1")
     monkeypatch.setenv("LLM_MODULE_VAULT_SECRET_PATH", "llm/connections/ingest")
     monkeypatch.setenv("LLM_MODULE_ALLOW_PROPOSED_CONTRACT", "true")
 
     with TestClient(app) as client:
         body = client.get("/health").json()
     assert body["sink"] == "llm_module"
+    # L19: which collection, visible at a swap or rollback.
+    assert body["sink_id"] == "llm_module:ckb_chunks_v1"
     assert body["chunk_profile"] == "compact"
 
 

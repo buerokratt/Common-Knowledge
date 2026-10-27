@@ -13,10 +13,18 @@ validator refuses it first, and this re-asserts it, so no path selects the
 sink against an unagreed contract. Nothing calls this at startup, so neither
 a refusal here nor a missing EXTERNAL_S3_* value can affect /health.
 
-THE SINK ID IS THE CONTENT_SINK VALUE. The manifest records it (F17), and a
-mismatch fails the run rather than reading as a first run. Bucket, endpoint
-and base URL are deliberately not part of it: moving the same content to a
-new address is not a change of destination, and must not trip that guard.
+THE SINK ID NAMES THE DESTINATION'S CONTENT, NOT ITS ADDRESS. It is
+`Settings.sink_id`: the CONTENT_SINK value for `object_store`, and
+`llm_module:<LLM_MODULE_COLLECTION>` for `llm_module`, because the cutover
+bootstraps a new collection beside the live one (L19) and a manifest written
+for one collection must never be diffed against another. The manifest
+records it (F17), and a mismatch fails the run rather than reading as a first
+run.
+
+The collection is re-checked here against LLM_MODULE_PROTECTED_COLLECTIONS
+as well as the legacy names, and refused as a ConfigurationError like every
+other refusal here — so a Settings built without validation cannot write to
+the alias either.
 """
 
 import logging
@@ -29,7 +37,7 @@ from exporter.api.config import (
     llm_module_contract_refusal,
 )
 from exporter.sinks.base import ContentSink
-from exporter.sinks.llm_module_contract import AGREED_TERMS
+from exporter.sinks.llm_module_contract import AGREED_TERMS, validate_collection
 from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import ObjectStoreSink
 from exporter.stores.factory import build_destination_store
@@ -42,7 +50,7 @@ def _build_object_store(settings: Settings, agency_id: str, run_id: str) -> Cont
         store=build_destination_store(settings),
         prefix=settings.content_external_prefix,
         agency_id=agency_id,
-        sink_id=settings.content_sink,
+        sink_id=settings.sink_id,
     )
 
 
@@ -52,6 +60,13 @@ def _build_llm_module(settings: Settings, agency_id: str, run_id: str) -> Conten
     )
     if refusal is not None:
         raise ConfigurationError(refusal)
+    try:
+        validate_collection(
+            settings.llm_module_collection,
+            settings.protected_llm_module_collections,
+        )
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
     if AGREED_TERMS.status != "agreed":
         logger.warning(
             "CONTENT_SINK=llm_module against the PROPOSED ingest contract "
@@ -59,8 +74,9 @@ def _build_llm_module(settings: Settings, agency_id: str, run_id: str) -> Conten
         )
     return LlmModuleSink(
         base_url=settings.llm_module_base_url,
+        collection=settings.llm_module_collection,
         agency_id=agency_id,
-        sink_id=settings.content_sink,
+        sink_id=settings.sink_id,
         run_id=run_id,
         token_provider=lambda: fetch_llm_module_token(settings),
         ingest_schema_version=settings.llm_module_ingest_schema_version,

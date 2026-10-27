@@ -151,6 +151,7 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     "external_s3_access_key_id": "manifest-key-id",
     "external_s3_secret_access_key": "manifest-secret",
     "llm_module_base_url": "https://llm.example/ingest",
+    "llm_module_collection": "ckb_chunks_v1",
     "llm_module_vault_secret_path": "llm/connections/ingest",
     # The contract is PROPOSED; without this every llm_module row is refused
     # by the contract gate before the matrix row under test.
@@ -189,6 +190,7 @@ def test_matrix_row_2_llm_module_without_a_manifest_store_is_refused() -> None:
     ("dropped", "expected"),
     [
         ("llm_module_base_url", "LLM_MODULE_BASE_URL"),
+        ("llm_module_collection", "LLM_MODULE_COLLECTION"),
         ("llm_module_vault_secret_path", "LLM_MODULE_VAULT_SECRET_PATH"),
     ],
 )
@@ -207,6 +209,57 @@ def test_matrix_row_3_names_both_when_both_are_missing() -> None:
     message = str(excinfo.value)
     assert "LLM_MODULE_BASE_URL" in message
     assert "LLM_MODULE_VAULT_SECRET_PATH" in message
+
+
+@pytest.mark.parametrize(
+    ("collection", "expected"),
+    [
+        ("contextual_chunks_azure", "never in place"),
+        ("Contextual_Chunks_AWS", "never in place"),
+        ("ckb/chunks", "LLM_MODULE_COLLECTION"),
+        ("ckb chunks", "LLM_MODULE_COLLECTION"),
+        ("..", "LLM_MODULE_COLLECTION"),
+        ("c" * 65, "LLM_MODULE_COLLECTION"),
+    ],
+)
+def test_l19_the_collection_is_a_new_one_and_a_plain_segment(
+    collection: str, expected: str
+) -> None:
+    """L19: bootstrap beside, never into the llm-module's existing corpus,
+    and the name goes into a URL path, so it must be one plain segment."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_collection=collection)
+    assert expected in str(excinfo.value)
+
+
+def test_l19_a_new_collection_is_accepted() -> None:
+    settings = _llm_module_settings(llm_module_collection="ckb_chunks-v2")
+    assert settings.llm_module_collection == "ckb_chunks-v2"
+    assert settings.sink_id == "llm_module:ckb_chunks-v2"
+
+
+@pytest.mark.parametrize("collection", ["ckb_retrieval", "CKB_RETRIEVAL"])
+def test_l19_a_protected_collection_is_refused(collection: str) -> None:
+    """The retrieval alias, named by the deployment: prose saying "never the
+    alias" protects nothing, a startup refusal does."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            llm_module_collection=collection,
+            llm_module_protected_collections="ckb_live, ckb_retrieval,",
+        )
+    assert "LLM_MODULE_PROTECTED_COLLECTIONS" in str(excinfo.value)
+
+
+def test_l19_protected_collections_parse_and_do_not_block_others() -> None:
+    settings = _llm_module_settings(
+        llm_module_protected_collections=" ckb_retrieval ,, ckb_live "
+    )
+    assert settings.protected_llm_module_collections == {"ckb_retrieval", "ckb_live"}
+    assert settings.llm_module_collection == "ckb_chunks_v1"
+
+
+def test_the_object_store_sink_id_is_the_sink_name(clean_env: None) -> None:
+    assert _settings().sink_id == "object_store"
 
 
 def test_matrix_row_4_local_manifest_store_needs_the_dev_flag() -> None:

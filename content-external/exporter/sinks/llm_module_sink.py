@@ -26,7 +26,8 @@ everything between a DocumentRecord and that wire:
 - IDEMPOTENT BY CONSTRUCTION (L4, L7). The point id is the chunk's
   coordinate id, sent untouched, and the contract requires merge-or-create —
   so every replay overwrites. `Idempotency-Key` is
-  {run_id}:{document_id}:p{part}[:r{round}]:{body digest}. The digest makes
+  {collection}:{run_id}:{document_id}:p{part}[:r{round}]:{body digest}. The
+  collection keeps two collections' keys apart (L19). The digest makes
   two different bodies never share a key, even when an operator reuses a
   --run-id after the content changed; the round makes a byte-identical
   resend a new key, so a far side that caches replies cannot answer it with
@@ -59,6 +60,14 @@ everything between a DocumentRecord and that wire:
   every point (Open item 7, the contract's §13 q4) and a probe (Open item
   10, §13 q13) — so each raises NotSupported until AGREED_TERMS says
   otherwise, and the sink never infers them from a response.
+
+- ONE COLLECTION, NAMED (L19). Every path carries the collection this
+  deployment writes to — the physical one, never the retrieval alias, and
+  never one of the llm-module's existing `contextual_chunks_*` corpora: the
+  cutover bootstraps beside the live corpus, not into it. The factory puts
+  the collection in the sink_id too, so pointing an existing manifest at a
+  different collection fails the run (F17) instead of claiming content the
+  new collection does not hold.
 
 - A WHOLE-REQUEST 404 IS A FAILURE, NOT "ALREADY GONE". Only an item's 404
   or 410 means missing (contract §9). A request-level 404 is what a wrong
@@ -104,8 +113,6 @@ from exporter.sinks.base import (
 )
 from exporter.sinks.llm_module_contract import (
     AGREED_TERMS,
-    DOCUMENT_DELETE_PATH,
-    INGEST_PATH,
     RECORD_REF,
     SUPPORTED_INGEST_SCHEMA_VERSIONS,
     AgencyDeleteRequest,
@@ -127,8 +134,11 @@ from exporter.sinks.llm_module_contract import (
     chunk_delete_path,
     classify_delete_status,
     classify_item_status,
+    document_delete_path,
     document_path,
+    ingest_path,
     sweep_path,
+    validate_collection,
 )
 
 __all__ = [
@@ -238,6 +248,7 @@ class LlmModuleSink(ContentSink):
         self,
         *,
         base_url: str,
+        collection: str,
         agency_id: str,
         sink_id: str,
         run_id: str,
@@ -269,6 +280,8 @@ class LlmModuleSink(ContentSink):
             raise ValueError("connect_timeout and read_timeout must be > 0")
         # It becomes part of every Idempotency-Key.
         self._run_id = validate_segment("run_id", run_id)
+        # Part of every path (L19); never a legacy collection.
+        self._collection = validate_collection(collection)
         self._base_url = base_url.rstrip("/")
         self._token_provider = token_provider
         self._schema_version = ingest_schema_version
@@ -534,7 +547,9 @@ class LlmModuleSink(ContentSink):
             f"llm-module upsert {request.document_id} part "
             f"{request.part.index + 1}/{request.part.count}"
         )
-        answer = self._exchange("POST", INGEST_PATH, body, token, key, describe)
+        answer = self._exchange(
+            "POST", ingest_path(self._collection), body, token, key, describe
+        )
         if isinstance(answer, _Failure):
             return answer
         return self._itemised(*answer)
@@ -562,7 +577,11 @@ class LlmModuleSink(ContentSink):
         if body is not None:
             digest = hashlib.sha256(body).hexdigest()[:_KEY_DIGEST_HEX]
             headers["Content-Type"] = "application/json; charset=utf-8"
-            headers["Idempotency-Key"] = f"{key}:{digest}"
+            # The collection leads the key (L19): the body does not name it,
+            # so without it the same run, document and part sent to two
+            # collections would share a key, and a far side deduplicating
+            # keys across collections would answer the second as a replay.
+            headers["Idempotency-Key"] = f"{self._collection}:{key}:{digest}"
 
         def send() -> tuple[int, bytes]:
             # Streamed, so the body is read up to a bound rather than whole;
@@ -745,7 +764,7 @@ class LlmModuleSink(ContentSink):
             verdicts = self._delete_rounds(
                 batch,
                 build,
-                DOCUMENT_DELETE_PATH,
+                document_delete_path(self._collection),
                 token,
                 key=f"{self._run_id}:del:b{index}",
                 describe=(
@@ -778,7 +797,9 @@ class LlmModuleSink(ContentSink):
                 chunks=[ChunkRef(chunk_id=ref, ordinal=by_ref[ref]) for ref in refs],
             )
 
-        path = chunk_delete_path(validate_segment("document_id", document_id))
+        path = chunk_delete_path(
+            self._collection, validate_segment("document_id", document_id)
+        )
         batches, unsent = self._pack(tuple(by_ref), build)
         outcomes: list[DeleteOutcome[int]] = [
             DeleteOutcome(
@@ -815,7 +836,7 @@ class LlmModuleSink(ContentSink):
         answer = self._answer(
             self._exchange(
                 "POST",
-                agency_delete_path(agency),
+                agency_delete_path(self._collection, agency),
                 body,
                 token,
                 f"{self._run_id}:del-agency",
@@ -958,7 +979,7 @@ class LlmModuleSink(ContentSink):
         answer = self._answer(
             self._exchange(
                 "POST",
-                sweep_path(self.agency_id),
+                sweep_path(self._collection, self.agency_id),
                 body,
                 token,
                 f"{self._run_id}:sweep",
@@ -995,7 +1016,9 @@ class LlmModuleSink(ContentSink):
             raise StoreError("llm-module read-back: credential unavailable")
         answer = self._exchange(
             "GET",
-            document_path(validate_segment("document_id", document_id)),
+            document_path(
+                self._collection, validate_segment("document_id", document_id)
+            ),
             None,
             token,
             None,

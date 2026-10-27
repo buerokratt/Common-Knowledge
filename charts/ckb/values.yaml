@@ -606,10 +606,20 @@ contentExternal:
   # bucket AND prefix, inherited wholesale, so this deployment shape gains no
   # configuration at all. An llm_module deployment MUST set it — an HTTP API
   # has nowhere to hold a manifest — along with LLM_MODULE_BASE_URL (https://
-  # only; the body is Estonian government document text) and
-  # LLM_MODULE_VAULT_SECRET_PATH. An s3 manifest store authenticates with the
-  # EXTERNAL_S3_* keys from contentExternal.externalStore.secret, and startup
-  # refuses it without them.
+  # only; the body is Estonian government document text),
+  # LLM_MODULE_COLLECTION and LLM_MODULE_VAULT_SECRET_PATH.
+  # LLM_MODULE_COLLECTION (L19) names the NEW physical collection the cutover
+  # bootstraps beside the live one — never the retrieval alias (the swap and
+  # its rollback move the alias), and never contextual_chunks_*, which startup
+  # refuses; list the alias itself in LLM_MODULE_PROTECTED_COLLECTIONS
+  # (comma-separated) so startup refuses that too. GET /health's sink_id shows
+  # which collection a pod writes to. The collection is part of the
+  # manifest's sink_id, so changing it against an existing manifest fails the
+  # run: a re-bootstrap into another collection also takes a fresh
+  # MANIFEST_STORE_PREFIX.
+  #
+  # An s3 manifest store authenticates with the EXTERNAL_S3_* keys from
+  # contentExternal.externalStore.secret, and startup refuses it without them.
   #
   # MANIFEST_STORE_BACKEND=local is development only and additionally needs
   # MANIFEST_STORE_ALLOW_LOCAL=true. Never set it in a chart values file: a
@@ -643,6 +653,8 @@ contentExternal:
   #
   #   - name: CONTENT_SINK                  value: "llm_module"
   #   - name: LLM_MODULE_BASE_URL           value: "https://..."
+  #   - name: LLM_MODULE_COLLECTION         value: "ckb_chunks_v1"
+  #   - name: LLM_MODULE_PROTECTED_COLLECTIONS  value: "ckb_retrieval"
   #   - name: LLM_MODULE_VAULT_SECRET_PATH  value: "content-external/llm_module"
   #   - name: VAULT_ADDR                    value: "http://vault:8200"
   #   - name: VAULT_TOKEN_PATH              value: "/vault/secrets/token"

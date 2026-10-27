@@ -64,7 +64,7 @@ from exporter.services.backoff import (
 )
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
 from exporter.sinks.base import CredentialUnavailableError
-from exporter.sinks.llm_module_contract import AGREED_TERMS
+from exporter.sinks.llm_module_contract import AGREED_TERMS, validate_collection
 
 logger = logging.getLogger(__name__)
 
@@ -352,6 +352,18 @@ class Settings(BaseSettings):
 
     # --- llm-module sink (Stage L) -----------------------------------------
     llm_module_base_url: str = ""
+    # L19: the collection this deployment writes to, in every request path.
+    # The PHYSICAL collection, never the retrieval alias: the cutover swap
+    # and its rollback move the alias, and an exporter that followed it would
+    # write into the old corpus on rollback. Part of the sink_id, so changing
+    # it against an existing manifest fails the run rather than claiming
+    # content the new collection does not hold (F17).
+    llm_module_collection: str = ""
+    # Comma-separated names LLM_MODULE_COLLECTION may never be, on top of the
+    # llm-module's own contextual_chunks_* corpora: the retrieval alias, and
+    # any other live collection on that deployment. Prose saying "never the
+    # alias" protects nothing; startup refusing it does.
+    llm_module_protected_collections: str = ""
     llm_module_ingest_schema_version: Annotated[int, Field(ge=1)] = 1
     llm_module_max_request_bytes: Annotated[int, Field(ge=1)] = 8_388_608
     llm_module_connect_timeout: Annotated[float, Field(gt=0)] = 5.0
@@ -603,28 +615,36 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_llm_module_endpoint_and_credential(self) -> "Settings":
-        """Matrix row 3: `llm_module` needs a base URL and a credential path.
+        """Matrix row 3: `llm_module` needs a base URL, a collection and a
+        credential path.
 
         TLS is required and certificate verification is never disabled, so an
         `http://` base URL is refused here rather than discovered when the
         first document leaves the cluster — the push body IS Estonian
-        government document text (L14).
+        government document text (L14). The collection must be a new one,
+        never the llm-module's existing corpus (L19).
         """
         if self.content_sink != "llm_module":
             return self
         missing = []
         if not self.llm_module_base_url:
             missing.append("LLM_MODULE_BASE_URL")
+        if not self.llm_module_collection:
+            missing.append("LLM_MODULE_COLLECTION")
         if not self.llm_module_vault_secret_path:
             missing.append("LLM_MODULE_VAULT_SECRET_PATH")
         if missing:
             raise ValueError(
                 "CONTENT_SINK=llm_module requires "
                 f"{' and '.join(missing)} to be set. Without "
-                "a base URL there is nowhere to push; without a Vault secret "
-                "path there is no credential, and the run would report "
-                "`failed` every hour with the reason only in stdout."
+                "a base URL there is nowhere to push; without a collection "
+                "there is no telling the new corpus from the live one; without "
+                "a Vault secret path there is no credential, and the run would "
+                "report `failed` every hour with the reason only in stdout."
             )
+        validate_collection(
+            self.llm_module_collection, self.protected_llm_module_collections
+        )
         if not self.llm_module_base_url.startswith("https://"):
             raise ValueError(
                 "LLM_MODULE_BASE_URL must use https://, got "
@@ -697,6 +717,30 @@ class Settings(BaseSettings):
     # docstring says why; splitting it field-by-field would silently relocate
     # an object-store deployment's manifest and break verification 20.
     # ----------------------------------------------------------------------
+
+    @property
+    def protected_llm_module_collections(self) -> frozenset[str]:
+        """LLM_MODULE_PROTECTED_COLLECTIONS as names, blanks dropped."""
+        return frozenset(
+            name.strip()
+            for name in self.llm_module_protected_collections.split(",")
+            if name.strip()
+        )
+
+    @property
+    def sink_id(self) -> str:
+        """The destination's identity, as the manifest records it (F17).
+
+        The one place it is spelled, so the factory, the run line, the error
+        line and /health can never disagree. For `llm_module` it carries the
+        collection (L19): a different collection holds different content, so
+        a manifest written for one must never be diffed against another.
+        Bucket, endpoint and base URL stay out — moving the same content to a
+        new address is not a change of destination.
+        """
+        if self.content_sink == "llm_module":
+            return f"llm_module:{self.llm_module_collection}"
+        return self.content_sink
 
     @property
     def manifest_store_is_inherited(self) -> bool:

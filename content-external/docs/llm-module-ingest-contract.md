@@ -32,8 +32,33 @@ state.
 ## 1. Endpoint
 
 ```
-POST {LLM_MODULE_BASE_URL}/ingest/v1/documents
+POST {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/documents
 ```
+
+Every path in this contract starts `/ingest/v1/collections/{collection}/`.
+`{collection}` is the exporter's `LLM_MODULE_COLLECTION`:
+
+- **It is the physical collection, never a retrieval alias.** The cutover
+  swap and its rollback move the alias that retrieval reads through
+  ([`llm-module-cutover.md`](llm-module-cutover.md)). If the exporter wrote
+  through that alias, a rollback would point its writes at the old corpus.
+- **It is a new collection, beside the live one.** `contextual_chunks_azure`
+  and `contextual_chunks_aws` hold points chunked by the llm-module's own
+  chunker and keyed on `document_hash`. None of them can be mapped to one of
+  ours, so the exporter refuses those names at startup. It also refuses
+  anything the deployment lists in `LLM_MODULE_PROTECTED_COLLECTIONS`, which
+  is where the alias goes.
+- **If the collection does not exist**, answer the whole request with `404`,
+  never an item-level one. The exporter then fails the push and the delete
+  outright instead of reading "already gone".
+- 1–64 characters of `A-Z a-z 0-9 _ -`.
+- Either the llm-module creates it on first write, or its owner creates it
+  before the bootstrap ([§13](#13-open-questions-for-the-llm-module-owner)
+  question 15).
+
+The exporter records the collection in its manifest. Pointing it at another
+collection with the same manifest fails the run instead of claiming
+documents are already published there.
 
 | Header | Value |
 |---|---|
@@ -191,7 +216,11 @@ written down here rather than discovered.
 
 If the llm-module enriches chunks before embedding (the `contextual_chunks_*`
 collection names suggest a context prefix or summary), the **point id must
-still be our `chunk_id` after enrichment**.
+still be our `chunk_id` after enrichment**. Enrichment changes the text, so
+a point id derived from enriched text would bring back exactly the
+re-keying this section forbids. Whether enrichment stays is settled before
+the cutover (task L22, [§13](#13-open-questions-for-the-llm-module-owner)
+question 7).
 
 ## 5. Large documents: split into parts
 
@@ -232,9 +261,14 @@ a crash, a bootstrap that resumes. A replay must overwrite, not duplicate.
 `Idempotency-Key` is
 
 ```
-{run_id}:{document_id}:p{part_index}[:r{round}]:{digest}
+{collection}:{run_id}:{document_id}:p{part_index}[:r{round}]:{digest}
 ```
 
+- `{collection}` is the path's collection ([§1](#1-endpoint)). The body does
+  not name it, so without it the same run, document and part sent to two
+  collections, such as a re-bootstrap beside the first, would share a key,
+  and a key cache shared across collections would answer the second as a
+  replay and never write it.
 - `:r{round}` is present only when the exporter resends failed items.
 - `digest` is the first 16 hex characters of the SHA-256 of the request body.
 
@@ -250,8 +284,9 @@ So:
   by key, you will never be asked to answer a resend with the failure it is
   resending for.
 
-*(The task breakdown proposes `{run_id}:{document_id}`. The part, round and
-digest segments are this document's refinement, for the reasons above.)*
+*(The task breakdown proposes `{run_id}:{document_id}`. The collection,
+part, round and digest segments are this document's refinement, for the
+reasons above.)*
 
 ## 7. Atomicity rules
 
@@ -296,6 +331,25 @@ document without re-embedding** and without the exporter resending chunk text.
 The merge is **all-or-nothing per document**: one `record` item, applied to
 every point or to none.
 
+**The answer to a merge is exactly one item, `record`** (task L25). Its
+status covers every point of the document:
+
+- `2xx` means every point now carries the new record. The document enters
+  the exporter's manifest.
+- Any other status means **no** point changed. The document stays out of the
+  manifest and the whole merge is sent again: in the same run if the status
+  is retryable, otherwise on the next hourly run.
+- **A merge answered point by point is refused.** If the response carries
+  items for chunk ids, the exporter cannot tell an all-or-nothing merge from
+  one that landed on 8 of 12 points. It treats the answer as untrustworthy
+  ([§3](#3-response)): the document is not published and is sent again on
+  the next run.
+
+The reason for this rule: if a half-applied merge entered the manifest, it
+would stay half-applied for good. The next run finds the hashes matching and
+sends nothing, so the document's passages disagree about its own title,
+indefinitely.
+
 **Not yet enabled.** The exporter will only send this once the llm-module
 confirms it supports it ([§13](#13-open-questions-for-the-llm-module-owner),
 question 3). Until then a metadata change is sent as a full re-push of the
@@ -324,7 +378,7 @@ misconfigured URL report every deletion done while doing none.
 ### 9.1 Whole documents
 
 ```
-POST {LLM_MODULE_BASE_URL}/ingest/v1/documents/delete
+POST {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/documents/delete
 ```
 
 <!-- example: document-delete-request -->
@@ -363,7 +417,7 @@ When a document shrinks, its new chunks are upserted first, and then the
 chunks past the new end are deleted. The record stays.
 
 ```
-POST {LLM_MODULE_BASE_URL}/ingest/v1/documents/{document_id}/chunks/delete
+POST {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/documents/{document_id}/chunks/delete
 ```
 
 <!-- example: chunk-delete-request -->
@@ -385,7 +439,7 @@ log on your side can say which passage went.
 ### 9.3 A whole agency
 
 ```
-POST {LLM_MODULE_BASE_URL}/ingest/v1/agencies/{agency_id}/delete
+POST {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/agencies/{agency_id}/delete
 ```
 
 <!-- example: agency-delete-request -->
@@ -414,7 +468,7 @@ deleted in a run that then failed to say so, or that an earlier deployment
 left behind.
 
 ```
-POST {LLM_MODULE_BASE_URL}/ingest/v1/agencies/{agency_id}/sweep
+POST {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/agencies/{agency_id}/sweep
 ```
 
 <!-- example: sweep-request -->
@@ -456,7 +510,7 @@ exporter does not send it until that is agreed.
 ## 11. Read-back
 
 ```
-GET {LLM_MODULE_BASE_URL}/ingest/v1/documents/{document_id}
+GET {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/documents/{document_id}
 ```
 
 <!-- example: probe-response -->
@@ -476,15 +530,38 @@ check, before a first run, that the destination is really empty, and lets a
 reconcile report "clean" rather than "unverifiable". It is optional: without
 it the exporter degrades to trusting its own manifest, and says so.
 
-## 12. What stays out of this contract
+## 12. The cutover, and what it does not touch
 
-- **The cutover** — loading into a new collection beside the existing one,
-  comparing retrieval quality on your benchmark, swapping, and only then
-  removing the llm-module's own chunker (tasks L19–L23). Removing it first is
-  the wrong order: it deletes the fallback and the comparison together.
-- **The hourly ZIP job stays.** The Global Classifier still consumes
-  `zipped/{agency}.zip`. The llm-module no longer pulling it is not a reason to
-  stop producing it (task L24).
+The full plan, commands and sign-off record are in
+[`llm-module-cutover.md`](llm-module-cutover.md). Two of its rules belong in
+this contract because they bind both sides.
+
+**The order is fixed (task L21).**
+
+1. This contract is agreed and the exporter ships.
+2. The exporter bootstraps the whole corpus into a **new** collection
+   ([§1](#1-endpoint)). The live collection keeps serving and stays
+   unchanged, and the llm-module's existing pipeline keeps it current.
+3. Your retrieval benchmark is run against your chunks and ours, on the same
+   corpus, and the result is recorded with a decision (task L20).
+4. The retrieval alias is swapped to the new collection.
+5. After an agreed settling period, **and only then**, the llm-module
+   removes its chunker, `document_loader.py`, `dataset_download.py`,
+   `diff_identifier/`, `processed-metadata.json` and the DVC remnants.
+6. The old collection is dropped by a named owner (task L23). Neither the
+   exporter's sweep nor its purge can reach it.
+
+Removing the chunker before step 3 is the intuitive order and the wrong one.
+It deletes the fallback and the only possible comparison in the same commit.
+
+**The hourly ZIP job stays (task L24).** The Global Classifier still
+consumes `zipped/{agency}.zip` through CKB's `client/data/*` endpoints, and
+detects change through `agency.data_hash`. The llm-module no longer pulling
+the ZIP is not a reason to stop producing it. Without the job, `data_hash`
+freezes and the Classifier goes stale silently. Nothing in this contract or
+the cutover changes `trigger_zipping`, `pipeline/zip.yml`, the
+`zip_dirty` / `is_zipping` pair, `data_hash`, `zipped_data_url` or
+`client/data/*`.
 
 ## 13. Open questions for the llm-module owner
 
@@ -501,19 +578,20 @@ question 4.
 |---|---|---|---|---|
 | 1 | Which embedding model embeds our chunks, and what is its token limit? | `CHUNK_PROFILE` — a 1200-character Estonian chunk against a tight token budget is silently truncated | None — an `llm_module` deployment must set `CHUNK_PROFILE` explicitly | 1 |
 | 2 | Will you implement this endpoint, request and response (§1–§3)? | Everything | This proposal | 5 |
-| 3 | Can you merge metadata without content and without re-embedding (§8)? | `supports_metadata_only_merge` | `False` — full re-push | 8 |
+| 3 | Can you merge metadata without content and without re-embedding (§8), **all-or-nothing per document**, answered with the single `record` item? | `supports_metadata_only_merge` — `True` only if both halves are yes | `False` — full re-push | 8 |
 | 4 | Will points be keyed on our `chunk_id`, with `agency_id` filterable (§4)? | Whether edits and deletes work at all; `agency_id_filterable`, which questions 11 and 12 need | Required | 7 |
 | 5 | What concurrency and request rate will you accept? | `max_concurrency` | `2` parallel documents | 9 |
 | 6 | What request-size ceiling will you accept? | `LLM_MODULE_MAX_REQUEST_BYTES` | 8 MiB | 9 |
 | 7 | Is there an enrichment step between chunk and embed, and will it stay? | Retrieval quality after the cutover | Unknown | 11 |
-| 8 | Who owns the collection swap and its rollback at cutover? | Cutover plan | Unknown | 6 |
+| 8 | Who owns the collection swap and its rollback at cutover, and does retrieval read through an alias that can be switched atomically? | The cutover plan's swap and rollback commands (§12) | Unknown — an atomic Qdrant alias switch is proposed | 6 |
 | 9 | Which item statuses can clear on a resend (§3)? Is a `422` item ever transient, or always a bad chunk? | `_RETRYABLE_ITEM_STATUSES` — a deterministic failure classed retryable is re-embedded every hour and never reported as permanent | `409`, `422`, `503` retryable; everything else permanent | 5 |
 | 10 | Will you implement document and tail deletes (§9.1, §9.2), points before the record, with `404` for "already gone" **per item**, never for the whole request? | Whether deletions reach you at all | Required | 5 |
 | 11 | Will you implement the agency delete (§9.3)? | `supports_agency_scoped_delete` — and with it a purge | `False` | 7 |
 | 12 | Will you implement the keep-list sweep (§10), enforcing the keep list inside the delete itself? | `supports_stale_sweep` | `False` — no sweep runs | 7 |
 | 13 | Can you expose the read-back probe (§11), and does it list ordinals? | `supports_read_back`, `read_back_lists_ordinals` — reconcile "clean" vs "unverifiable", and the first-run check | `False` | 10 |
 | 14 | How many ids may one delete request name? | `DELETE_BATCH_IDS` | 500 | 5 |
+| 15 | Will you route every request by the `{collection}` path segment (§1), and is a new collection created on first write or by you beforehand? | `LLM_MODULE_COLLECTION`; whether the bootstrap needs a create step | Required; created on first write | 6 |
 
 `AGREED_TERMS.status` becomes `agreed` — and `CONTENT_SINK=llm_module` becomes
-selectable without the development flag — once questions 1, 2, 4 and 10 have
-recorded answers.
+selectable without the development flag — once questions 1, 2, 4, 10 and 15
+have recorded answers.

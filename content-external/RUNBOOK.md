@@ -549,6 +549,58 @@ a live document can carry a `synced_at` from weeks ago. Without the keep list
 
 `unchanged` runs never sweep: they classified nothing.
 
+## llm-module cutover (L19–L25)
+
+The full plan, with commands and sign-off records, is
+[docs/llm-module-cutover.md](docs/llm-module-cutover.md). What an operator
+needs on the day:
+
+**The order is fixed (L21).**
+
+1. Bootstrap beside, into a new collection.
+2. Incremental runs keep it current.
+3. Retrieval comparison, recorded with a decision.
+4. Swap the alias.
+5. Settling period.
+6. **Only then** the llm-module removes its chunker.
+7. Drop the old collection, by its named owner.
+
+Removing the chunker earlier deletes the rollback and the comparison
+together.
+
+**The exporter writes to the physical collection; the swap moves the
+alias.** `LLM_MODULE_COLLECTION` is never the alias that retrieval reads
+through. Put the alias in `LLM_MODULE_PROTECTED_COLLECTIONS` so startup
+refuses it. Neither the swap nor the rollback needs any change to the
+exporter. It keeps writing to the new collection throughout, and that is
+harmless. `GET /health` shows which collection it is: `sink_id` is
+`llm_module:<collection>`, the same value as `sink=` on every run and error
+line.
+
+**A `failed` run with `error_type=SinkMismatch` after changing
+`LLM_MODULE_COLLECTION`** means the manifest was written for another
+collection. That is the guard working, not an incident: the collection is
+part of the manifest's sink_id, so the old manifest cannot claim documents
+are already published in the new collection. If the change was deliberate
+(a re-bootstrap), point `MANIFEST_STORE_PREFIX` at a fresh prefix and
+bootstrap as in the plan's §2 and §3. **Keep the old manifest. Do not delete
+it to make the error go away.** Before you re-point, check that the last run
+against the old collection ended `success` or `unchanged`. The work
+directory is shared, and the new collection's first commit would close any
+deletion journal the old collection left open. If the change was not
+deliberate, restore the previous value.
+
+**The old collection is never removed by this service.** Neither
+`run_purge` nor the stale sweep can see it, and startup refuses
+`contextual_chunks_*` as a target.
+
+**The hourly ZIP job stays (L24).** The llm-module stops pulling
+`zipped/{agency}.zip`, but the Global Classifier still consumes it. Do not
+disable, re-schedule or remove `trigger_zipping`. Without it,
+`agency.data_hash` freezes and the Classifier goes stale with no error.
+`tests/test_classifier_safety.py` fails if the job is removed. Re-run
+Verification 14–17 after the swap.
+
 ## Index
 
 - **Name**: `idx_source_file_agency_base_updated` on

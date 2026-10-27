@@ -348,6 +348,7 @@ _DESTINATIONS: dict[str, dict[str, str]] = {
         "external_s3_access_key_id": "k",
         "external_s3_secret_access_key": "s",
         "llm_module_base_url": "https://llm.example/ingest",
+        "llm_module_collection": "ckb_chunks_v1",
         "llm_module_vault_secret_path": "llm/connections/ingest",
         "llm_module_allow_proposed_contract": True,
     },

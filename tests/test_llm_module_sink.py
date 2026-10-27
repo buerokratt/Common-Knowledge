@@ -27,7 +27,7 @@ from typing import Any, cast
 import pytest
 import requests
 from exporter_fakes import FakeDocumentSource, InMemoryStore, make_row
-from llm_module_fake import FakeLlmModule, Reply, Seen, session_for
+from llm_module_fake import TEST_COLLECTION, FakeLlmModule, Reply, Seen, session_for
 from pydantic import BaseModel, ValidationError
 
 from exporter.core.chunking import Chunker
@@ -70,7 +70,9 @@ from exporter.sinks.llm_module_sink import (
 AGENCY = "agency-1"
 BASE_URL = "https://llm-module.invalid"
 TOKEN = "tok-3f9a-not-a-real-credential"
-SINK_ID = "llm_module"
+SINK_ID = f"llm_module:{TEST_COLLECTION}"
+# Every path is under the collection (L19).
+ROOT = f"/ingest/v1/collections/{TEST_COLLECTION}"
 CONTRACT_DOC = (
     Path(__file__).resolve().parents[1]
     / "content-external"
@@ -141,12 +143,14 @@ def _sink(
     run_id: str = "run-1",
     sleeps: list[float] | None = None,
     via_stub: bool = False,
+    collection: str = TEST_COLLECTION,
 ) -> LlmModuleSink:
     recorded = sleeps if sleeps is not None else []
     return LlmModuleSink(
         base_url=BASE_URL,
+        collection=collection,
         agency_id=AGENCY,
-        sink_id=SINK_ID,
+        sink_id=f"llm_module:{collection}",
         run_id=run_id,
         token_provider=token_provider,
         ingest_schema_version=1,
@@ -250,6 +254,8 @@ def test_what_the_far_side_has_not_agreed_refuses_rather_than_no_ops(
         ({"run_id": "run/1"}, "run_id"),
         ({"max_request_bytes": 0}, "max_request_bytes"),
         ({"read_timeout": 0}, "timeout"),
+        ({"collection": "contextual_chunks_azure"}, "never in place"),
+        ({"collection": "a/b"}, "LLM_MODULE_COLLECTION"),
     ],
 )
 def test_construction_refuses_bad_settings(
@@ -257,6 +263,7 @@ def test_construction_refuses_bad_settings(
 ) -> None:
     arguments: dict[str, Any] = {
         "base_url": BASE_URL,
+        "collection": TEST_COLLECTION,
         "agency_id": AGENCY,
         "sink_id": SINK_ID,
         "run_id": "run-1",
@@ -274,6 +281,7 @@ def test_construction_refuses_bad_settings(
 def test_the_default_session_verifies_tls() -> None:
     sink = LlmModuleSink(
         base_url=BASE_URL,
+        collection=TEST_COLLECTION,
         agency_id=AGENCY,
         sink_id=SINK_ID,
         run_id="run-1",
@@ -970,6 +978,7 @@ def test_an_unknown_provider_error_is_reduced_to_its_type(
 def test_the_default_session_ignores_the_environment() -> None:
     sink = LlmModuleSink(
         base_url=BASE_URL,
+        collection=TEST_COLLECTION,
         agency_id=AGENCY,
         sink_id=SINK_ID,
         run_id="run-1",
@@ -1127,6 +1136,33 @@ def test_a_retried_metadata_merge_publishes(fake: FakeLlmModule) -> None:
     assert [seen.key for seen in fake.requests] == ["run-1:d1:p0", "run-1:d1:p0:r1"]
 
 
+def test_a_metadata_merge_answered_per_chunk_is_not_published(
+    fake: FakeLlmModule,
+) -> None:
+    """L25: a merge is all-or-nothing per document — one `record` item for
+    every point (contract §8). A far side that answers point by point has
+    merged some passages and maybe not others, and once in the manifest the
+    document is never retried. So the answer is untrusted and the document
+    is not published; the next run sends it whole."""
+    sink = _sink(fake, terms=MERGE_TERMS)
+    sink.upsert_document(_record(), _chunks())
+    per_chunk = {
+        "ingest_schema_version": 1,
+        "items": [
+            {"ref": "record", "status": 200},
+            {"ref": _id(0), "status": 200},
+            {"ref": _id(1), "status": 503},
+        ],
+    }
+    fake.reply_next(Reply(207, body=json.dumps(per_chunk).encode()))
+
+    outcome = sink.upsert_document(_record(title="Õppetoetus 2027"), None)
+
+    assert not outcome.published
+    assert outcome.status is UpsertStatus.FAILED_RETRYABLE
+    assert outcome.detail == "malformed-response"
+
+
 # --------------------------------------------------------------------------
 # L14 — nothing readable leaves through a log or a report
 # --------------------------------------------------------------------------
@@ -1193,12 +1229,13 @@ def _coordinator(
     *,
     profile_name: str = "compact",
     stale_sweep_enabled: bool = False,
+    manifest_prefix: str = "manifests",
 ) -> PublishCoordinator:
     profile = CHUNK_PROFILES[profile_name]
     return PublishCoordinator(
         sink=sink,
         manifests=ManifestService(
-            ManifestStore(manifests, prefix="manifests"),
+            ManifestStore(manifests, prefix=manifest_prefix),
             sink_id=sink.sink_id,
             on_missing="first_run",
         ),
@@ -1255,6 +1292,222 @@ def test_the_coordinator_publishes_through_the_sink_and_falls_back_on_metadata(
     assert fake.records["d1"]["source"]["page_title"] == "Uus pealkiri"
 
 
+def test_a_failed_metadata_merge_keeps_the_old_entry_and_is_retried_whole(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    """L25 at the commit point: a merge that is not acknowledged leaves the
+    committed entry at the old metadata hash, so the next run classifies the
+    document `metadata_changed` again instead of trusting a half-merge."""
+    source = _source("d1")
+    manifests = InMemoryStore()
+    assert (
+        _coordinator(_sink(fake, terms=MERGE_TERMS), source, manifests, tmp_path)
+        .export("run-1")
+        .outcome
+        == "success"
+    )
+    committed = ManifestStore(manifests, prefix="manifests").load(AGENCY)
+    assert committed is not None
+    old_hash = committed.documents["d1"].metadata_sha256
+
+    current = source.documents["d1"]
+    source.put(
+        replace(current.row, updated_at="2026-10-08T09:00:00Z"),
+        current.text,
+        sidecar={"source_url": current.row.url, "page_title": "Uus pealkiri"},
+    )
+    fake.fail_always("record", 400, "merge-partial")
+    failed = _coordinator(
+        _sink(fake, terms=MERGE_TERMS, run_id="run-2"), source, manifests, tmp_path
+    ).export("run-2")
+
+    after = ManifestStore(manifests, prefix="manifests").load(AGENCY)
+    assert after is not None
+    assert failed.metadata_changed_count == 1
+    assert failed.publish_failed_count == 1
+    assert after.documents["d1"].metadata_sha256 == old_hash
+
+    fake.heal()
+    retried = _coordinator(
+        _sink(fake, terms=MERGE_TERMS, run_id="run-3"), source, manifests, tmp_path
+    ).export("run-3")
+
+    assert retried.metadata_changed_count == 1
+    assert retried.publish_failed_count == 0
+    assert fake.records["d1"]["source"]["page_title"] == "Uus pealkiri"
+
+
+# --------------------------------------------------------------------------
+# L19 — the collection is named, and the cutover bootstraps beside
+# --------------------------------------------------------------------------
+
+
+def test_every_verb_names_the_collection_in_its_path(fake: FakeLlmModule) -> None:
+    terms = replace(
+        AGREED_TERMS,
+        agency_id_filterable=True,
+        supports_agency_scoped_delete=True,
+        supports_stale_sweep=True,
+        supports_read_back=True,
+    )
+    sink = _sink(fake, terms=terms, collection="ckb_chunks_v2")
+
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+    sink.upsert_document(_record("d2"), _chunks("d2"))
+    sink.delete_chunks("d1", [2])
+    sink.read_document("d1")
+    sink.delete_documents(["d2"])
+    sink.sweep_stale(AGENCY, datetime.now(UTC) - timedelta(hours=1), ["d1"])
+    sink.delete_agency(AGENCY)
+
+    assert len(fake.requests) == 7
+    assert {seen.collection for seen in fake.requests} == {"ckb_chunks_v2"}
+    assert fake.collections == {"ckb_chunks_v2"}
+    # Every request with a body scopes its Idempotency-Key to the collection.
+    posts = [seen for seen in fake.requests if seen.method == "POST"]
+    assert {seen.key_collection for seen in posts} == {"ckb_chunks_v2"}
+
+
+def test_idempotency_keys_are_scoped_to_the_collection(fake: FakeLlmModule) -> None:
+    """The body does not name the collection, so without it in the key the
+    same run, document and part pushed to two collections would share a key,
+    and a far side deduplicating across collections would skip the second."""
+    _sink(fake, collection="ckb_chunks_v1").upsert_document(_record(), _chunks())
+    _sink(fake, collection="ckb_chunks_v2").upsert_document(_record(), _chunks())
+
+    first, second = fake.requests
+    assert first.raw == second.raw
+    assert first.key == second.key == "run-1:d1:p0"
+    assert first.headers["Idempotency-Key"] != second.headers["Idempotency-Key"]
+    assert (first.key_collection, second.key_collection) == (
+        "ckb_chunks_v1",
+        "ckb_chunks_v2",
+    )
+    assert set(fake.held_in("ckb_chunks_v2")[1]) == set(
+        fake.held_in("ckb_chunks_v1")[1]
+    )
+
+
+def test_a_collection_that_does_not_exist_fails_loudly(fake: FakeLlmModule) -> None:
+    """§13 q15's other answer: the llm-module does not create a collection
+    on first write. A whole-request 404 is then a wrong address — the upsert
+    fails permanently and a delete is `failed`, never `missing` — so nothing
+    reports success against a collection that is not there."""
+    fake.require_existing_collections()
+    sink = _sink(fake, collection="ckb_chunks_v1")
+
+    upsert = sink.upsert_document(_record(), _chunks())
+    deleted = sink.delete_documents(["d1"])
+
+    assert upsert.status is UpsertStatus.FAILED_PERMANENT
+    assert upsert.detail == "http-404"
+    assert set(deleted.failed) == {"d1"}
+    assert not deleted.missing
+    assert fake.held_in("ckb_chunks_v1") == ({}, {})
+
+    fake.create_collection("ckb_chunks_v1")
+    assert sink.upsert_document(_record(), _chunks()).published
+
+
+def test_a_bootstrap_beside_leaves_the_live_collection_byte_unchanged(
+    fake: FakeLlmModule,
+) -> None:
+    """Verification 28, in the unit tier: content pushed into the new
+    collection never touches the one retrieval is serving from."""
+    _sink(fake, collection="ckb_chunks_v1").upsert_document(_record(), _chunks())
+    live = json.dumps(fake.held_in("ckb_chunks_v1"), sort_keys=True)
+
+    beside = _sink(fake, collection="ckb_chunks_v2", run_id="run-2")
+    beside.upsert_document(_record(chunk_count=4, title="Uus"), _chunks(count=4))
+    beside.delete_documents(["d1"])
+    beside.upsert_document(_record(), _chunks())
+
+    assert json.dumps(fake.held_in("ckb_chunks_v1"), sort_keys=True) == live
+    assert set(fake.held_in("ckb_chunks_v2")[0]) == {"d1"}
+
+
+@pytest.mark.parametrize(
+    "collection", ["contextual_chunks_azure", "Contextual_Chunks_AWS"]
+)
+def test_the_llm_modules_existing_corpus_is_never_a_target(
+    fake: FakeLlmModule, collection: str
+) -> None:
+    with pytest.raises(ValueError, match="never in place"):
+        _sink(fake, collection=collection)
+    assert fake.requests == []
+
+
+def test_a_manifest_for_another_collection_fails_the_run(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    """F17 through L19: pointed at a new collection, the old manifest would
+    claim every document published there already. It fails instead — never
+    `unchanged`, never a first run — and nothing reaches the new collection."""
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    first = _coordinator(
+        _sink(fake, collection="ckb_chunks_v1"), source, manifests, tmp_path
+    )
+    assert first.export("run-1").outcome == "success"
+    sent = len(fake.requests)
+
+    moved = _coordinator(
+        _sink(fake, collection="ckb_chunks_v2", run_id="run-2"),
+        source,
+        manifests,
+        tmp_path,
+    )
+    report = moved.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "SinkMismatch"
+    assert len(fake.requests) == sent
+    assert "ckb_chunks_v2" not in fake.collections
+
+
+def test_a_re_bootstrap_with_a_fresh_manifest_prefix_succeeds(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    """The cutover doc's §3 procedure, end to end: after the SinkMismatch
+    above, a fresh MANIFEST_STORE_PREFIX on the same work dir is a clean
+    first run into the new collection. The old collection and its manifest
+    are left exactly as they were."""
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    v1 = _coordinator(
+        _sink(fake, collection="ckb_chunks_v1"), source, manifests, tmp_path
+    )
+    assert v1.export("run-1").outcome == "success"
+    v1_manifest = ManifestStore(manifests, prefix="manifests").load(AGENCY)
+    v1_points = json.dumps(fake.held_in("ckb_chunks_v1"), sort_keys=True)
+
+    refused = _coordinator(
+        _sink(fake, collection="ckb_chunks_v2", run_id="run-2"),
+        source,
+        manifests,
+        tmp_path,
+    ).export("run-2")
+    assert refused.error_type == "SinkMismatch"
+
+    v2 = _coordinator(
+        _sink(fake, collection="ckb_chunks_v2", run_id="run-3"),
+        source,
+        manifests,
+        tmp_path,
+        manifest_prefix="manifests-v2",
+    )
+    report = v2.export("run-3")
+
+    assert report.outcome == "success"
+    assert report.new_count == 2
+    assert set(fake.held_in("ckb_chunks_v2")[0]) == {"d1", "d2"}
+    v2_manifest = ManifestStore(manifests, prefix="manifests-v2").load(AGENCY)
+    assert v2_manifest is not None
+    assert v2_manifest.sink_id == "llm_module:ckb_chunks_v2"
+    assert ManifestStore(manifests, prefix="manifests").load(AGENCY) == v1_manifest
+    assert json.dumps(fake.held_in("ckb_chunks_v1"), sort_keys=True) == v1_points
+
+
 # --------------------------------------------------------------------------
 # L9 — deletes
 # --------------------------------------------------------------------------
@@ -1302,7 +1555,7 @@ def test_documents_are_deleted_in_one_request_with_an_item_each(
 
     assert outcome == DeleteOutcome(deleted=("d1", "d2"), missing=("absent",))
     (seen,) = _deletes(fake)
-    assert seen.path == "/ingest/v1/documents/delete"
+    assert seen.path == f"{ROOT}/documents/delete"
     assert seen.body == {
         "ingest_schema_version": 1,
         "agency_id": AGENCY,
@@ -1465,7 +1718,7 @@ def test_a_tail_delete_sends_point_ids_and_reports_ordinals(
 
     assert outcome == DeleteOutcome(deleted=(3, 4))
     (seen,) = _deletes(fake)
-    assert seen.path == "/ingest/v1/documents/d1/chunks/delete"
+    assert seen.path == f"{ROOT}/documents/d1/chunks/delete"
     assert seen.body["chunks"] == [
         {"chunk_id": _id(3), "ordinal": 3},
         {"chunk_id": _id(4), "ordinal": 4},
@@ -1515,7 +1768,7 @@ def test_an_agency_delete_removes_everything_and_replays_as_missing(
     assert sink.delete_agency(AGENCY) == DeleteOutcome(deleted=(AGENCY,))
     assert fake.records == {}
     assert fake.points == {}
-    assert fake.requests[-1].path == f"/ingest/v1/agencies/{AGENCY}/delete"
+    assert fake.requests[-1].path == f"{ROOT}/agencies/{AGENCY}/delete"
     assert sink.delete_agency(AGENCY) == DeleteOutcome(missing=(AGENCY,))
 
 
@@ -1559,7 +1812,7 @@ def test_the_sweep_removes_stale_documents_and_spares_the_keep_list(
     assert set(fake.records) == {"d1"}
     assert {p["document_id"] for p in fake.points.values()} == {"d1"}
     seen = fake.requests[-1]
-    assert seen.path == f"/ingest/v1/agencies/{AGENCY}/sweep"
+    assert seen.path == f"{ROOT}/agencies/{AGENCY}/sweep"
     assert seen.body == {
         "ingest_schema_version": 1,
         "agency_id": AGENCY,
@@ -1652,7 +1905,7 @@ def test_read_back_reports_what_the_far_side_holds(fake: FakeLlmModule) -> None:
     assert sink.read_document("absent") is None
     probe = fake.requests[-2]
     assert probe.method == "GET"
-    assert probe.path == "/ingest/v1/documents/d1"
+    assert probe.path == f"{ROOT}/documents/d1"
     assert probe.raw == b""
     assert "Idempotency-Key" not in probe.headers
 
@@ -1754,7 +2007,11 @@ def test_every_verb_works_through_the_stub_app(fake: FakeLlmModule) -> None:
 
     assert len(fake.requests) == 6
     assert fake.records == {}
-    assert fake.requests[0].headers["Idempotency-Key"].startswith("run-1:d1:p0:")
+    assert (
+        fake.requests[0]
+        .headers["Idempotency-Key"]
+        .startswith(f"{TEST_COLLECTION}:run-1:d1:p0:")
+    )
     assert all(seen.timeout == (5.0, 120.0) for seen in fake.requests)
 
 
@@ -1796,6 +2053,7 @@ def test_a_body_the_far_side_finds_too_large_is_permanent(
 def test_the_default_session_pools_a_connection_per_concurrent_document() -> None:
     sink = LlmModuleSink(
         base_url=BASE_URL,
+        collection=TEST_COLLECTION,
         agency_id=AGENCY,
         sink_id=SINK_ID,
         run_id="run-1",

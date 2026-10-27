@@ -542,10 +542,17 @@ def test_read_document_reports_what_the_destination_holds() -> None:
 # --------------------------------------------------------------------------
 
 
-def _llm_module_settings(*, allow_proposed: bool) -> Settings:
+def _llm_module_settings(
+    *,
+    allow_proposed: bool,
+    collection: str = "ckb_chunks_v1",
+    protected: str = "",
+) -> Settings:
     return Settings.model_construct(
         content_sink="llm_module",
         llm_module_base_url="https://llm-module.invalid",
+        llm_module_collection=collection,
+        llm_module_protected_collections=protected,
         llm_module_ingest_schema_version=1,
         llm_module_max_request_bytes=8_388_608,
         llm_module_connect_timeout=5.0,
@@ -574,13 +581,39 @@ def test_the_factory_builds_the_llm_module_sink_for_this_run() -> None:
     )
 
     assert isinstance(sink, LlmModuleSink)
-    assert sink.sink_id == "llm_module"
+    # L19: the collection is part of the destination's identity (F17).
+    assert sink.sink_id == "llm_module:ckb_chunks_v1"
+    assert sink._collection == "ckb_chunks_v1"  # noqa: SLF001
     assert sink.agency_id == AGENCY
     assert sink._run_id == "r-7"  # noqa: SLF001
     # The provider reads Vault when called, never at build time: building
     # touched no token file, and calling it now fails on the missing one.
     with pytest.raises(CredentialUnavailableError, match="Vault Agent token"):
         sink._token_provider()  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("collection", "protected", "match"),
+    [
+        ("contextual_chunks_azure", "", "never in place"),
+        ("CONTEXTUAL_CHUNKS_AWS", "", "never in place"),
+        ("ckb_retrieval", "ckb_retrieval", "LLM_MODULE_PROTECTED_COLLECTIONS"),
+        ("CKB_Retrieval", " other , ckb_retrieval ", "LLM_MODULE_PROTECTED"),
+        ("a/b", "", "LLM_MODULE_COLLECTION"),
+    ],
+)
+def test_the_factory_refuses_a_collection_it_must_not_write_to(
+    collection: str, protected: str, match: str
+) -> None:
+    """L19, on the path that skips the startup validator: a Settings built
+    with model_construct still cannot point the sink at a legacy collection
+    or the retrieval alias, and the refusal is a ConfigurationError like the
+    factory's others."""
+    settings = _llm_module_settings(
+        allow_proposed=True, collection=collection, protected=protected
+    )
+    with pytest.raises(ConfigurationError, match=match):
+        build_sink(settings, agency_id=AGENCY, run_id="r-1")
 
 
 def test_the_factory_builds_the_object_store_sink() -> None:
