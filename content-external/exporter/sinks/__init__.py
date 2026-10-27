@@ -24,8 +24,7 @@ review, because a convention that only lives in a docstring is a convention
 that survives exactly as long as the person who wrote it.
 
 Present: base.py (the ContentSink ABC, SinkCapabilities and the outcome
-types) and factory.py, which until D14 registers the object-store sink maps
-every CONTENT_SINK value to a refusal naming the task that builds it. Still to
-come in Stage D: object_store_sink.py (D14). Stage L adds llm_module_sink.py
-and nothing else.
+types), object_store_sink.py (D14), llm_module_sink.py with its wire models in
+llm_module_contract.py (Stage L), and factory.py, which maps CONTENT_SINK to
+one of the two.
 """

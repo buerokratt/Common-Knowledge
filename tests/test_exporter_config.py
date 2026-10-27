@@ -28,6 +28,7 @@ from exporter.core.constants import (
     MAX_CHUNK_ORDINAL,
 )
 from exporter.core.ids import chunker_fingerprint
+from exporter.sinks.base import CredentialUnavailableError
 
 WORK_DIR_ENV = "CONTENT_WORK_DIR"
 
@@ -151,6 +152,9 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     "external_s3_secret_access_key": "manifest-secret",
     "llm_module_base_url": "https://llm.example/ingest",
     "llm_module_vault_secret_path": "llm/connections/ingest",
+    # The contract is PROPOSED; without this every llm_module row is refused
+    # by the contract gate before the matrix row under test.
+    "llm_module_allow_proposed_contract": "true",
 }
 
 
@@ -928,3 +932,214 @@ def test_echo_logs_once_at_info_with_no_secret(
     message = records[0].getMessage()
     assert message.startswith(CONFIG_LOG_PREFIX)
     assert "s3cr3t-never-log-me" not in message
+
+
+# --------------------------------------------------------------------------
+# The contract gate (Stage L)
+# --------------------------------------------------------------------------
+
+
+def test_llm_module_is_refused_while_the_contract_is_proposed() -> None:
+    """Against an unagreed contract two wrong guesses fail silently (L4,
+    B11), so the sink is refused at startup, naming the open items."""
+    with pytest.raises(ValidationError, match="PROPOSED") as excinfo:
+        _llm_module_settings(llm_module_allow_proposed_contract=False)
+    assert "Open items 1, 5 and 7" in str(excinfo.value)
+    assert "LLM_MODULE_ALLOW_PROPOSED_CONTRACT" in str(excinfo.value)
+
+
+def test_the_development_flag_lets_llm_module_start_against_the_proposal() -> None:
+    settings = _llm_module_settings(llm_module_allow_proposed_contract=True)
+    assert settings.content_sink == "llm_module"
+
+
+def test_the_contract_gate_is_lifted_by_an_agreed_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    monkeypatch.setattr(
+        config_module,
+        "AGREED_TERMS",
+        replace(config_module.AGREED_TERMS, status="agreed"),
+    )
+    settings = _llm_module_settings(llm_module_allow_proposed_contract=False)
+    assert settings.content_sink == "llm_module"
+
+
+def test_the_contract_gate_never_touches_an_object_store_deployment() -> None:
+    assert _settings(llm_module_allow_proposed_contract=False).content_sink == (
+        "object_store"
+    )
+
+
+def test_the_stale_sweep_is_off_unless_asked_for(clean_env: None) -> None:
+    assert _settings().stale_sweep_enabled is False
+
+
+# --------------------------------------------------------------------------
+# L11 — the llm-module credential, from Vault, per call
+# --------------------------------------------------------------------------
+
+_SECRET_PATH = "llm/connections/llm_module/content"
+
+
+class _VaultResponse:
+    def __init__(self, status: int, payload: object) -> None:
+        self.status_code = status
+        self._payload = payload
+        self.headers: dict[str, str] = {}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(response=self)  # type: ignore[arg-type]
+
+    def json(self) -> object:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+def _vault(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    response: _VaultResponse,
+    *,
+    agent_token: str = "agent-token-1",
+) -> tuple[Settings, list[dict[str, object]]]:
+    token_file = tmp_path / "token"
+    token_file.write_text(agent_token, encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def get(url: str, **kwargs: object) -> _VaultResponse:
+        calls.append({"url": url, **kwargs})
+        return response
+
+    monkeypatch.setattr(config_module.requests, "get", get)
+    settings = Settings.model_construct(
+        vault_addr="http://vault:8200/",
+        vault_token_path=str(token_file),
+        llm_module_vault_secret_path=f"/{_SECRET_PATH}/",
+    )
+    return settings, calls
+
+
+def _secret(token: object) -> _VaultResponse:
+    return _VaultResponse(200, {"data": {"data": {"token": token}}})
+
+
+def test_the_credential_is_read_from_vault_with_the_agent_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("  bearer-xyz  "))
+
+    assert config_module.fetch_llm_module_token(settings) == "bearer-xyz"
+    assert config_module.fetch_llm_module_token(settings) == "bearer-xyz"
+
+    # Read on every call, never cached: Vault Agent's rotation is respected.
+    assert len(calls) == 2
+    assert calls[0]["url"] == f"http://vault:8200/v1/secret/data/{_SECRET_PATH}"
+    assert calls[0]["headers"] == {"X-Vault-Token": "agent-token-1"}
+    assert calls[0]["allow_redirects"] is False
+    assert calls[0]["timeout"]
+
+
+@pytest.mark.parametrize(
+    ("response", "match"),
+    [
+        (_secret("REPLACE_ME"), "placeholder"),
+        (_secret(""), "no 'token' value"),
+        (_secret(None), "no 'token' value"),
+        (_VaultResponse(200, {"data": {}}), "unexpected shape"),
+        (_VaultResponse(200, ValueError("not json")), "unexpected shape"),
+        (_VaultResponse(403, {}), "HTTP 403"),
+    ],
+)
+def test_an_unusable_vault_answer_is_refused_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    response: _VaultResponse,
+    match: str,
+) -> None:
+    settings, _ = _vault(monkeypatch, tmp_path, response)
+
+    with pytest.raises(CredentialUnavailableError, match=match) as excinfo:
+        config_module.fetch_llm_module_token(settings, sleep=_no_sleep)
+    assert "agent-token-1" not in str(excinfo.value)
+
+
+def _no_sleep(_: float) -> None:
+    pass
+
+
+def test_a_refused_vault_read_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _VaultResponse(403, {}))
+
+    with pytest.raises(CredentialUnavailableError, match="HTTP 403"):
+        config_module.fetch_llm_module_token(settings, sleep=_no_sleep)
+    assert len(calls) == 1
+
+
+def test_a_vault_blip_is_retried_inside_one_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("bearer-xyz"))
+    answers = iter([_VaultResponse(503, {}), _VaultResponse(503, {})])
+
+    def get(url: str, **kwargs: object) -> _VaultResponse:
+        calls.append({"url": url, **kwargs})
+        return next(answers, _secret("bearer-xyz"))
+
+    monkeypatch.setattr(config_module.requests, "get", get)
+    slept: list[float] = []
+
+    assert (
+        config_module.fetch_llm_module_token(settings, sleep=slept.append)
+        == "bearer-xyz"
+    )
+    assert len(calls) == 3
+    assert len(slept) == 2
+
+
+def test_vault_down_past_the_backoff_names_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import requests
+
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("x"))
+
+    def get(url: str, **kwargs: object) -> _VaultResponse:
+        calls.append({"url": url, **kwargs})
+        raise requests.ConnectionError("connection refused to http://vault:8200")
+
+    monkeypatch.setattr(config_module.requests, "get", get)
+
+    with pytest.raises(CredentialUnavailableError, match="is Vault up") as excinfo:
+        config_module.fetch_llm_module_token(settings, sleep=_no_sleep)
+    assert len(calls) == config_module.VAULT_READ_POLICY.max_attempts
+    assert "agent-token-1" not in str(excinfo.value)
+
+
+def test_a_missing_agent_token_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("bearer-xyz"))
+    Path(settings.vault_token_path).unlink()
+
+    with pytest.raises(CredentialUnavailableError, match="Vault Agent token"):
+        config_module.fetch_llm_module_token(settings)
+    assert calls == []
+
+
+def test_an_empty_agent_token_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("x"), agent_token="  ")
+
+    with pytest.raises(CredentialUnavailableError, match="is empty"):
+        config_module.fetch_llm_module_token(settings)
+    assert calls == []

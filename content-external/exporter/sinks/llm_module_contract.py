@@ -27,20 +27,54 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "AGREED_TERMS",
+    "DOCUMENT_DELETE_PATH",
     "INGEST_PATH",
     "RECORD_REF",
     "SUPPORTED_INGEST_SCHEMA_VERSIONS",
+    "AgencyDeleteRequest",
+    "ChunkDeleteRequest",
+    "ChunkRef",
+    "ContractStatus",
     "ContractTerms",
+    "DeleteVerdict",
+    "DeletedDocumentsResponse",
+    "DocumentDeleteRequest",
+    "DocumentProbeResponse",
     "IngestChunk",
     "IngestItem",
     "IngestPart",
     "IngestRequest",
     "IngestResponse",
     "ItemVerdict",
+    "SweepRequest",
+    "agency_delete_path",
+    "chunk_delete_path",
+    "classify_delete_status",
     "classify_item_status",
+    "document_path",
+    "sweep_path",
 ]
 
 INGEST_PATH = "/ingest/v1/documents"
+DOCUMENT_DELETE_PATH = "/ingest/v1/documents/delete"
+
+
+def chunk_delete_path(document_id: str) -> str:
+    return f"/ingest/v1/documents/{document_id}/chunks/delete"
+
+
+def document_path(document_id: str) -> str:
+    """The read-back probe for one document (L17)."""
+    return f"/ingest/v1/documents/{document_id}"
+
+
+def agency_delete_path(agency_id: str) -> str:
+    return f"/ingest/v1/agencies/{agency_id}/delete"
+
+
+def sweep_path(agency_id: str) -> str:
+    return f"/ingest/v1/agencies/{agency_id}/sweep"
+
 
 # The versions LlmModuleSink can speak. LLM_MODULE_INGEST_SCHEMA_VERSION must
 # name one of them; a later version is added here alongside its models.
@@ -55,23 +89,57 @@ NonEmpty = Annotated[str, Field(min_length=1)]
 NonNegative = Annotated[int, Field(ge=0)]
 
 
+ContractStatus = Literal["proposed", "agreed"]
+
+
 @dataclass(frozen=True)
 class ContractTerms:
     """What the llm-module has promised, for one schema version."""
 
-    # Open item 8: merge the record onto existing points without content and
-    # without a re-embed (L8). False until confirmed — the coordinator then
-    # re-pushes the document in full and counts it.
+    # Open items are the task breakdown's; the contract document's §13
+    # question for each is given alongside.
+    #
+    # Open item 8 (§13 q3): merge the record onto existing points without
+    # content and without a re-embed (L8). False until confirmed — the
+    # coordinator then re-pushes the document in full and counts it.
     supports_metadata_only_merge: bool
-    # Open item 9: the most documents it will take in parallel (F16). It
-    # embeds every chunk it receives, so the ceiling is its owner's to state.
+    # Open item 9 (§13 q5): the most documents it will take in parallel (F16).
+    # It embeds every chunk it receives, so the ceiling is its owner's to state.
     max_concurrency: int
+    # "agreed" only once the contract document records the owner's sign-off
+    # (Open items 1, 5 and 7; §13 q1, q2, q4). Until then CONTENT_SINK=
+    # llm_module is refused at startup unless a development flag allows it.
+    status: ContractStatus = "proposed"
+    # Open item 7 (§13 q4): every point carries agency_id as a filterable
+    # field. The agency delete (L9, q11) and the sweep (L10, q12) are each a
+    # delete by that filter, so neither may be switched on without it — the
+    # check below makes that a construction error rather than a review note.
+    agency_id_filterable: bool = False
+    supports_agency_scoped_delete: bool = False
+    supports_stale_sweep: bool = False
+    # Open item 10 (§13 q13): GET a document's chunk count back (L17). Without
+    # it, reconcile is `unverifiable` (J9).
+    supports_read_back: bool = False
+    # Whether that probe lists the ordinals held, not just a count.
+    read_back_lists_ordinals: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.max_concurrency, bool) or self.max_concurrency < 1:
             raise ValueError(
                 f"max_concurrency must be an int >= 1, got {self.max_concurrency!r}"
             )
+        if self.status not in ("proposed", "agreed"):
+            raise ValueError(
+                f"status must be 'proposed' or 'agreed', got {self.status!r}"
+            )
+        if self.read_back_lists_ordinals and not self.supports_read_back:
+            raise ValueError("read_back_lists_ordinals needs supports_read_back")
+        for flag in ("supports_agency_scoped_delete", "supports_stale_sweep"):
+            if getattr(self, flag) and not self.agency_id_filterable:
+                raise ValueError(
+                    f"{flag} needs agency_id_filterable: it deletes by the "
+                    "agency_id filter (Open item 7, §13 q4)"
+                )
 
 
 AGREED_TERMS = ContractTerms(supports_metadata_only_merge=False, max_concurrency=2)
@@ -138,12 +206,59 @@ class IngestRequest(_Request):
     chunks: list[IngestChunk] | None
 
 
+class DocumentDeleteRequest(_Request):
+    """Delete whole documents (L9): every point of each, then its record."""
+
+    ingest_schema_version: Annotated[int, Field(ge=1)]
+    agency_id: NonEmpty
+    document_ids: Annotated[list[NonEmpty], Field(min_length=1)]
+
+
+class ChunkRef(_Request):
+    """One chunk to delete, by its point id and its coordinate."""
+
+    chunk_id: NonEmpty
+    ordinal: NonNegative
+
+
+class ChunkDeleteRequest(_Request):
+    """Delete a document's tail chunks (L9, C16). The record stays."""
+
+    ingest_schema_version: Annotated[int, Field(ge=1)]
+    agency_id: NonEmpty
+    document_id: NonEmpty
+    chunks: Annotated[list[ChunkRef], Field(min_length=1)]
+
+
+class AgencyDeleteRequest(_Request):
+    """Delete everything held for one agency (L9). Needs Open item 7."""
+
+    ingest_schema_version: Annotated[int, Field(ge=1)]
+    agency_id: NonEmpty
+
+
+class SweepRequest(_Request):
+    """Delete the agency's documents last synced before `before` and absent
+    from `keep_document_ids` (L10).
+
+    The keep list is what makes the sweep safe: an unchanged document, or one
+    whose row is not ready, is never re-sent, so its points keep an old
+    `synced_at` while being live. `before` alone would delete them.
+    """
+
+    ingest_schema_version: Annotated[int, Field(ge=1)]
+    agency_id: NonEmpty
+    before: NonEmpty
+    keep_document_ids: Annotated[list[NonEmpty], Field(min_length=1)]
+
+
 class _Response(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
 
 class IngestItem(_Response):
-    """The outcome for one ref: "record", or a chunk_id."""
+    """The outcome for one ref: "record", a chunk_id, or — on a delete — a
+    document_id."""
 
     ref: NonEmpty
     status: Annotated[int, Field(ge=100, le=599)]
@@ -155,11 +270,32 @@ class IngestResponse(_Response):
     items: list[IngestItem]
 
 
+class DeletedDocumentsResponse(_Response):
+    """What an agency delete or a sweep removed, by document."""
+
+    ingest_schema_version: int
+    deleted_document_ids: list[NonEmpty]
+
+
+class DocumentProbeResponse(_Response):
+    """What the llm-module holds for one document (L17)."""
+
+    ingest_schema_version: int
+    document_id: NonEmpty
+    record_present: bool
+    chunk_count: NonNegative
+    chunk_ordinals: list[NonNegative] | None = None
+
+
 ItemVerdict = Literal["applied", "retryable", "permanent"]
+DeleteVerdict = Literal["deleted", "missing", "retryable", "failed"]
 
 # Key Design #6's per-item rule: a conflict, a validation race and an
 # overloaded embedder can clear on a resend; anything else will not.
 _RETRYABLE_ITEM_STATUSES = frozenset({409, 422, 503})
+
+# On a delete, "not there" is success (D3): already gone is what was asked.
+_MISSING_ITEM_STATUSES = frozenset({404, 410})
 
 
 def classify_item_status(status: int) -> ItemVerdict:
@@ -169,3 +305,14 @@ def classify_item_status(status: int) -> ItemVerdict:
     if status in _RETRYABLE_ITEM_STATUSES:
         return "retryable"
     return "permanent"
+
+
+def classify_delete_status(status: int) -> DeleteVerdict:
+    """What one delete item's status means (L9)."""
+    if 200 <= status < 300:
+        return "deleted"
+    if status in _MISSING_ITEM_STATUSES:
+        return "missing"
+    if status in _RETRYABLE_ITEM_STATUSES:
+        return "retryable"
+    return "failed"

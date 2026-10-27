@@ -57,6 +57,9 @@ class ExportTask:
     # holds this agency's content. Only the CLI sets it; the HTTP body has no
     # such field, so the cron path can never reach it.
     accept_existing_content: bool = False
+    # L18's override: a pending re-chunk may run on a destination that
+    # re-embeds every chunk it receives. CLI only, like the one above.
+    accept_rechunk: bool = False
 
     def __post_init__(self) -> None:
         # Both become path segments: the run id names the journal file, the
@@ -110,6 +113,7 @@ def export_agency_task(
         coordinator = build_coordinator(
             settings,
             agency_id=task.agency_id,
+            run_id=task.run_id,
             work_dir=work_dir,
             run_state=run_state,
             source_factory=source_factory,
@@ -119,6 +123,7 @@ def export_agency_task(
         force=task.force,
         limit=task.limit,
         accept_existing_content=task.accept_existing_content,
+        accept_rechunk=task.accept_rechunk,
     )
 
 

@@ -39,10 +39,12 @@ deployment's manifest.
 import logging
 import os
 import posixpath
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
+import requests
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -55,7 +57,14 @@ from exporter.core.constants import (
 )
 from exporter.core.ids import chunker_fingerprint, validate_prefix
 from exporter.core.redaction import sanitize_sensitive_text
+from exporter.services.backoff import (
+    BackoffPolicy,
+    is_retryable_http,
+    retry_with_backoff,
+)
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
+from exporter.sinks.base import CredentialUnavailableError
+from exporter.sinks.llm_module_contract import AGREED_TERMS
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +123,126 @@ _ADDRESS_NOT_CREDENTIAL = frozenset(
 
 class ConfigurationError(RuntimeError):
     """The environment is unusable. Always fatal — never degraded service."""
+
+
+def llm_module_contract_refusal(*, allow_proposed: bool) -> str | None:
+    """Why CONTENT_SINK=llm_module may not run, or None if it may.
+
+    The startup validator and the sink factory both ask, so neither path can
+    select the sink against an unagreed contract.
+    """
+    if AGREED_TERMS.status == "agreed" or allow_proposed:
+        return None
+    return (
+        "CONTENT_SINK=llm_module is refused: the llm-module ingest contract "
+        "(content-external/docs/llm-module-ingest-contract.md) is still "
+        "PROPOSED. Open items 1, 5 and 7 (the contract's §13 questions 1, 2 "
+        "and 4) — the embedder's token budget, the endpoint itself, and "
+        "chunk_id keying with a filterable agency_id — are the llm-module "
+        "owner's to answer, and two of the wrong guesses "
+        "fail silently. LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true is for "
+        "development against the stub only."
+    )
+
+
+# L11. The key the llm-module credential is stored under in its Vault
+# secret, and the marker vault/init.sh writes before a real value exists.
+LLM_MODULE_TOKEN_KEY = "token"
+_VAULT_PLACEHOLDER = "REPLACE_ME"
+_VAULT_TIMEOUT = (5.0, 10.0)
+
+# F8's backoff on the Vault read, sized to ride out a Vault restart (~15s at
+# most across five attempts). A blip is absorbed here, inside one document,
+# so it never reaches the coordinator. An outage that outlasts it fails the
+# document permanently, and F19's consecutive-permanent abort then stops the
+# run — the right answer to a credential store that is down, rather than
+# grinding every remaining document through this backoff in turn.
+VAULT_READ_POLICY = BackoffPolicy(max_attempts=5, base_delay=1.0, max_delay=8.0)
+
+
+def _read_vault_agent_token(token_path: str) -> str:
+    """The token Vault Agent keeps fresh in its sink file."""
+    try:
+        token = Path(token_path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise CredentialUnavailableError(
+            f"could not read the Vault Agent token at {token_path} "
+            f"({type(exc).__name__})"
+        ) from None
+    if not token:
+        raise CredentialUnavailableError(
+            f"the Vault Agent token at {token_path} is empty"
+        )
+    return token
+
+
+def fetch_llm_module_token(
+    settings: "Settings",
+    *,
+    policy: BackoffPolicy = VAULT_READ_POLICY,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """The llm-module bearer credential, read from Vault now (L11, H4).
+
+    Called for every operation the llm-module sink performs and never
+    cached, as cleaning/api/config.py does per task, so a credential Vault
+    Agent rotates is picked up without a restart. A transient Vault failure
+    is retried with backoff (VAULT_READ_POLICY); a placeholder is refused
+    loudly rather than sent. Every failure is a CredentialUnavailableError
+    whose message names the check that failed and never carries the token or
+    the Vault response, so the sink logs it as it stands.
+    """
+    path = settings.llm_module_vault_secret_path.strip("/")
+    if not path:
+        raise CredentialUnavailableError("LLM_MODULE_VAULT_SECRET_PATH is not set")
+    agent_token = _read_vault_agent_token(settings.vault_token_path)
+    url = f"{settings.vault_addr.rstrip('/')}/v1/secret/data/{path}"
+
+    def get() -> requests.Response:
+        response = requests.get(
+            url,
+            headers={"X-Vault-Token": agent_token},
+            timeout=_VAULT_TIMEOUT,
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+        return response
+
+    try:
+        # A read is idempotent, so F8's rule applies as it stands: timeouts
+        # included, unlike a Resql query.
+        response = retry_with_backoff(
+            get,
+            describe=f"Vault read of {path}",
+            policy=policy,
+            is_retryable=is_retryable_http,
+            sleep=sleep,
+        )
+        data = response.json()["data"]["data"]
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        raise CredentialUnavailableError(
+            f"Vault refused the read of {path} (HTTP {status})"
+        ) from None
+    except requests.RequestException as exc:
+        raise CredentialUnavailableError(
+            f"Vault read of {path} failed ({type(exc).__name__}); is Vault up?"
+        ) from None
+    except (KeyError, TypeError, ValueError):
+        raise CredentialUnavailableError(
+            f"Vault secret {path} has an unexpected shape"
+        ) from None
+    raw = data.get(LLM_MODULE_TOKEN_KEY) if isinstance(data, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raise CredentialUnavailableError(
+            f"Vault secret {path} has no {LLM_MODULE_TOKEN_KEY!r} value"
+        )
+    if _VAULT_PLACEHOLDER in raw:
+        raise CredentialUnavailableError(
+            f"Vault secret {path} still holds a placeholder "
+            f"({_VAULT_PLACEHOLDER}); store the real llm-module credential"
+        )
+    return raw.strip()
 
 
 def normalise_container_path(raw: str, *, variable: str) -> str:
@@ -228,6 +357,18 @@ class Settings(BaseSettings):
     llm_module_connect_timeout: Annotated[float, Field(gt=0)] = 5.0
     llm_module_read_timeout: Annotated[float, Field(gt=0)] = 120.0
     llm_module_vault_secret_path: str = ""
+    # Development only. The ingest contract is PROPOSED until the llm-module
+    # owner signs it off (AGREED_TERMS.status), and until then the sink is
+    # refused at startup — a deployment pushing against an unagreed contract
+    # is pushing against a guess, two of whose failures are silent (L4, B11).
+    # This flag lets a laptop drive the stub (L15) before that.
+    llm_module_allow_proposed_contract: bool = False
+
+    # --- the stale sweep (L10) ---------------------------------------------
+    # Off by default: it is the first operation that deletes content no
+    # deletion signal named. When on, it runs after a committed run that saw
+    # the whole corpus and held nothing back (F20), on a sink that has one.
+    stale_sweep_enabled: bool = False
 
     # --- this service's own durable volume ---------------------------------
     # Holds the run lock (F2) and the deferred-deletion journal, which must
@@ -520,6 +661,21 @@ class Settings(BaseSettings):
                 "line. Changing it later re-chunks and re-embeds the whole "
                 "corpus, so choose it deliberately."
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_llm_module_contract_is_agreed(self) -> "Settings":
+        """`llm_module` is refused while the ingest contract is PROPOSED.
+
+        After the matrix rows, so a deployment missing a variable hears about
+        the variable first.
+        """
+        if self.content_sink == "llm_module":
+            refusal = llm_module_contract_refusal(
+                allow_proposed=self.llm_module_allow_proposed_contract
+            )
+            if refusal is not None:
+                raise ValueError(refusal)
         return self
 
     @property

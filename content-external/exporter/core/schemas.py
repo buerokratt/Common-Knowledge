@@ -352,6 +352,19 @@ class RunReport:
     first_run_probe: str | None = None
     # How the run was asked for: --accept-existing-content (F21).
     accepted_existing_content: bool = False
+    # L10, after the commit: "disabled" (STALE_SWEEP_ENABLED is off),
+    # "refused" (the run cannot vouch for the whole corpus, F20),
+    # "not_supported" (the destination has no such sweep), "failed" (the
+    # commit stands; the next full run sweeps again) or "done", with the
+    # documents it removed. Never changes the outcome.
+    stale_sweep: str = "disabled"
+    stale_swept_count: int = 0
+    # L18: None when no re-chunk was pending. Otherwise "proceeded" (the
+    # destination does not need an acknowledgement), "accepted"
+    # (--accept-rechunk) or "refused" on the run it failed.
+    rechunk: str | None = None
+    # How the run was asked for: --accept-rechunk (L18).
+    accepted_rechunk: bool = False
 
     def __post_init__(self) -> None:
         _freeze_fields(self, "skipped_reasons", "upsert_outcomes", "publish_failures")

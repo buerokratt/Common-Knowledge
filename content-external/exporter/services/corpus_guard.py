@@ -27,14 +27,15 @@ previous state and its old `synced_at`, and `sweep_stale(before=run_start)`
 would delete it as stale while it is live. So the guard also requires
 `documents_held_back == 0`. The watermark has always required the same.
 
-WHAT THIS GUARD CANNOT COVER, for Stage L to carry: an `unchanged` document,
-and one held because its row is not ready (`in_review`, `cleaning`), are not
-touched by a run either, by design. A `synced_at` sweep (L10) must therefore
-spare every document the committed manifest lists, or refresh `synced_at` on
-them; no run-level flag can make that sweep safe on its own.
+WHAT THIS GUARD CANNOT COVER: an `unchanged` document, and one held because
+its row is not ready (`in_review`, `cleaning`), are not touched by a run
+either, by design. No run-level flag can make a `synced_at` sweep safe on its
+own, so L10's sweep also carries a keep list — every document the committed
+manifest lists — and the destination spares those whatever their
+`synced_at` (sinks/base.py's sweep_stale).
 
-Stage J and Stage L build the sweeps; this guard is what they must call
-before acting.
+Every sweep calls this guard before acting: L10's, after the commit in
+services/publish_service.py, and Stage J's when it lands.
 """
 
 from exporter.core.schemas import RunReport

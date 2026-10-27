@@ -84,6 +84,7 @@ def test_health_reports_the_configured_sink(
     monkeypatch.setenv("EXTERNAL_S3_SECRET_ACCESS_KEY", "manifest-secret")
     monkeypatch.setenv("LLM_MODULE_BASE_URL", "https://llm.example/ingest")
     monkeypatch.setenv("LLM_MODULE_VAULT_SECRET_PATH", "llm/connections/ingest")
+    monkeypatch.setenv("LLM_MODULE_ALLOW_PROPOSED_CONTRACT", "true")
 
     with TestClient(app) as client:
         body = client.get("/health").json()

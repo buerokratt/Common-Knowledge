@@ -1,13 +1,16 @@
-"""The llm-module sink, L1-L8: contract, payload, keying, batching, partial
-failure, idempotency and metadata-only merge.
+"""The llm-module sink, L1-L18: contract, payload, keying, batching, partial
+failure, idempotency, metadata-only merge, deletes, the keep-list sweep,
+read-back, transport, redaction and the re-chunk guard.
 
 Every test drives the real sink through a real requests.Session into the
 in-process fake in tests/llm_module_fake.py, so headers, timeouts,
 raise_for_status and the backoff wrapper all run as in production. No
-network, no far-side dependency.
+network, no far-side dependency. A few go through the FastAPI stub
+(tests/llm_module_stub.py) instead, to prove the stub is the same far side.
 
-The D15 conformance suite does not run against this sink yet: its harness
-observes object-store keys. Adding an HTTP harness is L15/L16.
+The D15 conformance suite runs against this sink too, through the stub
+(tests/test_sink_conformance.py). What it cannot express — 207 handling, the
+split path, Retry-After, batching, the sweep's keep list — is here (L16).
 """
 
 import hashlib
@@ -25,7 +28,7 @@ import pytest
 import requests
 from exporter_fakes import FakeDocumentSource, InMemoryStore, make_row
 from llm_module_fake import FakeLlmModule, Reply, Seen, session_for
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 from exporter.core.chunking import Chunker
 from exporter.core.constants import CHUNK_PROFILES
@@ -34,16 +37,35 @@ from exporter.core.schemas import Chunk, DocumentRecord, TextSpan, to_json_dict
 from exporter.services.manifest_service import ManifestService
 from exporter.services.manifest_store import ManifestStore
 from exporter.services.publish_service import PublishCoordinator
-from exporter.sinks.base import NotSupported, UpsertStatus
+from exporter.sinks import llm_module_sink
+from exporter.sinks.base import (
+    CredentialUnavailableError,
+    DeleteOutcome,
+    DocumentProbe,
+    NotSupported,
+    StoreError,
+    UpsertStatus,
+)
 from exporter.sinks.llm_module_contract import (
     AGREED_TERMS,
+    AgencyDeleteRequest,
+    ChunkDeleteRequest,
     ContractTerms,
+    DeletedDocumentsResponse,
+    DocumentDeleteRequest,
+    DocumentProbeResponse,
     IngestPart,
     IngestRequest,
     IngestResponse,
+    SweepRequest,
+    classify_delete_status,
     classify_item_status,
 )
-from exporter.sinks.llm_module_sink import ITEM_RETRY_ROUNDS, LlmModuleSink
+from exporter.sinks.llm_module_sink import (
+    ITEM_RETRY_ROUNDS,
+    LlmModuleSink,
+    format_timestamp,
+)
 
 AGENCY = "agency-1"
 BASE_URL = "https://llm-module.invalid"
@@ -118,6 +140,7 @@ def _sink(
     token_provider: Callable[[], str] = lambda: TOKEN,
     run_id: str = "run-1",
     sleeps: list[float] | None = None,
+    via_stub: bool = False,
 ) -> LlmModuleSink:
     recorded = sleeps if sleeps is not None else []
     return LlmModuleSink(
@@ -131,7 +154,7 @@ def _sink(
         connect_timeout=5.0,
         read_timeout=120.0,
         terms=terms,
-        session=session_for(fake),
+        session=session_for(fake, via_stub=via_stub),
         sleep=recorded.append,
         rand=lambda: 0.5,
     )
@@ -158,32 +181,60 @@ def test_capabilities_are_declared_from_the_code_and_the_agreed_terms(
 
     assert capabilities.can_list is False
     assert capabilities.can_read_back is False
-    assert capabilities.supports_batch_delete is False
+    assert capabilities.supports_batch_delete is True
     assert capabilities.atomic_per_document is False
     assert capabilities.supports_agency_scoped_delete is False
     assert capabilities.supports_metadata_only_merge is False
+    assert capabilities.rechunk_requires_ack is True
     assert capabilities.max_concurrency == AGREED_TERMS.max_concurrency
 
 
-def test_the_metadata_merge_capability_follows_the_terms(fake: FakeLlmModule) -> None:
-    assert _sink(fake, terms=MERGE_TERMS).capabilities.supports_metadata_only_merge
+def test_the_agreed_terms_are_still_the_safe_ones() -> None:
+    """Each field changes only when the contract document records the
+    owner's answer — never to make a deployment work (L13)."""
+    assert AGREED_TERMS.status == "proposed"
+    assert not AGREED_TERMS.supports_metadata_only_merge
+    assert not AGREED_TERMS.supports_agency_scoped_delete
+    assert not AGREED_TERMS.supports_stale_sweep
+    assert not AGREED_TERMS.supports_read_back
+
+
+@pytest.mark.parametrize(
+    ("term", "capability"),
+    [
+        ("supports_metadata_only_merge", "supports_metadata_only_merge"),
+        ("supports_agency_scoped_delete", "supports_agency_scoped_delete"),
+        ("supports_read_back", "can_read_back"),
+    ],
+)
+def test_a_capability_that_depends_on_the_far_side_follows_its_term(
+    fake: FakeLlmModule, term: str, capability: str
+) -> None:
+    terms = replace(AGREED_TERMS, agency_id_filterable=True, **{term: True})
+    assert getattr(_sink(fake, terms=terms).capabilities, capability) is True
+    assert getattr(_sink(fake).capabilities, capability) is False
+
+
+def test_terms_refuse_ordinals_without_read_back() -> None:
+    with pytest.raises(ValueError, match="read_back_lists_ordinals"):
+        replace(AGREED_TERMS, read_back_lists_ordinals=True)
 
 
 @pytest.mark.parametrize(
     ("verb", "match"),
     [
-        (lambda s: s.delete_documents(["d1"]), "task L9"),
-        (lambda s: s.delete_chunks("d1", [3]), "task L9"),
         (
-            lambda s: s.sweep_stale(AGENCY, datetime.now(UTC) - timedelta(hours=1)),
-            "task L10",
+            lambda s: s.sweep_stale(
+                AGENCY, datetime.now(UTC) - timedelta(hours=1), ["d1"]
+            ),
+            "Open item 7",
         ),
         (lambda s: s.delete_agency(AGENCY), "supports_agency_scoped_delete"),
         (lambda s: s.read_document("d1"), "can_read_back"),
         (lambda s: s.holds_agency_content(), "can_list"),
     ],
 )
-def test_what_is_not_built_yet_refuses_rather_than_no_ops(
+def test_what_the_far_side_has_not_agreed_refuses_rather_than_no_ops(
     fake: FakeLlmModule, verb: Callable[[LlmModuleSink], object], match: str
 ) -> None:
     with pytest.raises(NotSupported, match=match):
@@ -265,6 +316,49 @@ def test_the_documented_request_is_what_the_sink_sends(fake: FakeLlmModule) -> N
     _sink(fake).upsert_document(_record(), _chunks())
     assert set(fake.requests[0].body) == set(documented)
     assert set(fake.requests[0].body["chunks"][0]) == set(documented["chunks"][0])
+
+
+_NAMED_EXAMPLES: dict[str, type[BaseModel]] = {
+    "document-delete-request": DocumentDeleteRequest,
+    "chunk-delete-request": ChunkDeleteRequest,
+    "agency-delete-request": AgencyDeleteRequest,
+    "sweep-request": SweepRequest,
+    "deleted-documents-response": DeletedDocumentsResponse,
+    "probe-response": DocumentProbeResponse,
+}
+
+
+def test_every_named_json_example_validates_against_its_model() -> None:
+    """The delete, sweep and read-back examples (L9, L10, L17) name their
+    model in the tag, and every model has at least one."""
+    text = CONTRACT_DOC.read_text(encoding="utf-8")
+    found = re.findall(r"<!-- example: ([a-z-]+) -->\s*```json\n(.*?)```", text, re.S)
+    named = [
+        (kind, json.loads(body)) for kind, body in found if kind in _NAMED_EXAMPLES
+    ]
+    assert {kind for kind, _ in named} == set(_NAMED_EXAMPLES)
+    assert {kind for kind, _ in found} <= {"request", "response", *_NAMED_EXAMPLES}
+    for kind, example in named:
+        _NAMED_EXAMPLES[kind].model_validate(example)
+
+
+def test_the_documented_deletes_are_what_the_sink_sends(fake: FakeLlmModule) -> None:
+    text = CONTRACT_DOC.read_text(encoding="utf-8")
+
+    def documented(kind: str) -> dict[str, Any]:
+        pattern = rf"<!-- example: {kind} -->\s*```json\n(.*?)```"
+        match = re.search(pattern, text, re.S)
+        assert match is not None
+        return json.loads(match[1])
+
+    sink = _sink(fake)
+    sink.delete_documents(["d1"])
+    sink.delete_chunks("d1", [4])
+    assert set(fake.requests[0].body) == set(documented("document-delete-request"))
+    assert set(fake.requests[1].body) == set(documented("chunk-delete-request"))
+    assert set(fake.requests[1].body["chunks"][0]) == set(
+        documented("chunk-delete-request")["chunks"][0]
+    )
 
 
 def test_the_request_model_refuses_a_field_it_does_not_declare() -> None:
@@ -841,6 +935,68 @@ def test_the_credential_is_fetched_for_every_upsert(fake: FakeLlmModule) -> None
     ]
 
 
+def test_a_credential_failure_says_why_in_the_log(
+    fake: FakeLlmModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    def placeholder() -> str:
+        raise CredentialUnavailableError(
+            "Vault secret llm/content still holds a placeholder (REPLACE_ME)"
+        )
+
+    with caplog.at_level(logging.WARNING, logger=llm_module_sink.__name__):
+        outcome = _sink(fake, token_provider=placeholder).upsert_document(
+            _record(), _chunks()
+        )
+
+    # Still permanent: a credential that outlasted the provider's own backoff
+    # is what F19's abort exists for.
+    assert outcome.status is UpsertStatus.FAILED_PERMANENT
+    assert "placeholder (REPLACE_ME)" in caplog.text
+
+
+def test_an_unknown_provider_error_is_reduced_to_its_type(
+    fake: FakeLlmModule, caplog: pytest.LogCaptureFixture
+) -> None:
+    def leaky() -> str:
+        raise RuntimeError("token=s3cr3t-value")
+
+    with caplog.at_level(logging.WARNING, logger=llm_module_sink.__name__):
+        _sink(fake, token_provider=leaky).upsert_document(_record(), _chunks())
+
+    assert "RuntimeError" in caplog.text
+    assert "s3cr3t" not in caplog.text
+
+
+def test_the_default_session_ignores_the_environment() -> None:
+    sink = LlmModuleSink(
+        base_url=BASE_URL,
+        agency_id=AGENCY,
+        sink_id=SINK_ID,
+        run_id="run-1",
+        token_provider=lambda: TOKEN,
+        ingest_schema_version=1,
+        max_request_bytes=8_388_608,
+        connect_timeout=5.0,
+        read_timeout=120.0,
+    )
+
+    # A ~/.netrc entry would otherwise replace the bearer header, and proxy
+    # or CA-bundle variables would reroute or re-trust the connection.
+    assert sink._session.trust_env is False  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    "flag", ["supports_agency_scoped_delete", "supports_stale_sweep"]
+)
+def test_a_delete_by_agency_filter_needs_the_filter_agreed(flag: str) -> None:
+    with pytest.raises(ValueError, match="agency_id_filterable"):
+        replace(AGREED_TERMS, **{flag: True})
+
+    assert getattr(
+        replace(AGREED_TERMS, agency_id_filterable=True, **{flag: True}), flag
+    )
+
+
 # --------------------------------------------------------------------------
 # L7 — idempotency
 # --------------------------------------------------------------------------
@@ -1034,8 +1190,11 @@ def _coordinator(
     source: FakeDocumentSource,
     manifests: InMemoryStore,
     tmp_path: Path,
+    *,
+    profile_name: str = "compact",
+    stale_sweep_enabled: bool = False,
 ) -> PublishCoordinator:
-    profile = CHUNK_PROFILES["compact"]
+    profile = CHUNK_PROFILES[profile_name]
     return PublishCoordinator(
         sink=sink,
         manifests=ManifestService(
@@ -1052,6 +1211,7 @@ def _coordinator(
         concurrency=4,
         sink_failure_abort_threshold=25,
         run_state=None,
+        stale_sweep_enabled=stale_sweep_enabled,
     )
 
 
@@ -1093,3 +1253,817 @@ def test_the_coordinator_publishes_through_the_sink_and_falls_back_on_metadata(
     assert [seen.body["document_id"] for seen in resent] == ["d1"]
     assert resent[0].body["chunks"]
     assert fake.records["d1"]["source"]["page_title"] == "Uus pealkiri"
+
+
+# --------------------------------------------------------------------------
+# L9 — deletes
+# --------------------------------------------------------------------------
+
+SWEEP_TERMS = replace(
+    AGREED_TERMS, agency_id_filterable=True, supports_stale_sweep=True
+)
+AGENCY_DELETE_TERMS = replace(
+    AGREED_TERMS, agency_id_filterable=True, supports_agency_scoped_delete=True
+)
+
+
+def _deletes(fake: FakeLlmModule) -> list[Seen]:
+    return [seen for seen in fake.requests if seen.path.endswith("/delete")]
+
+
+@pytest.mark.parametrize(
+    ("status", "verdict"),
+    [
+        (200, "deleted"),
+        (204, "deleted"),
+        (404, "missing"),
+        (410, "missing"),
+        (409, "retryable"),
+        (422, "retryable"),
+        (503, "retryable"),
+        (400, "failed"),
+        (500, "failed"),
+    ],
+)
+def test_delete_item_statuses_classify_with_already_gone_a_success(
+    status: int, verdict: str
+) -> None:
+    assert classify_delete_status(status) == verdict
+
+
+def test_documents_are_deleted_in_one_request_with_an_item_each(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake)
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+    sink.upsert_document(_record("d2"), _chunks("d2"))
+
+    outcome = sink.delete_documents(["d1", "d2", "absent"])
+
+    assert outcome == DeleteOutcome(deleted=("d1", "d2"), missing=("absent",))
+    (seen,) = _deletes(fake)
+    assert seen.path == "/ingest/v1/documents/delete"
+    assert seen.body == {
+        "ingest_schema_version": 1,
+        "agency_id": AGENCY,
+        "document_ids": ["d1", "d2", "absent"],
+    }
+    assert seen.key == "run-1:del:b0"
+    assert seen.headers["Authorization"] == f"Bearer {TOKEN}"
+    assert fake.records == {}
+    assert fake.points == {}
+
+
+def test_a_document_delete_removes_points_before_the_record(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake)
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+    fake.events.clear()
+
+    sink.delete_documents(["d1"])
+
+    assert fake.events == [
+        ("delete", "d1", 0),
+        ("delete", "d1", 1),
+        ("delete", "d1", 2),
+        ("delete", "d1", None),
+    ]
+
+
+def test_a_retryable_delete_item_is_resent_alone_and_a_failed_one_reported(
+    fake: FakeLlmModule,
+) -> None:
+    sleeps: list[float] = []
+    sink = _sink(fake, sleeps=sleeps)
+    for document_id in ("d1", "d2", "d3"):
+        sink.upsert_document(_record(document_id), _chunks(document_id))
+    fake.fail_item("d2", 503, "busy")
+    fake.fail_item("d3", 500, "broken")
+
+    outcome = sink.delete_documents(["d1", "d2", "d3"])
+
+    assert outcome == DeleteOutcome(deleted=("d1", "d2"), failed={"d3": "500:broken"})
+    first, resend = _deletes(fake)
+    assert first.body["document_ids"] == ["d1", "d2", "d3"]
+    assert resend.body["document_ids"] == ["d2"]
+    assert resend.key == "run-1:del:b0:r1"
+    assert len(sleeps) == 1
+    assert "d3" in fake.records
+
+
+def test_a_delete_item_still_failing_after_the_rounds_is_failed(
+    fake: FakeLlmModule,
+) -> None:
+    fake.fail_item("d1", 503, times=ITEM_RETRY_ROUNDS + 1)
+
+    outcome = _sink(fake).delete_documents(["d1"])
+
+    assert outcome.failed == {"d1": "items-still-failing: 503"}
+    assert len(_deletes(fake)) == ITEM_RETRY_ROUNDS + 1
+
+
+def test_an_unacknowledged_delete_item_is_resent(fake: FakeLlmModule) -> None:
+    fake.drop_item("d1")
+
+    outcome = _sink(fake).delete_documents(["d1", "d2"])
+
+    assert outcome == DeleteOutcome(missing=("d2", "d1"))
+    assert [seen.body["document_ids"] for seen in _deletes(fake)] == [
+        ["d1", "d2"],
+        ["d1"],
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reply", "code"),
+    [
+        (Reply(200, body=b"not json"), "malformed-response"),
+        (Reply(403), "http-403"),
+        # Contract §9: "already gone" is an item status. A whole-request 404
+        # is a wrong URL or route, and must never read as deleted.
+        (Reply(404), "http-404"),
+        (Reply(200, body=b'{"ingest_schema_version": 2, "items": []}'), None),
+    ],
+)
+def test_a_delete_request_that_fails_outright_fails_every_document_in_it(
+    fake: FakeLlmModule, reply: Reply, code: str | None
+) -> None:
+    fake.reply_next(reply)
+
+    outcome = _sink(fake).delete_documents(["d1", "d2"])
+
+    assert set(outcome.failed) == {"d1", "d2"}
+    expected = code or "schema-version-mismatch"
+    assert set(outcome.failed.values()) == {expected}
+
+
+def test_document_deletes_are_batched_by_count(
+    fake: FakeLlmModule, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(llm_module_sink, "DELETE_BATCH_IDS", 2)
+    ids = [f"d{i}" for i in range(5)]
+
+    outcome = _sink(fake).delete_documents(ids)
+
+    assert sorted(outcome.missing) == sorted(ids)
+    deletes = _deletes(fake)
+    assert [seen.body["document_ids"] for seen in deletes] == [
+        ["d0", "d1"],
+        ["d2", "d3"],
+        ["d4"],
+    ]
+    assert [seen.key for seen in deletes] == [
+        "run-1:del:b0",
+        "run-1:del:b1",
+        "run-1:del:b2",
+    ]
+
+
+def test_document_deletes_are_packed_under_the_request_cap(fake: FakeLlmModule) -> None:
+    ids = [f"document-{i:02d}-{'x' * 30}" for i in range(6)]
+    cap = 160
+
+    outcome = _sink(fake, max_request_bytes=cap).delete_documents(ids)
+
+    assert sorted(outcome.missing) == sorted(ids)
+    deletes = _deletes(fake)
+    assert len(deletes) > 1
+    assert all(len(seen.raw) <= cap for seen in deletes)
+    assert [i for seen in deletes for i in seen.body["document_ids"]] == ids
+
+
+def test_a_delete_that_cannot_fit_one_id_is_failed_without_sending(
+    fake: FakeLlmModule,
+) -> None:
+    outcome = _sink(fake, max_request_bytes=60).delete_documents(["d1", "d2"])
+
+    assert outcome.failed == {
+        "d1": "request-cap-too-small",
+        "d2": "request-cap-too-small",
+    }
+    assert fake.requests == []
+
+
+def test_no_usable_credential_fails_every_delete_without_sending(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake, token_provider=lambda: "")
+
+    assert sink.delete_documents(["d1"]).failed == {"d1": "credential-unavailable"}
+    assert sink.delete_chunks("d1", [3]).failed == {3: "credential-unavailable"}
+    assert fake.requests == []
+
+
+def test_a_tail_delete_sends_point_ids_and_reports_ordinals(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake)
+    sink.upsert_document(_record("d1", 5), _chunks("d1", 5))
+
+    outcome = sink.delete_chunks("d1", [4, 3])
+
+    assert outcome == DeleteOutcome(deleted=(3, 4))
+    (seen,) = _deletes(fake)
+    assert seen.path == "/ingest/v1/documents/d1/chunks/delete"
+    assert seen.body["chunks"] == [
+        {"chunk_id": _id(3), "ordinal": 3},
+        {"chunk_id": _id(4), "ordinal": 4},
+    ]
+    assert seen.key == "run-1:d1:del:b0"
+    assert sorted(p["ordinal"] for p in fake.points_of("d1").values()) == [0, 1, 2]
+    assert "d1" in fake.records
+
+
+def test_a_tail_delete_reports_each_ordinal_in_its_own_category(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake)
+    sink.upsert_document(_record("d1", 5), _chunks("d1", 5))
+    fake.fail_item(_id(4), 400, "refused")
+
+    outcome = sink.delete_chunks("d1", [3, 4, 7])
+
+    assert outcome == DeleteOutcome(
+        deleted=(3,), missing=(7,), failed={4: "400:refused"}
+    )
+
+
+def test_a_document_id_that_would_escape_its_path_is_refused(
+    fake: FakeLlmModule,
+) -> None:
+    with pytest.raises(ValueError, match="document_id"):
+        _sink(fake).delete_chunks("../d1", [3])
+    assert fake.requests == []
+
+
+def test_an_agency_delete_is_refused_until_the_far_side_filters_by_agency(
+    fake: FakeLlmModule,
+) -> None:
+    with pytest.raises(NotSupported, match="supports_agency_scoped_delete"):
+        _sink(fake).delete_agency(AGENCY)
+    assert fake.requests == []
+
+
+def test_an_agency_delete_removes_everything_and_replays_as_missing(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake, terms=AGENCY_DELETE_TERMS)
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+    sink.upsert_document(_record("d2"), _chunks("d2"))
+
+    assert sink.delete_agency(AGENCY) == DeleteOutcome(deleted=(AGENCY,))
+    assert fake.records == {}
+    assert fake.points == {}
+    assert fake.requests[-1].path == f"/ingest/v1/agencies/{AGENCY}/delete"
+    assert sink.delete_agency(AGENCY) == DeleteOutcome(missing=(AGENCY,))
+
+
+def test_a_failed_agency_delete_is_failed_not_raised(fake: FakeLlmModule) -> None:
+    fake.reply_next(Reply(403))
+
+    outcome = _sink(fake, terms=AGENCY_DELETE_TERMS).delete_agency(AGENCY)
+
+    assert outcome.failed == {AGENCY: "http-403"}
+
+
+# --------------------------------------------------------------------------
+# L10 — the synced_at sweep, with a keep list
+# --------------------------------------------------------------------------
+
+
+def _orphan(fake: FakeLlmModule, document_id: str = "orphan") -> None:
+    fake.plant_point(
+        document_id,
+        0,
+        chunk_id=_id(0, document_id),
+        agency_id=AGENCY,
+        synced_at="2026-09-01T00:00:00Z",
+    )
+
+
+def test_the_sweep_removes_stale_documents_and_spares_the_keep_list(
+    fake: FakeLlmModule,
+) -> None:
+    """d1 is unchanged, so its synced_at is as old as d2's — only the keep
+    list tells them apart. d2 and the orphan are not in it."""
+    sink = _sink(fake, terms=SWEEP_TERMS)
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+    sink.upsert_document(_record("d2"), _chunks("d2"))
+    _orphan(fake)
+    before = datetime.now(UTC)
+
+    outcome = sink.sweep_stale(AGENCY, before, ["d1"])
+
+    assert outcome == DeleteOutcome(deleted=("d2", "orphan"))
+    assert set(fake.records) == {"d1"}
+    assert {p["document_id"] for p in fake.points.values()} == {"d1"}
+    seen = fake.requests[-1]
+    assert seen.path == f"/ingest/v1/agencies/{AGENCY}/sweep"
+    assert seen.body == {
+        "ingest_schema_version": 1,
+        "agency_id": AGENCY,
+        "before": format_timestamp(before),
+        "keep_document_ids": ["d1"],
+    }
+
+
+def test_the_sweep_spares_a_document_synced_by_this_run(fake: FakeLlmModule) -> None:
+    sink = _sink(fake, terms=SWEEP_TERMS)
+    record = replace(_record("d2"), synced_at="2026-10-26T10:17:00Z")
+    sink.upsert_document(record, _chunks("d2"))
+
+    outcome = sink.sweep_stale(
+        AGENCY, datetime(2026, 10, 26, 10, 17, tzinfo=UTC), ["d1"]
+    )
+
+    assert outcome == DeleteOutcome()
+    assert "d2" in fake.records
+
+
+def test_timestamps_are_rendered_as_utc_with_a_z() -> None:
+    from datetime import timezone
+
+    moment = datetime(2026, 10, 26, 13, 17, tzinfo=timezone(timedelta(hours=3)))
+    assert format_timestamp(moment) == "2026-10-26T10:17:00Z"
+
+
+def test_a_keep_list_too_large_for_one_request_is_never_split(
+    fake: FakeLlmModule,
+) -> None:
+    keep = [f"document-{i:04d}" for i in range(50)]
+
+    with pytest.raises(StoreError, match="refusing to split"):
+        _sink(fake, terms=SWEEP_TERMS, max_request_bytes=300).sweep_stale(
+            AGENCY, datetime.now(UTC), keep
+        )
+    assert fake.requests == []
+
+
+def test_a_sweep_that_deletes_a_kept_document_fails_loudly(
+    fake: FakeLlmModule,
+) -> None:
+    fake.reply_next(
+        Reply(
+            200,
+            body=b'{"ingest_schema_version": 1, "deleted_document_ids": ["d1"]}',
+        )
+    )
+
+    with pytest.raises(StoreError, match="keep list named"):
+        _sink(fake, terms=SWEEP_TERMS).sweep_stale(AGENCY, datetime.now(UTC), ["d1"])
+
+
+@pytest.mark.parametrize(
+    "reply", [Reply(403), Reply(200, body=b"{}"), Reply(200, body=b"not json")]
+)
+def test_a_failed_sweep_raises_rather_than_reporting_nothing_swept(
+    fake: FakeLlmModule, reply: Reply
+) -> None:
+    fake.reply_next(reply)
+
+    with pytest.raises(StoreError, match="sweep failed"):
+        _sink(fake, terms=SWEEP_TERMS).sweep_stale(AGENCY, datetime.now(UTC), ["d1"])
+
+
+def test_a_sweep_without_a_credential_raises(fake: FakeLlmModule) -> None:
+    sink = _sink(fake, terms=SWEEP_TERMS, token_provider=lambda: "")
+    with pytest.raises(StoreError, match="credential"):
+        sink.sweep_stale(AGENCY, datetime.now(UTC), ["d1"])
+    assert fake.requests == []
+
+
+# --------------------------------------------------------------------------
+# L17 — read-back
+# --------------------------------------------------------------------------
+
+READ_BACK_TERMS = replace(
+    AGREED_TERMS, supports_read_back=True, read_back_lists_ordinals=True
+)
+
+
+def test_read_back_reports_what_the_far_side_holds(fake: FakeLlmModule) -> None:
+    sink = _sink(fake, terms=READ_BACK_TERMS)
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+
+    assert sink.read_document("d1") == DocumentProbe(
+        "d1", record_present=True, chunk_count=3, chunk_ordinals=(0, 1, 2)
+    )
+    assert sink.read_document("absent") is None
+    probe = fake.requests[-2]
+    assert probe.method == "GET"
+    assert probe.path == "/ingest/v1/documents/d1"
+    assert probe.raw == b""
+    assert "Idempotency-Key" not in probe.headers
+
+
+def test_read_back_drops_ordinals_unless_the_terms_promise_them(
+    fake: FakeLlmModule,
+) -> None:
+    sink = _sink(fake, terms=replace(AGREED_TERMS, supports_read_back=True))
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+
+    probe = sink.read_document("d1")
+
+    assert probe is not None
+    assert probe.chunk_count == 3
+    assert probe.chunk_ordinals is None
+
+
+@pytest.mark.parametrize(
+    ("reply", "match"),
+    [
+        (Reply(403), "http-403"),
+        (Reply(200, body=b"not json"), "malformed-response"),
+        (
+            Reply(
+                200,
+                body=json.dumps(
+                    {
+                        "ingest_schema_version": 1,
+                        "document_id": "d2",
+                        "record_present": True,
+                        "chunk_count": 1,
+                    }
+                ).encode(),
+            ),
+            "another document",
+        ),
+        (
+            Reply(
+                200,
+                body=json.dumps(
+                    {
+                        "ingest_schema_version": 1,
+                        "document_id": "d1",
+                        "record_present": True,
+                        "chunk_count": 3,
+                        "chunk_ordinals": [0],
+                    }
+                ).encode(),
+            ),
+            "inconsistent",
+        ),
+    ],
+)
+def test_a_read_back_that_cannot_be_trusted_raises_never_reads_as_absent(
+    fake: FakeLlmModule, reply: Reply, match: str
+) -> None:
+    fake.reply_next(reply)
+    with pytest.raises(StoreError, match=match):
+        _sink(fake, terms=READ_BACK_TERMS).read_document("d1")
+
+
+# --------------------------------------------------------------------------
+# L12 — transport, on every verb
+# --------------------------------------------------------------------------
+
+ALL_TERMS = replace(
+    AGREED_TERMS,
+    agency_id_filterable=True,
+    supports_agency_scoped_delete=True,
+    supports_stale_sweep=True,
+    supports_read_back=True,
+)
+
+
+def _every_verb(sink: LlmModuleSink) -> None:
+    sink.upsert_document(_record("d1"), _chunks("d1"))
+    sink.delete_chunks("d1", [5])
+    sink.read_document("d1")
+    sink.sweep_stale(AGENCY, datetime.now(UTC), ["d1"])
+    sink.delete_documents(["d1"])
+    sink.delete_agency(AGENCY)
+
+
+def test_every_verb_is_bounded_in_time_verified_and_never_redirected(
+    fake: FakeLlmModule,
+) -> None:
+    _every_verb(_sink(fake, terms=ALL_TERMS))
+
+    assert len(fake.requests) == 6
+    for seen in fake.requests:
+        assert seen.timeout == (5.0, 120.0)
+        assert seen.verify is True
+        assert seen.headers["Authorization"] == f"Bearer {TOKEN}"
+
+
+def test_every_verb_works_through_the_stub_app(fake: FakeLlmModule) -> None:
+    """L15: the FastAPI stub is the same far side as the fake it serves."""
+    _every_verb(_sink(fake, terms=ALL_TERMS, via_stub=True))
+
+    assert len(fake.requests) == 6
+    assert fake.records == {}
+    assert fake.requests[0].headers["Idempotency-Key"].startswith("run-1:d1:p0:")
+    assert all(seen.timeout == (5.0, 120.0) for seen in fake.requests)
+
+
+def test_a_delete_is_retried_after_the_time_a_429_asked_for(
+    fake: FakeLlmModule,
+) -> None:
+    sleeps: list[float] = []
+    fake.reply_next(Reply(429, headers={"Retry-After": "4"}))
+
+    outcome = _sink(fake, sleeps=sleeps).delete_documents(["d1"])
+
+    assert outcome == DeleteOutcome(missing=("d1",))
+    assert sleeps == [4.0]
+
+
+def test_a_response_slower_than_the_read_timeout_is_retryable(
+    fake: FakeLlmModule,
+) -> None:
+    fake.respond_after(300.0)
+
+    outcome = _sink(fake).upsert_document(_record(), _chunks())
+
+    assert outcome.status is UpsertStatus.FAILED_RETRYABLE
+    assert outcome.detail == "timeout"
+
+
+def test_a_body_the_far_side_finds_too_large_is_permanent(
+    fake: FakeLlmModule,
+) -> None:
+    fake.reject_bodies_over(100)
+
+    outcome = _sink(fake).upsert_document(_record(), _chunks())
+
+    assert outcome.status is UpsertStatus.FAILED_PERMANENT
+    assert outcome.detail == "http-413"
+    assert len(fake.requests) == 1
+
+
+def test_the_default_session_pools_a_connection_per_concurrent_document() -> None:
+    sink = LlmModuleSink(
+        base_url=BASE_URL,
+        agency_id=AGENCY,
+        sink_id=SINK_ID,
+        run_id="run-1",
+        token_provider=lambda: TOKEN,
+        ingest_schema_version=1,
+        max_request_bytes=1024,
+        connect_timeout=5.0,
+        read_timeout=120.0,
+        terms=replace(AGREED_TERMS, max_concurrency=3),
+    )
+    adapter = sink._session.get_adapter(BASE_URL)
+    assert isinstance(adapter, requests.adapters.HTTPAdapter)
+    assert adapter._pool_maxsize == 3  # noqa: SLF001
+    assert sink._session.verify is True
+
+
+# --------------------------------------------------------------------------
+# L10 and L18 — what the coordinator does with them
+# --------------------------------------------------------------------------
+
+_PROSE = " ".join(
+    f"Lause {i} räägib sellest, kuidas taotlus esitada." for i in range(8)
+)
+
+
+def _source(*document_ids: str) -> FakeDocumentSource:
+    source = FakeDocumentSource()
+    for document_id in document_ids:
+        source.put(make_row(document_id), _PROSE)
+    return source
+
+
+def test_the_coordinator_sweeps_after_a_full_run_with_the_manifest_as_keep_list(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    _orphan(fake)
+
+    report = _coordinator(
+        _sink(fake, terms=SWEEP_TERMS),
+        source,
+        manifests,
+        tmp_path,
+        stale_sweep_enabled=True,
+    ).export("run-1")
+
+    assert report.outcome == "success"
+    assert report.stale_sweep == "done"
+    assert report.stale_swept_count == 1
+    sweep = fake.requests[-1]
+    assert sweep.path.endswith("/sweep")
+    assert sorted(sweep.body["keep_document_ids"]) == ["d1", "d2"]
+    assert sweep.body["before"] == report.started_at
+    assert "orphan" not in fake.records
+    assert {p["document_id"] for p in fake.points.values()} == {"d1", "d2"}
+
+
+def test_the_coordinator_never_sweeps_when_it_is_disabled(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    report = _coordinator(
+        _sink(fake, terms=SWEEP_TERMS), _source("d1"), InMemoryStore(), tmp_path
+    ).export("run-1")
+
+    assert report.stale_sweep == "disabled"
+    assert not any(seen.path.endswith("/sweep") for seen in fake.requests)
+
+
+def test_a_limited_run_refuses_the_sweep(fake: FakeLlmModule, tmp_path: Path) -> None:
+    """F20: everything a --limit run did not touch looks stale."""
+    report = _coordinator(
+        _sink(fake, terms=SWEEP_TERMS),
+        _source("d1", "d2", "d3"),
+        InMemoryStore(),
+        tmp_path,
+        stale_sweep_enabled=True,
+    ).export("run-1", limit=1)
+
+    assert report.outcome == "success"
+    assert report.stale_sweep == "refused"
+    assert not any(seen.path.endswith("/sweep") for seen in fake.requests)
+
+
+def test_a_run_that_held_a_document_back_refuses_the_sweep(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    fake.fail_item("record", 500, times=1)
+
+    report = _coordinator(
+        _sink(fake, terms=SWEEP_TERMS),
+        _source("d1", "d2"),
+        InMemoryStore(),
+        tmp_path,
+        stale_sweep_enabled=True,
+    ).export("run-1")
+
+    assert report.outcome == "success"
+    assert report.documents_held_back == 1
+    assert report.stale_sweep == "refused"
+
+
+def test_a_sink_without_a_sweep_is_reported_not_supported(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    report = _coordinator(
+        _sink(fake), _source("d1"), InMemoryStore(), tmp_path, stale_sweep_enabled=True
+    ).export("run-1")
+
+    assert report.outcome == "success"
+    assert report.stale_sweep == "not_supported"
+
+
+def test_a_failed_sweep_leaves_the_committed_run_a_success(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    source = _source("d1")
+    manifests = InMemoryStore()
+    coordinator = _coordinator(
+        _sink(fake, terms=SWEEP_TERMS),
+        source,
+        manifests,
+        tmp_path,
+        stale_sweep_enabled=True,
+    )
+    original = fake._route  # noqa: SLF001
+
+    def refuse_sweeps(
+        method: str, path: str, body: dict[str, Any] | None
+    ) -> tuple[int, dict[str, str], bytes]:
+        if path.endswith("/sweep"):
+            return 403, {}, b""
+        return original(method, path, body)
+
+    fake._route = refuse_sweeps  # type: ignore[method-assign]  # noqa: SLF001
+
+    report = coordinator.export("run-1")
+
+    assert report.outcome == "success"
+    assert report.stale_sweep == "failed"
+    assert manifests.objects  # committed regardless
+
+
+def test_a_pending_rechunk_is_refused_without_an_acknowledgement(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    """L18: a CHUNK_PROFILE change on this sink is a full re-embed, so the
+    cron path cannot start it."""
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    first = _coordinator(_sink(fake, run_id="run-1"), source, manifests, tmp_path)
+    assert first.export("run-1").outcome == "success"
+    sent = len(fake.requests)
+
+    report = _coordinator(
+        _sink(fake, run_id="run-2"),
+        source,
+        manifests,
+        tmp_path,
+        profile_name="azure_native",
+    ).export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "RechunkNotAcknowledged"
+    assert report.rechunk == "refused"
+    assert len(fake.requests) == sent
+
+
+def test_an_acknowledged_rechunk_runs_and_a_limited_slice_unlocks_nothing(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    assert (
+        _coordinator(_sink(fake, run_id="run-1"), source, manifests, tmp_path)
+        .export("run-1")
+        .outcome
+        == "success"
+    )
+
+    def again(run_id: str) -> PublishCoordinator:
+        return _coordinator(
+            _sink(fake, run_id=run_id),
+            source,
+            manifests,
+            tmp_path,
+            profile_name="azure_native",
+        )
+
+    sliced = again("run-2").export("run-2", limit=1, accept_rechunk=True)
+    assert sliced.outcome == "success"
+    assert sliced.rechunk == "accepted"
+    assert sliced.accepted_rechunk is True
+
+    # One document is still on the old geometry: the next cron tick is
+    # still refused.
+    assert again("run-3").export("run-3").rechunk == "refused"
+
+    full = again("run-4").export("run-4", accept_rechunk=True)
+    assert full.outcome == "success"
+    after = again("run-5").export("run-5")
+    assert after.outcome in ("success", "unchanged")
+    assert after.rechunk is None
+
+
+# --------------------------------------------------------------------------
+# L14 — a whole run, and nothing readable leaves it
+# --------------------------------------------------------------------------
+
+_SENTINEL = "Salajane taotluse lõik"
+
+
+def test_a_full_run_with_every_failure_leaks_no_document_text(
+    fake: FakeLlmModule, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    text = " ".join(f"{_SENTINEL} {i}. detsembril." for i in range(30))
+    source = FakeDocumentSource()
+    for document_id in ("d1", "d2", "d3", "d4"):
+        source.put(
+            make_row(document_id),
+            text,
+            sidecar={
+                "source_url": f"https://www.eesti.ee/{document_id}",
+                "page_title": _SENTINEL,
+            },
+        )
+    manifests = InMemoryStore()
+    terms = replace(SWEEP_TERMS, max_concurrency=1)
+
+    fake.reply_next(Reply(429, headers={"Retry-After": "1"}))
+    fake.fail_item("record", 503, f"{_SENTINEL}", times=1)
+    fake.fail_item(_id(0, "d3"), 400, _SENTINEL)
+    first = _coordinator(
+        _sink(fake, terms=terms, run_id="run-1"),
+        source,
+        manifests,
+        tmp_path,
+        stale_sweep_enabled=True,
+    ).export("run-1")
+
+    source.put(
+        replace(make_row("d2"), is_deleted=True, updated_at="2026-10-09T00:00:00Z"),
+        text,
+    )
+    fake.fail_item("d2", 500, _SENTINEL)
+    fake.reply_next(Reply(200, body=f"{_SENTINEL}".encode()))
+    second = _coordinator(
+        _sink(fake, terms=terms, run_id="run-2"),
+        source,
+        manifests,
+        tmp_path,
+        stale_sweep_enabled=True,
+    ).export("run-2")
+
+    # The failure paths really ran: d3 failed permanently in run 1, d2's
+    # delete was refused in run 2, and the sweep was refused both times
+    # because each run held a document back.
+    assert first.outcome == "success"
+    assert first.publish_failures.keys() == {"d3"}
+    assert second.outcome == "success"
+    assert second.deletions_unresolved == 1
+    assert {first.stale_sweep, second.stale_sweep} == {"refused"}
+    assert caplog.records
+    for report in (first, second):
+        rendered = json.dumps(to_json_dict(report), ensure_ascii=False)
+        assert _SENTINEL not in rendered
+        assert "detsembril" not in rendered
+    assert _SENTINEL not in caplog.text
+    assert "detsembril" not in caplog.text
+    assert TOKEN not in caplog.text

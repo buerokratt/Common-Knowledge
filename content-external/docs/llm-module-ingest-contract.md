@@ -1,10 +1,14 @@
 # llm-module ingest contract — `ingest_schema_version` 1
 
 > **Status: PROPOSED.** Nothing here has been agreed with the llm-module owner
-> yet (Open items 1, 5 and 7 in the task breakdown). This document is the
+> yet (Open items 1, 5 and 7 in the task breakdown, which are questions 1, 2
+> and 4 in [§13](#13-open-questions-for-the-llm-module-owner)). This document is the
 > proposal to take to that conversation. Until it is signed off, the exporter's
-> `LlmModuleSink` is built and tested against it but **cannot be selected** —
-> `CONTENT_SINK=llm_module` still refuses at the factory.
+> `LlmModuleSink` is built and tested against it (against a stub of this
+> contract, `tests/llm_module_stub.py`) but **cannot be selected**:
+> `CONTENT_SINK=llm_module` is refused at startup while `AGREED_TERMS.status`
+> is `proposed`. `LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true` overrides that, for
+> development against the stub only.
 >
 > The code side of this contract is
 > [`exporter/sinks/llm_module_contract.py`](../exporter/sinks/llm_module_contract.py).
@@ -141,7 +145,7 @@ different here:
 | `409`, `422`, `503` | **retryable** — the exporter resends only the failed chunks, up to two more rounds |
 | anything else | **permanent** for that document — reported as failed, retried on the next hourly run |
 
-Note what follows from this table, and see [§10](#10-open-questions-for-the-llm-module-owner)
+Note what follows from this table, and see [§13](#13-open-questions-for-the-llm-module-owner)
 question 9:
 
 - `422` on an item is retryable. If a chunk is *always* invalid, the document is
@@ -293,41 +297,223 @@ The merge is **all-or-nothing per document**: one `record` item, applied to
 every point or to none.
 
 **Not yet enabled.** The exporter will only send this once the llm-module
-confirms it supports it ([§10](#10-open-questions-for-the-llm-module-owner),
+confirms it supports it ([§13](#13-open-questions-for-the-llm-module-owner),
 question 3). Until then a metadata change is sent as a full re-push of the
 document, and the exporter's run report counts each one.
 
-## 9. What stays out of this contract (later stages)
+## 9. Deletes
 
-- **Deletes** — whole documents, tail chunks (`ordinal >= chunk_count` after a
-  document shrinks), and a whole agency (task L9).
-- **The stale-content sweep** — delete points where `agency_id = X and
-  synced_at < run_start`, run only after a run that covered the whole corpus
-  (task L10).
-- **A read-back probe** — the chunk count or chunk ids held for a
-  `document_id`, which lets the exporter verify the destination instead of
-  reporting it "unverifiable" (task L17).
+Every delete uses the same headers as an upsert (§1), the same
+`Idempotency-Key` scheme (§6, with `del` in place of the part), and the same
+item-by-item response (§3). A delete item's status means:
+
+| Item status | The exporter treats it as |
+|---|---|
+| `2xx` | deleted |
+| `404`, `410` | **already gone — a success**. A replayed delete must not fail because the first one worked |
+| `409`, `422`, `503` | retryable: resent alone, up to two more rounds |
+| anything else | failed. The exporter journals it and retries on a later run |
+
+"Already gone" is an **item** status only. Answer a delete request with an
+item-by-item `200`/`207` even when nothing it names exists — including a tail
+delete (§9.2) for a document you hold nothing of: every item `404`. A `404`
+for the **whole request** reads as a wrong base URL or route, so the exporter
+treats it as failed rather than as "deleted". Reading it as success would let a
+misconfigured URL report every deletion done while doing none.
+
+### 9.1 Whole documents
+
+```
+POST {LLM_MODULE_BASE_URL}/ingest/v1/documents/delete
+```
+
+<!-- example: document-delete-request -->
+```json
+{
+  "ingest_schema_version": 1,
+  "agency_id": "agency-1",
+  "document_ids": [
+    "6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10",
+    "0d2e4f60-8a1b-4c3d-9e5f-7a8b9c0d1e2f"
+  ]
+}
+```
+
+<!-- example: response -->
+```json
+{
+  "ingest_schema_version": 1,
+  "items": [
+    {"ref": "6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10", "status": 200},
+    {"ref": "0d2e4f60-8a1b-4c3d-9e5f-7a8b9c0d1e2f", "status": 404}
+  ]
+}
+```
+
+One item per `document_id`, keyed on it. For each document, **delete every
+point first and the record last**, so no point is ever left without its
+record. A document whose points could not all be deleted is a failed item,
+and **its record stays**.
+At most 500 ids go in one request, and fewer if the body would pass
+`LLM_MODULE_MAX_REQUEST_BYTES`.
+
+### 9.2 Tail chunks
+
+When a document shrinks, its new chunks are upserted first, and then the
+chunks past the new end are deleted. The record stays.
+
+```
+POST {LLM_MODULE_BASE_URL}/ingest/v1/documents/{document_id}/chunks/delete
+```
+
+<!-- example: chunk-delete-request -->
+```json
+{
+  "ingest_schema_version": 1,
+  "agency_id": "agency-1",
+  "document_id": "6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10",
+  "chunks": [
+    {"chunk_id": "c7d8e9f0a1b2c3d4e5f60718293a4b5c6", "ordinal": 2},
+    {"chunk_id": "c1a2b3c4d5e6f708192a3b4c5d6e7f809", "ordinal": 3}
+  ]
+}
+```
+
+One item per `chunk_id` — the point id (§4). The `ordinal` is there so a
+log on your side can say which passage went.
+
+### 9.3 A whole agency
+
+```
+POST {LLM_MODULE_BASE_URL}/ingest/v1/agencies/{agency_id}/delete
+```
+
+<!-- example: agency-delete-request -->
+```json
+{"ingest_schema_version": 1, "agency_id": "agency-1"}
+```
+
+<!-- example: deleted-documents-response -->
+```json
+{
+  "ingest_schema_version": 1,
+  "deleted_document_ids": ["6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10"]
+}
+```
+
+Every point and record whose `agency_id` matches. An empty list means there
+was nothing to delete. **This needs `agency_id` stored as a filterable field
+on every point (§4, §13 question 4).** Until that is confirmed the exporter never
+sends it.
+
+## 10. The stale sweep
+
+After a run that saw the whole corpus and held nothing back, the exporter
+can ask for content it no longer accounts for to be removed: documents it
+deleted in a run that then failed to say so, or that an earlier deployment
+left behind.
+
+```
+POST {LLM_MODULE_BASE_URL}/ingest/v1/agencies/{agency_id}/sweep
+```
+
+<!-- example: sweep-request -->
+```json
+{
+  "ingest_schema_version": 1,
+  "agency_id": "agency-1",
+  "before": "2026-10-26T10:17:00Z",
+  "keep_document_ids": [
+    "6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10",
+    "0b8a7d0e-5c1d-4f0e-8b2a-9a1c3e5d7f21"
+  ]
+}
+```
+
+Delete every document of `agency_id` — its points and its record — whose
+`synced_at` is **earlier than** `before` **and** whose `document_id` is **not**
+in `keep_document_ids`. Answer with `deleted-documents-response` (§9.3).
+
+- **The keep list is the safety, not an optimisation.** The exporter does not
+  resend a document that has not changed, so a live document can carry a
+  `synced_at` from weeks ago. `synced_at < before` alone would delete it.
+  `keep_document_ids` is every document the exporter's committed manifest
+  says it has published.
+- Compare `synced_at` and `before` as **timestamps** (RFC 3339, UTC), not as
+  strings.
+- A keep list is never split across requests: each piece would delete what
+  the others keep. If one does not fit `LLM_MODULE_MAX_REQUEST_BYTES`, the
+  exporter does not sweep. It never sends an empty keep list.
+- **Enforce the keep list inside the delete itself** — as part of the
+  filter, not as a check afterwards. Deleting a document that is in the keep
+  list is a contract violation. The exporter checks the answer and fails the
+  sweep loudly if it happens, but it can only notice: by then the content is
+  gone, and its manifest claims documents the destination no longer holds.
+
+Like the agency delete, **this needs a filterable `agency_id`**, and the
+exporter does not send it until that is agreed.
+
+## 11. Read-back
+
+```
+GET {LLM_MODULE_BASE_URL}/ingest/v1/documents/{document_id}
+```
+
+<!-- example: probe-response -->
+```json
+{
+  "ingest_schema_version": 1,
+  "document_id": "6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10",
+  "record_present": true,
+  "chunk_count": 2,
+  "chunk_ordinals": [0, 1]
+}
+```
+
+`404` when nothing is held for the document. `chunk_ordinals` is optional;
+`chunk_count` alone is enough to be useful. This is what lets the exporter
+check, before a first run, that the destination is really empty, and lets a
+reconcile report "clean" rather than "unverifiable". It is optional: without
+it the exporter degrades to trusting its own manifest, and says so.
+
+## 12. What stays out of this contract
+
 - **The cutover** — loading into a new collection beside the existing one,
   comparing retrieval quality on your benchmark, swapping, and only then
-  removing the llm-module's own chunker (tasks L19–L23).
+  removing the llm-module's own chunker (tasks L19–L23). Removing it first is
+  the wrong order: it deletes the fallback and the comparison together.
 - **The hourly ZIP job stays.** The Global Classifier still consumes
   `zipped/{agency}.zip`. The llm-module no longer pulling it is not a reason to
   stop producing it (task L24).
 
-## 10. Open questions for the llm-module owner
+## 13. Open questions for the llm-module owner
 
 Each answer maps to one field in `AGREED_TERMS`
 (`exporter/sinks/llm_module_contract.py`) or to a setting. A field changes only
 when its question is answered.
 
-| # | Question | What it decides | Current assumption |
-|---|---|---|---|
-| 1 | Which embedding model embeds our chunks, and what is its token limit? | `CHUNK_PROFILE` — a 1200-character Estonian chunk against a tight token budget is silently truncated | None — an `llm_module` deployment must set `CHUNK_PROFILE` explicitly |
-| 2 | Will you implement this endpoint, request and response (§1–§3)? | Everything | This proposal |
-| 3 | Can you merge metadata without content and without re-embedding (§8)? | `supports_metadata_only_merge` | `False` — full re-push |
-| 4 | Will points be keyed on our `chunk_id`, with `agency_id` filterable (§4)? | Whether edits and deletes work at all | Required |
-| 5 | What concurrency and request rate will you accept? | `max_concurrency` | `2` parallel documents |
-| 6 | What request-size ceiling will you accept? | `LLM_MODULE_MAX_REQUEST_BYTES` | 8 MiB |
-| 7 | Is there an enrichment step between chunk and embed, and will it stay? | Retrieval quality after the cutover | Unknown |
-| 8 | Who owns the collection swap and its rollback at cutover? | Cutover plan | Unknown |
-| 9 | Which item statuses can clear on a resend (§3)? Is a `422` item ever transient, or always a bad chunk? | `_RETRYABLE_ITEM_STATUSES` — a deterministic failure classed retryable is re-embedded every hour and never reported as permanent | `409`, `422`, `503` retryable; everything else permanent |
+**Two numberings.** The exporter's code, its startup messages and the task
+breakdown cite the breakdown's *Open items*. The last column gives that number
+for each question here, so a message that says "Open item 7" lands on
+question 4.
+
+| # | Question | What it decides | Current assumption | Open item |
+|---|---|---|---|---|
+| 1 | Which embedding model embeds our chunks, and what is its token limit? | `CHUNK_PROFILE` — a 1200-character Estonian chunk against a tight token budget is silently truncated | None — an `llm_module` deployment must set `CHUNK_PROFILE` explicitly | 1 |
+| 2 | Will you implement this endpoint, request and response (§1–§3)? | Everything | This proposal | 5 |
+| 3 | Can you merge metadata without content and without re-embedding (§8)? | `supports_metadata_only_merge` | `False` — full re-push | 8 |
+| 4 | Will points be keyed on our `chunk_id`, with `agency_id` filterable (§4)? | Whether edits and deletes work at all; `agency_id_filterable`, which questions 11 and 12 need | Required | 7 |
+| 5 | What concurrency and request rate will you accept? | `max_concurrency` | `2` parallel documents | 9 |
+| 6 | What request-size ceiling will you accept? | `LLM_MODULE_MAX_REQUEST_BYTES` | 8 MiB | 9 |
+| 7 | Is there an enrichment step between chunk and embed, and will it stay? | Retrieval quality after the cutover | Unknown | 11 |
+| 8 | Who owns the collection swap and its rollback at cutover? | Cutover plan | Unknown | 6 |
+| 9 | Which item statuses can clear on a resend (§3)? Is a `422` item ever transient, or always a bad chunk? | `_RETRYABLE_ITEM_STATUSES` — a deterministic failure classed retryable is re-embedded every hour and never reported as permanent | `409`, `422`, `503` retryable; everything else permanent | 5 |
+| 10 | Will you implement document and tail deletes (§9.1, §9.2), points before the record, with `404` for "already gone" **per item**, never for the whole request? | Whether deletions reach you at all | Required | 5 |
+| 11 | Will you implement the agency delete (§9.3)? | `supports_agency_scoped_delete` — and with it a purge | `False` | 7 |
+| 12 | Will you implement the keep-list sweep (§10), enforcing the keep list inside the delete itself? | `supports_stale_sweep` | `False` — no sweep runs | 7 |
+| 13 | Can you expose the read-back probe (§11), and does it list ordinals? | `supports_read_back`, `read_back_lists_ordinals` — reconcile "clean" vs "unverifiable", and the first-run check | `False` | 10 |
+| 14 | How many ids may one delete request name? | `DELETE_BATCH_IDS` | 500 | 5 |
+
+`AGREED_TERMS.status` becomes `agreed` — and `CONTENT_SINK=llm_module` becomes
+selectable without the development flag — once questions 1, 2, 4 and 10 have
+recorded answers.

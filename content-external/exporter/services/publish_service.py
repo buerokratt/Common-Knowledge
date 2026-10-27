@@ -133,10 +133,21 @@ journal still waiting for its mirror, retried only after a commit. An
 `unchanged` run classified nothing, so it reports
 run_observed_full_corpus=False and drives no sweep.
 
-NOT YET HERE, deliberately: the sweeps (Stage J, L10), which must call
-corpus_guard.require_observed_full_corpus first. Backoff (F8) is the
-transport's, never this module's: a document the destination did not confirm
-is retried next tick.
+THE STALE SWEEP (L10) runs after the commit, under the lock, when
+STALE_SWEEP_ENABLED is set and corpus_guard.require_observed_full_corpus
+passes. It sends the committed manifest's documents as a keep list, because
+an unchanged document is never re-sent and keeps an old synced_at while
+being live. It never changes the outcome. A sink without one reports
+`not_supported`; Stage J's ordinal tail sweep (J5) is the listable sinks'.
+
+A PENDING RE-CHUNK (L18) on a sink that declares rechunk_requires_ack fails
+the run before Gate 1, having sent nothing, unless the CLI passed
+--accept-rechunk: on the llm-module sink a fingerprint change is a full
+corpus re-embed, and it must be an announced, operator-driven run rather than
+a config bump that lands at :17.
+
+Backoff (F8) is the transport's, never this module's: a document the
+destination did not confirm is retried next tick.
 
 REDACTION (F13). Log lines carry ids, counts and sanitised reason codes. Never
 document text, chunk text, a URL or a request/response body, and an exception
@@ -152,6 +163,7 @@ from collections import Counter, deque
 from collections.abc import Callable, Mapping, Sequence
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
 from typing import cast
 
@@ -181,6 +193,10 @@ from exporter.core.schemas import (
     RunReport,
 )
 from exporter.services.bootstrap_marker import BootstrapMarker
+from exporter.services.corpus_guard import (
+    IncompleteCorpusError,
+    require_observed_full_corpus,
+)
 from exporter.services.dead_letter import DeadLetterStore
 from exporter.services.deletion_journal import DeletionJournal, agency_journals
 from exporter.services.document_source import DocumentSource
@@ -188,7 +204,12 @@ from exporter.services.locking import run_lock
 from exporter.services.manifest_service import ManifestService
 from exporter.services.run_log import log_run_outcome
 from exporter.services.run_state import RunOutcome, RunStateStore, utc_now_iso
-from exporter.sinks.base import ContentSink, UpsertOutcome, UpsertStatus
+from exporter.sinks.base import (
+    ContentSink,
+    NotSupported,
+    UpsertOutcome,
+    UpsertStatus,
+)
 from exporter.stores.base import StoreError
 
 __all__ = [
@@ -200,6 +221,7 @@ __all__ = [
     "EmptyEnumerationError",
     "NonEmptyDestination",
     "PublishCoordinator",
+    "RechunkNotAcknowledged",
     "SystemicSinkFailure",
 ]
 
@@ -265,6 +287,16 @@ class SystemicSinkFailure(StoreError):  # noqa: N818
 class NonEmptyDestination(StoreError):  # noqa: N818
     """A first run found the destination already holding the agency's
     content (F21). Never a cold start: see the module docstring."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, permanent=True)
+
+
+class RechunkNotAcknowledged(StoreError):  # noqa: N818
+    """A re-chunk is pending on a destination that re-embeds what it
+    receives, and the operator did not pass --accept-rechunk (L18).
+    Permanent: every tick meets the same fingerprint until someone runs it
+    by hand."""
 
     def __init__(self, message: str) -> None:
         super().__init__(message, permanent=True)
@@ -351,6 +383,8 @@ class _Progress:
     aborted: bool = False
     # F21, first run only.
     first_run_probe: str | None = None
+    # L18: None when no re-chunk was pending.
+    rechunk: str | None = None
 
     @property
     def observed_full_corpus(self) -> bool:
@@ -396,6 +430,7 @@ class PublishCoordinator:
         sink_failure_abort_threshold: int,
         run_state: RunStateStore | None = None,
         clock: Callable[[], str] = utc_now_iso,
+        stale_sweep_enabled: bool = False,
     ) -> None:
         if manifests.sink_id != sink.sink_id:
             raise ValueError(
@@ -423,6 +458,7 @@ class PublishCoordinator:
         self._abort_threshold = sink_failure_abort_threshold
         self._run_state = run_state
         self._clock = clock
+        self._stale_sweep_enabled = stale_sweep_enabled
 
     @property
     def agency_id(self) -> str:
@@ -441,6 +477,7 @@ class PublishCoordinator:
         force: bool = False,
         limit: int | None = None,
         accept_existing_content: bool = False,
+        accept_rechunk: bool = False,
     ) -> RunReport:
         """Run one export and return its report. An Exception, including a
         lock file that cannot be opened, is the report's `failed` outcome
@@ -449,8 +486,10 @@ class PublishCoordinator:
 
         `force` bypasses Gate 1 (E4), so the run walks every row even when
         nothing moved; it is echoed in the report. `limit` caps the
-        documents read this run (F10). `accept_existing_content` lets a first run publish into a
-        destination that already holds this agency's content (F21) — an
+        documents read this run (F10). `accept_existing_content` lets a first
+        run publish into a destination that already holds this agency's
+        content (F21), and `accept_rechunk` lets a pending re-chunk run on a
+        destination that re-embeds what it receives (L18) — each an
         operator's deliberate act, which only the CLI offers."""
         if limit is not None and (
             isinstance(limit, bool) or not isinstance(limit, int) or limit < 1
@@ -462,6 +501,7 @@ class PublishCoordinator:
             "forced": force,
             "limit": limit,
             "accepted_existing_content": accept_existing_content,
+            "accepted_rechunk": accept_rechunk,
         }
         report: RunReport | None = None
         try:
@@ -473,6 +513,7 @@ class PublishCoordinator:
                         force=force,
                         limit=limit,
                         accept_existing_content=accept_existing_content,
+                        accept_rechunk=accept_rechunk,
                     )
                     # Recorded while the lock is still held: once it is free
                     # the next run may start, and its record must not race
@@ -509,6 +550,7 @@ class PublishCoordinator:
         force: bool,
         limit: int | None,
         accept_existing_content: bool,
+        accept_rechunk: bool,
     ) -> RunReport:
         # Built here rather than in _run so a failure can still report the
         # checkpoints it committed, which the next run resumes from, and the
@@ -522,6 +564,7 @@ class PublishCoordinator:
                 force=force,
                 limit=limit,
                 accept_existing_content=accept_existing_content,
+                accept_rechunk=accept_rechunk,
             )
         except Exception as exc:
             # Every failure is `failed`, and nothing was committed beyond the
@@ -578,6 +621,7 @@ class PublishCoordinator:
         force: bool,
         limit: int | None,
         accept_existing_content: bool,
+        accept_rechunk: bool,
     ) -> RunReport:
         agency_id = self.agency_id
         journal = DeletionJournal(self._work_dir, run_id=run_id, agency_id=agency_id)
@@ -607,6 +651,7 @@ class PublishCoordinator:
             # marker that cannot be removed fails the run, loudly, rather than
             # surviving silently.
             marker.clear()
+            self._check_rechunk(previous, progress, accept_rechunk=accept_rechunk)
         on_disk = agency_journals(self._work_dir, agency_id)
         unreconciled = [j for j in on_disk if not j.is_closed()]
         if (
@@ -683,7 +728,7 @@ class PublishCoordinator:
         self._reconcile_journals(run_id, [*unreconciled, journal], [*on_disk, journal])
         dead_lettered = self._record_dead_letters(run_id, diff, progress)
 
-        return replace(
+        report = replace(
             self._report(run_id, "success", started_at),
             dead_lettered_count=dead_lettered,
             new_count=len(diff.new),
@@ -701,6 +746,106 @@ class PublishCoordinator:
             run_observed_full_corpus=progress.observed_full_corpus,
             documents_held_back=len(progress.held_back),
             **_outcome_fields(progress),
+        )
+        return self._sweep_stale(report, manifest, progress)
+
+    # -- after the commit: the stale sweep (L10) ---------------------------
+
+    def _sweep_stale(
+        self, report: RunReport, manifest: Manifest, progress: _Progress
+    ) -> RunReport:
+        """Delete what the destination holds for this agency that no
+        committed document accounts for: synced before this run started, and
+        absent from the manifest just committed.
+
+        After the commit and still under the run lock, so nothing can
+        publish in between. It never changes the outcome: the commit stands
+        whatever the sweep does, and the next full run sweeps again. Off
+        unless STALE_SWEEP_ENABLED, and refused unless the run vouches for
+        the whole corpus (F20) — the one gate every sweep shares. A sink
+        with no such sweep raises NotSupported, reported rather than
+        branched on (A13): a listable sink sweeps by the ordinal tail rule
+        instead (J5).
+        """
+        if not self._stale_sweep_enabled:
+            return report
+        try:
+            require_observed_full_corpus(report, operation="the stale sweep")
+        except IncompleteCorpusError as exc:
+            logger.info("run %s: %s", report.run_id, exc)
+            return replace(report, stale_sweep="refused")
+        if not manifest.documents:
+            # Keeping nothing is a purge (J7), never a sweep's side effect.
+            logger.info(
+                "run %s: stale sweep skipped, the manifest lists no document",
+                report.run_id,
+            )
+            return replace(report, stale_sweep="refused")
+        try:
+            outcome = self._sink.sweep_stale(
+                self.agency_id,
+                datetime.fromisoformat(progress.synced_at),
+                manifest.documents.keys(),
+            )
+        except NotSupported:
+            return replace(report, stale_sweep="not_supported")
+        except Exception as exc:
+            logger.warning(
+                "run %s: stale sweep failed, the commit stands: %s: %s",
+                report.run_id,
+                type(exc).__name__,
+                sanitize_sensitive_text(str(exc)),
+            )
+            return replace(report, stale_sweep="failed")
+        logger.info(
+            "run %s: stale sweep removed %d document(s)",
+            report.run_id,
+            len(outcome.deleted),
+        )
+        return replace(
+            report, stale_sweep="done", stale_swept_count=len(outcome.deleted)
+        )
+
+    # -- before Gate 1: a pending re-chunk (L18) ---------------------------
+
+    def _check_rechunk(
+        self, previous: Manifest, progress: _Progress, *, accept_rechunk: bool
+    ) -> None:
+        """Refuse a pending re-chunk on a destination that re-embeds every
+        chunk it receives, unless the operator acknowledged it.
+
+        Pending means the committed manifest, or any entry in it, was cut
+        with another geometry than this run's — so an acknowledged `--limit`
+        slice that re-chunked a few documents does not let the following
+        cron ticks re-embed the rest unannounced. UNCONFIRMED_FINGERPRINT is
+        not a geometry, only the coordinator's own distrust, and never
+        counts. The check reads a capability, never a sink name (A13).
+        """
+        stale = {
+            entry.chunker_fingerprint
+            for entry in previous.documents.values()
+            if entry.chunker_fingerprint != UNCONFIRMED_FINGERPRINT
+        } | {previous.chunker_fingerprint}
+        if stale <= {self._fingerprint}:
+            return
+        if not self._sink.capabilities.rechunk_requires_ack:
+            progress.rechunk = "proceeded"
+            return
+        if accept_rechunk:
+            logger.warning(
+                "agency %s: re-chunking against a destination that re-embeds "
+                "every chunk it receives, acknowledged by --accept-rechunk",
+                self.agency_id,
+            )
+            progress.rechunk = "accepted"
+            return
+        progress.rechunk = "refused"
+        raise RechunkNotAcknowledged(
+            f"agency {self.agency_id}: the chunker fingerprint changed, and "
+            f"sink {self._sink.sink_id!r} re-embeds every chunk it receives, so "
+            "this is a full corpus re-embed on someone else's service. Run it "
+            "by hand, announced, with --accept-rechunk (RUNBOOK: changing chunk "
+            "geometry on the llm-module sink). Nothing was sent."
         )
 
     def _publish_rows(
@@ -1410,6 +1555,8 @@ class PublishCoordinator:
             upsert_outcomes=report.upsert_outcomes,
             full_corpus=report.run_observed_full_corpus,
             dead_lettered=report.dead_lettered_count,
+            stale_sweep=report.stale_sweep,
+            rechunk=report.rechunk,
         )
         if self._run_state is not None:
             self._run_state.record(
@@ -1435,6 +1582,7 @@ def _outcome_fields(progress: _Progress) -> dict[str, object]:
         },
         "publish_failures": dict(sorted(progress.publish_failures.items())),
         "first_run_probe": progress.first_run_probe,
+        "rechunk": progress.rechunk,
     }
 
 

@@ -417,7 +417,9 @@ class RecordingSink(ContentSink):
         )
         return roll_up(self.agency_id, outcome)
 
-    def _sweep_stale(self, before: datetime) -> DeleteOutcome[str]:
+    def _sweep_stale(
+        self, before: datetime, keep: frozenset[str]
+    ) -> DeleteOutcome[str]:
         raise NotSupported("RecordingSink keeps no synced_at index")
 
     def _holds_agency_content(self) -> bool:
@@ -575,6 +577,7 @@ def patch_wiring(
         _settings: object,
         *,
         agency_id: str,
+        run_id: str,
         work_dir: Path,
         run_state: RunStateStore | None,
         source_factory: object = None,

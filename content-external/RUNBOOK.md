@@ -475,6 +475,80 @@ database took 8.5–9.9 s. At the default page size none of 9 did, but at
 timeout, wait for the next run, or cancel the running export queries first
 (step 2 above).
 
+## Changing chunk geometry on the llm-module sink
+
+**What triggers it.** A change to `CHUNK_PROFILE`, or a release that bumps
+`CHUNKER_VERSION` or `NORMALISER_VERSION`, changes the chunker fingerprint.
+Every document then re-chunks on its next run. On the object-store sink that
+is a longer run. On the llm-module sink it is a **full corpus re-embed**: a
+bill and a rate-limit event on the llm-module's side, and — because this
+pipeline is the only chunker in the retrieval path — a change to the passages
+the assistant answers from.
+
+**What stops it from happening by accident (L18).** The llm-module sink
+declares `rechunk_requires_ack`. While any committed document is on a
+geometry other than the configured one, an export without `--accept-rechunk`
+fails before it reads anything or sends anything:
+
+```
+content-external run ... outcome=failed error_type=RechunkNotAcknowledged rechunk=refused ...
+```
+
+It fails every tick until the re-chunk is done by hand. The HTTP endpoint
+cannot pass the flag, so the cron never can. A `--limit` slice re-chunks some
+documents and leaves the rest pending, so it does **not** unlock the cron.
+
+**Procedure.**
+
+1. **Announce it and agree a window** with the llm-module owner. State the
+   corpus size: every document is re-embedded.
+2. **Check the profile** against their embedder's token budget (Open item 1).
+   Retrieval quality is measured, not assumed: the cutover comparison (L20)
+   is the template.
+3. Deploy the configuration change. Expect `rechunk=refused` on the next
+   tick — that is the guard working, not an incident.
+4. **A slice first:**
+   `python -m exporter.run_sync --agency-id … --limit 25 --accept-rechunk`.
+   Check the report (`rechunk: accepted`, `publish_failed_count: 0`) and spot
+   check a few documents on the far side.
+5. **The full run, by hand, at reduced concurrency:** set
+   `EXPORT_CONCURRENCY` lower than usual for the run, then
+   `python -m exporter.run_sync --agency-id … --accept-rechunk`. Documents a
+   committed run (the step-4 slice) already re-chunked are not re-sent. A
+   run that fails part way commits nothing, so its retry re-sends what it had
+   pushed: harmless (the point ids are the same), but embedded again, so fix
+   the cause before retrying.
+6. The next cron tick should report `rechunk=-` and `success` or
+   `unchanged`. Restore `EXPORT_CONCURRENCY`.
+
+If a document cannot be re-chunked (it fails permanently), it keeps the old
+geometry and the cron keeps refusing. Fix or dead-letter it, then repeat
+step 5.
+
+## The stale sweep (L10)
+
+**What it is.** `STALE_SWEEP_ENABLED=true` adds one step after a committed
+run: the destination deletes this agency's documents that were synced
+before the run started **and** are not in the committed manifest. It catches
+content no deletion signal names any more — a delete a run made and then
+failed to record, or content an earlier deployment left behind.
+
+**Why the keep list.** The exporter never re-sends an unchanged document, so
+a live document can carry a `synced_at` from weeks ago. Without the keep list
+(every document the committed manifest lists) the sweep would delete it.
+
+**When it runs, and what `stale_sweep=` in the run line means:**
+
+| Value | Meaning | Action |
+|---|---|---|
+| `disabled` | `STALE_SWEEP_ENABLED` is off | none |
+| `refused` | The run cannot vouch for the whole corpus: `--limit`, an abort, a document held back, or an empty manifest | none — the next clean full run sweeps |
+| `not_supported` | The sink has no such sweep. Always so on the object-store sink, and on the llm-module sink until it agrees one (Open item 7) | none |
+| `failed` | The sweep call failed. **The run's commit stands** | look at the warning line; if it says the far side deleted a kept document, the manifest now claims content the destination lacks — escalate to the llm-module owner |
+| `done` | `stale_swept_count` documents were removed | none |
+
+`unchanged` runs never sweep: they classified nothing.
+
 ## Index
 
 - **Name**: `idx_source_file_agency_base_updated` on

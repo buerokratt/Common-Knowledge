@@ -39,10 +39,31 @@ everything between a DocumentRecord and that wire:
   exception, never the token. The far side's item codes are kept only when
   they look like codes; a response body is read up to a bound.
 
-NOT YET: deletes (L9), the synced_at sweep (L10) and read-back (L17). Their
-hooks raise NotSupported naming the task, and the factory keeps refusing
-CONTENT_SINK=llm_module until L9 lands, because the coordinator deletes on
-any run that sees a deletion.
+- DELETES ON THE SAME WIRE (L9). Whole documents go in batches, one item per
+  document_id; a tail goes as (chunk_id, ordinal) pairs, the coordinates C16
+  hands over rendered to point ids. Item verdicts follow D3: 2xx is
+  `deleted`, 404/410 is `missing` (already gone is success), retryable items
+  are resent alone, and whatever is left is `failed` with a code, for the
+  deferred-deletion journal (F7). The far side deletes a document's points
+  before its record (F4) — that is the contract's, not an ordering here.
+
+- THE SWEEP CARRIES A KEEP LIST (L10). `delete where agency_id = X and
+  synced_at < before and document_id not in keep`. An unchanged document is
+  never re-sent, so `synced_at` alone would sweep live content; the keep list
+  is the committed manifest's documents. It is never split: a keep list sent
+  in pieces would let each piece delete what the others keep, so one that
+  does not fit one request is refused.
+
+- CAPABILITIES ARE THE TERMS' (L13). Agency delete, the sweep and read-back
+  (L17) all depend on what the llm-module has promised — an agency_id on
+  every point (Open item 7, the contract's §13 q4) and a probe (Open item
+  10, §13 q13) — so each raises NotSupported until AGREED_TERMS says
+  otherwise, and the sink never infers them from a response.
+
+- A WHOLE-REQUEST 404 IS A FAILURE, NOT "ALREADY GONE". Only an item's 404
+  or 410 means missing (contract §9). A request-level 404 is what a wrong
+  base URL or route looks like, and reading it as success would report every
+  deletion done while doing none — so it fails, and the journal retries it.
 """
 
 import hashlib
@@ -53,13 +74,14 @@ import re
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import requests
 from pydantic import BaseModel, ValidationError
+from requests.adapters import HTTPAdapter
 
-from exporter.core.ids import validate_segment
+from exporter.core.ids import make_chunk_id, validate_segment
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.core.schemas import Chunk, DocumentRecord, to_json_dict
 from exporter.services.backoff import (
@@ -71,29 +93,51 @@ from exporter.services.backoff import (
 )
 from exporter.sinks.base import (
     ContentSink,
+    CredentialUnavailableError,
     DeleteOutcome,
     DocumentProbe,
     NotSupported,
     SinkCapabilities,
+    StoreError,
     UpsertOutcome,
     UpsertStatus,
 )
 from exporter.sinks.llm_module_contract import (
     AGREED_TERMS,
+    DOCUMENT_DELETE_PATH,
     INGEST_PATH,
     RECORD_REF,
     SUPPORTED_INGEST_SCHEMA_VERSIONS,
+    AgencyDeleteRequest,
+    ChunkDeleteRequest,
+    ChunkRef,
     ContractTerms,
+    DeletedDocumentsResponse,
+    DeleteVerdict,
+    DocumentDeleteRequest,
+    DocumentProbeResponse,
     IngestChunk,
     IngestItem,
     IngestPart,
     IngestRequest,
     IngestResponse,
     ItemVerdict,
+    SweepRequest,
+    agency_delete_path,
+    chunk_delete_path,
+    classify_delete_status,
     classify_item_status,
+    document_path,
+    sweep_path,
 )
 
-__all__ = ["ITEM_RETRY_ROUNDS", "LlmModuleSink", "encode_request"]
+__all__ = [
+    "DELETE_BATCH_IDS",
+    "ITEM_RETRY_ROUNDS",
+    "LlmModuleSink",
+    "encode_request",
+    "format_timestamp",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +145,11 @@ logger = logging.getLogger(__name__)
 # first send. Small on purpose — the llm-module embeds what it receives, and
 # a document still failing after this is retried whole by the next tick.
 ITEM_RETRY_ROUNDS = 2
+
+# L9: the most document ids one delete request names. A request is also
+# packed under max_request_bytes; this keeps one far-side transaction small
+# whatever the cap is.
+DELETE_BATCH_IDS = 500
 
 # The statuses a response body is read for. Anything else below 400 (a 3xx,
 # since redirects are never followed, or an unexpected 2xx) is refused.
@@ -129,6 +178,18 @@ def encode_request(request: BaseModel) -> bytes:
         allow_nan=False,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def format_timestamp(moment: datetime) -> str:
+    """RFC 3339 in UTC with a `Z`, the shape `synced_at` is written in."""
+    return moment.astimezone(UTC).isoformat().replace("+00:00", "Z")
+
+
+def _encoded_size(value: object) -> int:
+    """Bytes `value` takes inside a compact JSON body."""
+    return len(
+        json.dumps(value, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    )
 
 
 @dataclass(frozen=True)
@@ -208,7 +269,7 @@ class LlmModuleSink(ContentSink):
             raise ValueError("connect_timeout and read_timeout must be > 0")
         # It becomes part of every Idempotency-Key.
         self._run_id = validate_segment("run_id", run_id)
-        self._url = base_url.rstrip("/") + INGEST_PATH
+        self._base_url = base_url.rstrip("/")
         self._token_provider = token_provider
         self._schema_version = ingest_schema_version
         self._max_request_bytes = max_request_bytes
@@ -216,30 +277,44 @@ class LlmModuleSink(ContentSink):
         self._timeout = (connect_timeout, read_timeout)
         self._terms = terms
         # TLS verification stays at requests' default, which is on. Nothing
-        # here ever sets `verify`.
-        self._session = session if session is not None else requests.Session()
+        # here ever sets `verify`. The default session pools one connection
+        # per document the terms let run at once (L12).
+        #
+        # trust_env is off, so the environment cannot change what is sent:
+        # with it on, a ~/.netrc entry for the host replaces the bearer header
+        # with Basic auth, and REQUESTS_CA_BUNDLE / *_PROXY reroute or re-trust
+        # the connection that carries the document text.
+        if session is None:
+            session = requests.Session()
+            session.trust_env = False
+            session.mount("https://", HTTPAdapter(pool_maxsize=terms.max_concurrency))
+        self._session = session
         self._policy = policy
         self._sleep = sleep
         self._rand = rand
 
     @property
     def capabilities(self) -> SinkCapabilities:
-        """Declared from this code and from AGREED_TERMS, never inferred.
+        """Declared from this code and from AGREED_TERMS, never inferred (L13).
 
         `atomic_per_document` is False although a document that fits one
         request is atomic: a split one is not, and the field cannot say
-        "sometimes". F3 holds either way, because every part carries the
-        record. `supports_agency_scoped_delete` waits on Open item 7 — the
-        llm-module has no agency_id on its points today.
+        "sometimes" (an accepted deviation from L13's row, recorded there).
+        F3 holds either way, because every part carries the record.
+        `supports_agency_scoped_delete` and read-back wait on Open items 7
+        and 10 (§13 q4/q11 and q13). `supports_batch_delete` is this code's: document
+        deletes go in batches. `rechunk_requires_ack` because the llm-module
+        embeds what it receives, so a re-chunk is a full re-embed (L18).
         """
         return SinkCapabilities(
             can_list=False,
-            can_read_back=False,
+            can_read_back=self._terms.supports_read_back,
             supports_metadata_only_merge=self._terms.supports_metadata_only_merge,
-            supports_batch_delete=False,
+            supports_batch_delete=True,
             atomic_per_document=False,
-            supports_agency_scoped_delete=False,
+            supports_agency_scoped_delete=self._terms.supports_agency_scoped_delete,
             max_concurrency=self._terms.max_concurrency,
+            rechunk_requires_ack=True,
         )
 
     # -- upsert (L3-L8) ----------------------------------------------------
@@ -455,31 +530,57 @@ class LlmModuleSink(ContentSink):
                 f"planned under {self._max_request_bytes} bytes but encoded to "
                 f"{len(body)}"
             )
-        digest = hashlib.sha256(body).hexdigest()[:_KEY_DIGEST_HEX]
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Idempotency-Key": f"{key}:{digest}",
-            "Content-Type": "application/json; charset=utf-8",
-        }
+        describe = (
+            f"llm-module upsert {request.document_id} part "
+            f"{request.part.index + 1}/{request.part.count}"
+        )
+        answer = self._exchange("POST", INGEST_PATH, body, token, key, describe)
+        if isinstance(answer, _Failure):
+            return answer
+        return self._itemised(*answer)
+
+    def _exchange(
+        self,
+        method: str,
+        path: str,
+        body: bytes | None,
+        token: str,
+        key: str | None,
+        describe: str,
+        *,
+        absent_ok: bool = False,
+    ) -> tuple[int, bytes] | _Failure:
+        """One request, with F8's backoff on the transient failures (L12).
+
+        Every verb goes through here, so all of them get the same bounded
+        read, timeouts, no redirects and redacted failure codes. `key` is the
+        Idempotency-Key less its body digest; a request with a body always
+        has one. `absent_ok` returns a 404 as (404, b"") instead of failing —
+        read-back's "nothing held".
+        """
+        headers = {"Authorization": f"Bearer {token}"}
+        if body is not None:
+            digest = hashlib.sha256(body).hexdigest()[:_KEY_DIGEST_HEX]
+            headers["Content-Type"] = "application/json; charset=utf-8"
+            headers["Idempotency-Key"] = f"{key}:{digest}"
 
         def send() -> tuple[int, bytes]:
             # Streamed, so the body is read up to a bound rather than whole;
             # the `with` hands the connection back on every path.
-            with self._session.post(
-                self._url,
+            with self._session.request(
+                method,
+                self._base_url + path,
                 data=body,
                 headers=headers,
                 timeout=self._timeout,
                 allow_redirects=False,
                 stream=True,
             ) as response:
+                if absent_ok and response.status_code == 404:
+                    return 404, b""
                 response.raise_for_status()
                 return response.status_code, self._read_capped(response)
 
-        describe = (
-            f"llm-module upsert {request.document_id} part "
-            f"{request.part.index + 1}/{request.part.count}"
-        )
         started = time.monotonic()
         try:
             status, content = retry_with_backoff(
@@ -499,13 +600,16 @@ class LlmModuleSink(ContentSink):
             return _Failure(True, "response-too-large")
 
         logger.debug(
-            "%s: HTTP %d, %d chunks, %d bytes, %.2fs",
+            "%s: HTTP %d, %d bytes sent, %.2fs",
             describe,
             status,
-            len(request.chunks or ()),
-            len(body),
+            len(body or b""),
             time.monotonic() - started,
         )
+        return status, content
+
+    def _itemised(self, status: int, content: bytes) -> IngestResponse | _Failure:
+        """An item-by-item answer, or why it cannot be read as one."""
         if status not in _ITEMISED_STATUSES:
             return _Failure(True, f"http-{status}")
         try:
@@ -513,6 +617,24 @@ class LlmModuleSink(ContentSink):
         except ValidationError:
             return _Failure(False, "malformed-response")
         if parsed.ingest_schema_version != self._schema_version:
+            return _Failure(True, "schema-version-mismatch")
+        return parsed
+
+    def _answer[R: BaseModel](
+        self, answer: tuple[int, bytes] | _Failure, model: type[R]
+    ) -> R | _Failure:
+        """A single-object answer (agency delete, sweep, read-back): 200 and
+        `model`, in this contract's version."""
+        if isinstance(answer, _Failure):
+            return answer
+        status, content = answer
+        if status != 200:
+            return _Failure(True, f"http-{status}")
+        try:
+            parsed = model.model_validate_json(content)
+        except ValidationError:
+            return _Failure(False, "malformed-response")
+        if getattr(parsed, "ingest_schema_version", None) != self._schema_version:
             return _Failure(True, "schema-version-mismatch")
         return parsed
 
@@ -554,9 +676,21 @@ class LlmModuleSink(ContentSink):
     def _token(self) -> str | None:
         """The bearer token for this upsert, or None if there is none usable.
         Fetched per upsert and never cached, so a rotated credential is picked
-        up without a restart (L11 supplies the Vault-backed provider)."""
+        up without a restart (L11 supplies the Vault-backed provider, which
+        retries a Vault blip itself).
+
+        A CredentialUnavailableError's message is logged, because it is
+        written to be — it is what tells a placeholder secret from Vault being
+        down. Any other exception is reduced to its type: its text is
+        unknown."""
         try:
             token = self._token_provider()
+        except CredentialUnavailableError as exc:
+            logger.warning(
+                "llm-module credential unavailable: %s",
+                sanitize_sensitive_text(str(exc)),
+            )
+            return None
         except Exception as exc:
             logger.warning("llm-module credential unavailable (%s)", type(exc).__name__)
             return None
@@ -587,29 +721,364 @@ class LlmModuleSink(ContentSink):
             detail=detail,
         )
 
-    # -- not yet (L9, L10, L17) -------------------------------------------
+    # -- deletes (L9) ------------------------------------------------------
 
     def _delete_documents(self, document_ids: tuple[str, ...]) -> DeleteOutcome[str]:
-        raise NotSupported("the llm-module sink's deletes arrive with task L9")
+        token = self._token()
+        if token is None:
+            return DeleteOutcome(
+                failed=dict.fromkeys(document_ids, "credential-unavailable")
+            )
+
+        def build(refs: Sequence[str]) -> DocumentDeleteRequest:
+            return DocumentDeleteRequest(
+                ingest_schema_version=self._schema_version,
+                agency_id=self.agency_id,
+                document_ids=list(refs),
+            )
+
+        batches, unsent = self._pack(document_ids, build)
+        outcomes: list[DeleteOutcome[str]] = [
+            DeleteOutcome(failed=dict.fromkeys(unsent, "request-cap-too-small"))
+        ]
+        for index, batch in enumerate(batches):
+            verdicts = self._delete_rounds(
+                batch,
+                build,
+                DOCUMENT_DELETE_PATH,
+                token,
+                key=f"{self._run_id}:del:b{index}",
+                describe=(
+                    f"llm-module delete batch {index + 1}/{len(batches)} "
+                    f"({len(batch)} documents)"
+                ),
+            )
+            outcomes.append(_delete_outcome(verdicts, {ref: ref for ref in batch}))
+        return DeleteOutcome.combine(*outcomes)
 
     def _delete_chunks(
         self, document_id: str, ordinals: tuple[int, ...]
     ) -> DeleteOutcome[int]:
-        raise NotSupported("the llm-module sink's deletes arrive with task L9")
+        token = self._token()
+        if token is None:
+            return DeleteOutcome(
+                failed=dict.fromkeys(ordinals, "credential-unavailable")
+            )
+        # C16's coordinates, rendered to the point ids L4 made them.
+        by_ref = {
+            make_chunk_id(self.agency_id, document_id, ordinal): ordinal
+            for ordinal in ordinals
+        }
+
+        def build(refs: Sequence[str]) -> ChunkDeleteRequest:
+            return ChunkDeleteRequest(
+                ingest_schema_version=self._schema_version,
+                agency_id=self.agency_id,
+                document_id=document_id,
+                chunks=[ChunkRef(chunk_id=ref, ordinal=by_ref[ref]) for ref in refs],
+            )
+
+        path = chunk_delete_path(validate_segment("document_id", document_id))
+        batches, unsent = self._pack(tuple(by_ref), build)
+        outcomes: list[DeleteOutcome[int]] = [
+            DeleteOutcome(
+                failed={by_ref[ref]: "request-cap-too-small" for ref in unsent}
+            )
+        ]
+        for index, batch in enumerate(batches):
+            verdicts = self._delete_rounds(
+                batch,
+                build,
+                path,
+                token,
+                key=f"{self._run_id}:{document_id}:del:b{index}",
+                describe=(
+                    f"llm-module tail delete {document_id} batch "
+                    f"{index + 1}/{len(batches)} ({len(batch)} chunks)"
+                ),
+            )
+            outcomes.append(_delete_outcome(verdicts, by_ref))
+        return DeleteOutcome.combine(*outcomes)
 
     def _delete_agency(self) -> DeleteOutcome[str]:
-        raise NotSupported("the llm-module sink's deletes arrive with task L9")
-
-    def _sweep_stale(self, before: datetime) -> DeleteOutcome[str]:
-        raise NotSupported(
-            "the llm-module sink's synced_at sweep arrives with task L10"
+        """Capability already checked: AGREED_TERMS says points carry a
+        filterable agency_id (Open item 7)."""
+        agency = self.agency_id
+        token = self._token()
+        if token is None:
+            return DeleteOutcome(failed={agency: "credential-unavailable"})
+        body = encode_request(
+            AgencyDeleteRequest(
+                ingest_schema_version=self._schema_version, agency_id=agency
+            )
         )
+        answer = self._answer(
+            self._exchange(
+                "POST",
+                agency_delete_path(agency),
+                body,
+                token,
+                f"{self._run_id}:del-agency",
+                "llm-module agency delete",
+            ),
+            DeletedDocumentsResponse,
+        )
+        if isinstance(answer, _Failure):
+            return DeleteOutcome(failed={agency: answer.detail})
+        logger.info(
+            "llm-module agency delete: %d document(s) removed",
+            len(answer.deleted_document_ids),
+        )
+        if answer.deleted_document_ids:
+            return DeleteOutcome(deleted=(agency,))
+        return DeleteOutcome(missing=(agency,))
+
+    def _delete_rounds(
+        self,
+        refs: Sequence[str],
+        build: Callable[[Sequence[str]], BaseModel],
+        path: str,
+        token: str,
+        *,
+        key: str,
+        describe: str,
+    ) -> dict[str, tuple[DeleteVerdict, str]]:
+        """Each ref's final verdict and code. Retryable items are resent
+        alone for up to ITEM_RETRY_ROUNDS more rounds, under a new key each
+        round (as an upsert's are); what still fails is `failed`. A request
+        that fails outright fails every ref it carried."""
+        settled: dict[str, tuple[DeleteVerdict, str]] = {}
+        pending = tuple(refs)
+        codes: dict[str, str] = {}
+        for round_ in range(ITEM_RETRY_ROUNDS + 1):
+            if round_:
+                self._sleep(full_jitter_delay(round_ - 1, self._policy, self._rand))
+            round_key = f"{key}:r{round_}" if round_ else key
+            answer = self._exchange(
+                "POST", path, encode_request(build(pending)), token, round_key, describe
+            )
+            response = (
+                answer if isinstance(answer, _Failure) else self._itemised(*answer)
+            )
+            verdicts = (
+                response
+                if isinstance(response, _Failure)
+                else _delete_verdicts(response, pending)
+            )
+            if isinstance(verdicts, _Failure):
+                for ref in pending:
+                    settled[ref] = ("failed", verdicts.detail)
+                return settled
+            retry: list[str] = []
+            for ref in pending:
+                verdict, code = verdicts[ref]
+                if verdict == "retryable":
+                    retry.append(ref)
+                    codes[ref] = code
+                else:
+                    settled[ref] = (verdict, code)
+            if not retry:
+                return settled
+            pending = tuple(retry)
+        for ref in pending:
+            settled[ref] = ("failed", f"items-still-failing: {codes[ref]}")
+        return settled
+
+    def _pack(
+        self, refs: tuple[str, ...], build: Callable[[Sequence[str]], BaseModel]
+    ) -> tuple[list[tuple[str, ...]], tuple[str, ...]]:
+        """`refs` in order, in batches of at most DELETE_BATCH_IDS that each
+        encode under max_request_bytes, plus the refs left unsent.
+
+        Sizes are exact: the body with one ref, less that ref, is the
+        envelope; each ref adds its own size and a comma. Packing stops at
+        the first ref that cannot fit even alone, and it and every ref after
+        it are returned unsent, for the caller to fail.
+        """
+        sizes = [self._ref_size(build, ref) for ref in refs]
+        envelope = len(encode_request(build(refs[:1]))) - sizes[0]
+        batches: list[tuple[str, ...]] = []
+        current: list[str] = []
+        used = envelope
+        for index, (ref, size) in enumerate(zip(refs, sizes, strict=True)):
+            extra = size + (1 if current else 0)
+            if current and (
+                len(current) >= DELETE_BATCH_IDS
+                or used + extra > self._max_request_bytes
+            ):
+                batches.append(tuple(current))
+                current, used, extra = [], envelope, size
+            if used + extra > self._max_request_bytes:
+                if current:
+                    batches.append(tuple(current))
+                return batches, refs[index:]
+            current.append(ref)
+            used += extra
+        batches.append(tuple(current))
+        return batches, ()
+
+    @staticmethod
+    def _ref_size(build: Callable[[Sequence[str]], BaseModel], ref: str) -> int:
+        """What one ref adds to a delete body: its id, or its {chunk_id,
+        ordinal} object."""
+        request = build((ref,))
+        if isinstance(request, ChunkDeleteRequest):
+            return len(encode_request(request.chunks[0]))
+        return _encoded_size(ref)
+
+    # -- the stale sweep (L10) ---------------------------------------------
+
+    def _sweep_stale(
+        self, before: datetime, keep: frozenset[str]
+    ) -> DeleteOutcome[str]:
+        if not self._terms.supports_stale_sweep:
+            raise NotSupported(
+                "the llm-module has not agreed a synced_at sweep (it needs a "
+                "filterable agency_id on every point, Open item 7, §13 q4/q12)"
+            )
+        token = self._token()
+        if token is None:
+            raise StoreError("llm-module sweep: credential unavailable")
+        body = encode_request(
+            SweepRequest(
+                ingest_schema_version=self._schema_version,
+                agency_id=self.agency_id,
+                before=format_timestamp(before),
+                keep_document_ids=sorted(keep),
+            )
+        )
+        if len(body) > self._max_request_bytes:
+            # Never split: each piece of a keep list would delete what the
+            # other pieces keep.
+            raise StoreError(
+                f"llm-module sweep: a keep list of {len(keep)} documents encodes "
+                f"to {len(body)} bytes, over LLM_MODULE_MAX_REQUEST_BYTES="
+                f"{self._max_request_bytes}; refusing to split it"
+            )
+        answer = self._answer(
+            self._exchange(
+                "POST",
+                sweep_path(self.agency_id),
+                body,
+                token,
+                f"{self._run_id}:sweep",
+                "llm-module stale sweep",
+            ),
+            DeletedDocumentsResponse,
+        )
+        if isinstance(answer, _Failure):
+            raise StoreError(f"llm-module sweep failed ({answer.detail})")
+        deleted = tuple(dict.fromkeys(answer.deleted_document_ids))
+        kept_but_deleted = keep.intersection(deleted)
+        if kept_but_deleted:
+            # The manifest still vouches for these, and Gate 2 will not
+            # resend them: say so loudly rather than report a clean sweep.
+            # This only detects; prevention is the far side's, which the
+            # contract requires to enforce the keep list inside the delete
+            # (§10, §13 q12).
+            raise StoreError(
+                f"llm-module sweep deleted {len(kept_but_deleted)} document(s) "
+                "the keep list named; the committed manifest now claims "
+                "content the destination does not hold"
+            )
+        logger.info("llm-module stale sweep: %d document(s) removed", len(deleted))
+        return DeleteOutcome(deleted=deleted)
+
+    # -- read-back (L17) ---------------------------------------------------
 
     def _read_document(self, document_id: str) -> DocumentProbe | None:
-        raise NotSupported("the llm-module sink's read-back arrives with task L17")
+        """Capability already checked: AGREED_TERMS promises the probe (Open
+        item 10). A failure raises, because "could not ask" must never read
+        as "nothing there"."""
+        token = self._token()
+        if token is None:
+            raise StoreError("llm-module read-back: credential unavailable")
+        answer = self._exchange(
+            "GET",
+            document_path(validate_segment("document_id", document_id)),
+            None,
+            token,
+            None,
+            f"llm-module read-back {document_id}",
+            absent_ok=True,
+        )
+        if not isinstance(answer, _Failure) and answer[0] == 404:
+            return None
+        probe = self._answer(answer, DocumentProbeResponse)
+        if isinstance(probe, _Failure):
+            raise StoreError(
+                f"llm-module read-back of {document_id} failed ({probe.detail})"
+            )
+        if probe.document_id != document_id:
+            raise StoreError(
+                f"llm-module read-back of {document_id} answered for another "
+                "document; refusing to trust it"
+            )
+        if not probe.record_present and probe.chunk_count == 0:
+            return None
+        ordinals = (
+            tuple(probe.chunk_ordinals)
+            if self._terms.read_back_lists_ordinals and probe.chunk_ordinals is not None
+            else None
+        )
+        try:
+            return DocumentProbe(
+                document_id=document_id,
+                record_present=probe.record_present,
+                chunk_count=probe.chunk_count,
+                chunk_ordinals=ordinals,
+            )
+        except ValueError:
+            raise StoreError(
+                f"llm-module read-back of {document_id} is inconsistent "
+                "(chunk_count disagrees with chunk_ordinals)"
+            ) from None
 
     def _holds_agency_content(self) -> bool:
         raise NotSupported("the llm-module sink cannot list (can_list=False)")
+
+
+def _delete_verdicts(
+    response: IngestResponse, refs: Sequence[str]
+) -> dict[str, tuple[DeleteVerdict, str]] | _Failure:
+    """Each sent ref's delete verdict and code — the same trust rules as an
+    upsert's: a ref answered twice or never sent spoils the answer, and one
+    left out is resent."""
+    sent = set(refs)
+    items: dict[str, IngestItem] = {}
+    for item in response.items:
+        if item.ref in items or item.ref not in sent:
+            return _Failure(False, "malformed-response")
+        items[item.ref] = item
+    verdicts: dict[str, tuple[DeleteVerdict, str]] = {}
+    for ref in refs:
+        item = items.get(ref)
+        if item is None:
+            verdicts[ref] = ("retryable", "unacknowledged")
+            continue
+        code = str(item.status)
+        if item.code:
+            code = f"{code}:{_short_code(item.code)}"
+        verdicts[ref] = (classify_delete_status(item.status), code)
+    return verdicts
+
+
+def _delete_outcome[T: (str, int)](
+    verdicts: dict[str, tuple[DeleteVerdict, str]], items: dict[str, T]
+) -> DeleteOutcome[T]:
+    """Ref verdicts, reported in the caller's vocabulary (D3)."""
+    deleted: list[T] = []
+    missing: list[T] = []
+    failed: dict[T, str] = {}
+    for ref, (verdict, code) in verdicts.items():
+        item = items[ref]
+        if verdict == "deleted":
+            deleted.append(item)
+        elif verdict == "missing":
+            missing.append(item)
+        else:
+            failed[item] = code
+    return DeleteOutcome(deleted=tuple(deleted), missing=tuple(missing), failed=failed)
 
 
 # A response cut off part way (a reset mid-body, a broken chunked or gzip

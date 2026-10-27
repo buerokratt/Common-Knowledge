@@ -25,6 +25,7 @@ from exporter.core.ids import make_chunk_id
 from exporter.core.schemas import Chunk, DocumentRecord, TextSpan
 from exporter.sinks.base import (
     ContentSink,
+    CredentialUnavailableError,
     DeleteOutcome,
     DocumentProbe,
     NotSupported,
@@ -34,6 +35,7 @@ from exporter.sinks.base import (
     UpsertStatus,
 )
 from exporter.sinks.factory import build_sink
+from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import ObjectStoreSink
 from exporter.stores.base import UNREPORTED_DELETE_REASON, StoreCapabilities
 from exporter.stores.s3_store import S3Store
@@ -103,10 +105,12 @@ def _deleted_keys(store: InMemoryStore) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def test_sink_capabilities_declares_exactly_the_d0_fields_plus_f16s_ceiling() -> None:
+def test_sink_capabilities_declares_exactly_the_d0_fields_plus_two() -> None:
     """Widening the capability set is a parity-matrix change and must be a
     visible act, not a quiet field addition. F16 added max_concurrency: the
-    destination states how many documents it takes in parallel."""
+    destination states how many documents it takes in parallel. L18 added
+    rechunk_requires_ack: a destination that re-embeds what it receives says
+    so, and a re-chunk then needs an operator's --accept-rechunk."""
     assert [f.name for f in dataclasses.fields(SinkCapabilities)] == [
         "can_list",
         "can_read_back",
@@ -115,6 +119,7 @@ def test_sink_capabilities_declares_exactly_the_d0_fields_plus_f16s_ceiling() ->
         "atomic_per_document",
         "supports_agency_scoped_delete",
         "max_concurrency",
+        "rechunk_requires_ack",
     ]
 
 
@@ -474,15 +479,24 @@ def test_a_pseudo_directory_entry_is_not_read_as_a_chunk() -> None:
 # --------------------------------------------------------------------------
 
 
+_KEEP = ("d1",)
+
+
 def test_sweep_stale_refuses_another_agency() -> None:
     with pytest.raises(ValueError, match="bound to agency"):
-        _sink().sweep_stale("someone-else", datetime.now(UTC))
+        _sink().sweep_stale("someone-else", datetime.now(UTC), _KEEP)
 
 
 def test_sweep_stale_refuses_a_naive_timestamp() -> None:
     """A naive cutoff is ambiguous by hours, and a sweep deletes."""
     with pytest.raises(ValueError, match="timezone-aware"):
-        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12))
+        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12), _KEEP)
+
+
+def test_sweep_stale_refuses_an_empty_keep_list() -> None:
+    """Keep nothing is a purge; a lost keep list must never read as one."""
+    with pytest.raises(ValueError, match="empty keep list"):
+        _sink().sweep_stale(AGENCY, datetime.now(UTC), ())
 
 
 class _NoOffset(tzinfo):
@@ -494,18 +508,18 @@ class _NoOffset(tzinfo):
 
 def test_sweep_stale_refuses_a_timestamp_with_no_offset() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
-        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12, tzinfo=_NoOffset()))
+        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12, tzinfo=_NoOffset()), _KEEP)
 
 
 def test_sweep_stale_refuses_a_cutoff_in_the_future() -> None:
     """`before` is the run's start; a later one makes every document stale."""
     with pytest.raises(ValueError, match="future"):
-        _sink().sweep_stale(AGENCY, datetime.now(UTC) + timedelta(hours=1))
+        _sink().sweep_stale(AGENCY, datetime.now(UTC) + timedelta(hours=1), _KEEP)
 
 
 def test_a_sink_without_a_sweep_raises_rather_than_no_ops() -> None:
     with pytest.raises(NotSupported):
-        _sink().sweep_stale(AGENCY, datetime.now(UTC))
+        _sink().sweep_stale(AGENCY, datetime.now(UTC), _KEEP)
 
 
 def test_read_back_is_refused_when_not_declared() -> None:
@@ -528,12 +542,45 @@ def test_read_document_reports_what_the_destination_holds() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_factory_names_the_task_that_makes_the_llm_module_sink_selectable() -> None:
-    """The sink exists (L1-L8) but cannot delete until L9, so a request for it
-    is still a clear refusal naming the task that unblocks it."""
-    settings = Settings.model_construct(content_sink="llm_module")
-    with pytest.raises(ConfigurationError, match="task L9"):
-        build_sink(settings, agency_id=AGENCY)
+def _llm_module_settings(*, allow_proposed: bool) -> Settings:
+    return Settings.model_construct(
+        content_sink="llm_module",
+        llm_module_base_url="https://llm-module.invalid",
+        llm_module_ingest_schema_version=1,
+        llm_module_max_request_bytes=8_388_608,
+        llm_module_connect_timeout=5.0,
+        llm_module_read_timeout=120.0,
+        llm_module_vault_secret_path="llm/connections/llm_module/content",
+        llm_module_allow_proposed_contract=allow_proposed,
+        vault_addr="http://vault.invalid:8200",
+        vault_token_path="/nonexistent/agent/token",
+    )
+
+
+def test_the_factory_refuses_the_llm_module_sink_while_the_contract_is_proposed() -> (
+    None
+):
+    """Registered, but not selectable against a guess: the startup validator
+    refuses it first, and the factory says the same thing again."""
+    with pytest.raises(ConfigurationError, match="PROPOSED"):
+        build_sink(
+            _llm_module_settings(allow_proposed=False), agency_id=AGENCY, run_id="r-1"
+        )
+
+
+def test_the_factory_builds_the_llm_module_sink_for_this_run() -> None:
+    sink = build_sink(
+        _llm_module_settings(allow_proposed=True), agency_id=AGENCY, run_id="r-7"
+    )
+
+    assert isinstance(sink, LlmModuleSink)
+    assert sink.sink_id == "llm_module"
+    assert sink.agency_id == AGENCY
+    assert sink._run_id == "r-7"  # noqa: SLF001
+    # The provider reads Vault when called, never at build time: building
+    # touched no token file, and calling it now fails on the missing one.
+    with pytest.raises(CredentialUnavailableError, match="Vault Agent token"):
+        sink._token_provider()  # noqa: SLF001
 
 
 def test_the_factory_builds_the_object_store_sink() -> None:
@@ -551,7 +598,7 @@ def test_the_factory_builds_the_object_store_sink() -> None:
         export_concurrency=4,
     )
 
-    sink = build_sink(settings, agency_id=AGENCY)
+    sink = build_sink(settings, agency_id=AGENCY, run_id="r-1")
 
     assert isinstance(sink, ObjectStoreSink)
     assert sink.sink_id == "object_store"
@@ -573,7 +620,7 @@ def test_the_object_store_sink_refuses_an_unconfigured_store() -> None:
         export_concurrency=4,
     )
     with pytest.raises(ConfigurationError, match="EXTERNAL_S3_ENDPOINT_URL"):
-        build_sink(settings, agency_id=AGENCY)
+        build_sink(settings, agency_id=AGENCY, run_id="r-1")
 
 
 def _imports(relative: str) -> set[str]:

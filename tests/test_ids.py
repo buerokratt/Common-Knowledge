@@ -349,6 +349,7 @@ _DESTINATIONS: dict[str, dict[str, str]] = {
         "external_s3_secret_access_key": "s",
         "llm_module_base_url": "https://llm.example/ingest",
         "llm_module_vault_secret_path": "llm/connections/ingest",
+        "llm_module_allow_proposed_contract": True,
     },
     # An azure_blob manifest store is refused at startup until Stage H, so it
     # is not a shape a deployment can configure yet. Stage H adds it back.

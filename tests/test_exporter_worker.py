@@ -234,7 +234,13 @@ def test_wiring_builds_a_coordinator_from_settings(
     from exporter.services.manifest_store import ManifestStore
 
     sink = RecordingSink(sink_id="object_store")
-    monkeypatch.setattr(wiring, "build_sink", lambda _s, *, agency_id: sink)
+    built_for: list[str] = []
+
+    def build_sink(_s: object, *, agency_id: str, run_id: str) -> RecordingSink:
+        built_for.append(run_id)
+        return sink
+
+    monkeypatch.setattr(wiring, "build_sink", build_sink)
     monkeypatch.setattr(
         wiring,
         "build_manifest_store",
@@ -246,12 +252,14 @@ def test_wiring_builds_a_coordinator_from_settings(
     coordinator = wiring.build_coordinator(
         _settings(work_dir),
         agency_id=AGENCY,
+        run_id="r-1",
         work_dir=work_dir,
         run_state=None,
         source_factory=lambda _s: source,
     )
 
     assert coordinator.agency_id == AGENCY
+    assert built_for == ["r-1"]
     assert coordinator.export("r-1").outcome == "success"
 
 

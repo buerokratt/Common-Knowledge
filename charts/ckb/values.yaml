@@ -623,12 +623,46 @@ contentExternal:
   # drift, and startup already refuses an unknown name. An llm_module
   # deployment MUST set it explicitly — chosen from that embedder's token
   # budget — and startup refuses one that relies on the default. Changing it
-  # re-chunks the whole corpus on the next run (on llm_module, re-embeds it).
+  # re-chunks the whole corpus on the next run (on llm_module, re-embeds it,
+  # and the run is refused until an operator passes --accept-rechunk — L18).
+  #
+  # llm_module is ALSO refused while the ingest contract is PROPOSED
+  # (content-external/docs/llm-module-ingest-contract.md). Its credential is
+  # read from Vault per task (L11) through VAULT_ADDR + VAULT_TOKEN_PATH, a
+  # token Vault Agent keeps fresh. This chart runs no Vault Agent itself —
+  # compose's vault-agent-content is the reference — so a cluster deployment
+  # provides that token file through podAnnotations / extraVolumes /
+  # extraVolumeMounts below. With the Vault Agent Injector, for example:
+  #
+  #   podAnnotations:
+  #     vault.hashicorp.com/agent-inject: "true"
+  #     vault.hashicorp.com/role: "content-external"
+  #     vault.hashicorp.com/agent-inject-token: "true"   # -> /vault/secrets/token
+  #
+  # and for an llm_module deployment, in env:
+  #
+  #   - name: CONTENT_SINK                  value: "llm_module"
+  #   - name: LLM_MODULE_BASE_URL           value: "https://..."
+  #   - name: LLM_MODULE_VAULT_SECRET_PATH  value: "content-external/llm_module"
+  #   - name: VAULT_ADDR                    value: "http://vault:8200"
+  #   - name: VAULT_TOKEN_PATH              value: "/vault/secrets/token"
+  #
+  # The service never caches the credential, so the injector's renewal is
+  # picked up without a restart.
+  #
+  # STALE_SWEEP_ENABLED (L10) is off by default; "true" lets a committed run
+  # that saw the whole corpus ask the destination to drop what the manifest
+  # no longer accounts for. The object-store sink reports not_supported.
   env:
     - name: CONTENT_SINK
       value: "object_store"
     - name: CHUNK_PROFILE
       value: "azure_native"
+  # L11's credential path for an llm_module deployment — see the comment
+  # above. Empty for object_store, which needs no Vault.
+  podAnnotations: {}
+  extraVolumes: []
+  extraVolumeMounts: []
   # The object-store sink's destination (D6/D7): any S3-compatible endpoint,
   # chosen by URL alone. A DIFFERENT bucket and DIFFERENT credentials from
   # CKB's own — never CKB's read-only AWS_* keys. Left blank, the service still

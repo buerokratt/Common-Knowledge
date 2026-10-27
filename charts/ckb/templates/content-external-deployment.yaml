@@ -22,6 +22,12 @@ spec:
     metadata:
       labels:
         app: {{ .Values.contentExternal.nameOverride }}
+      # L11: how a cluster hands the llm-module sink its Vault token — e.g.
+      # the Vault Agent Injector's annotations. See values.yaml.
+      {{- with .Values.contentExternal.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
     spec:
       containers:
         - name: {{ .Values.contentExternal.nameOverride }}
@@ -121,8 +127,14 @@ spec:
           volumeMounts:
             - name: content-external-work
               mountPath: {{ include "ckb.contentExternal.workDir" . }}
+            {{- with .Values.contentExternal.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
       volumes:
         - name: content-external-work
           persistentVolumeClaim:
             claimName: "{{ .Values.contentExternal.nameOverride }}-work-pvc"
+        {{- with .Values.contentExternal.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
 {{- end }}
