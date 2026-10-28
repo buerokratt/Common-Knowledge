@@ -20,6 +20,7 @@ from exporter_fakes import (
 )
 from pydantic import SecretStr
 
+from exporter.api import config as config_module
 from exporter.api.config import ConfigurationError, Settings
 from exporter.core.ids import make_chunk_id
 from exporter.core.schemas import Chunk, DocumentRecord, TextSpan
@@ -34,7 +35,9 @@ from exporter.sinks.base import (
     UpsertOutcome,
     UpsertStatus,
 )
+from exporter.sinks import factory as sinks_factory_module
 from exporter.sinks.factory import build_sink
+from exporter.sinks.llm_module_contract import PROPOSED_TERMS
 from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import ObjectStoreSink
 from exporter.stores.base import UNREPORTED_DELETE_REASON, StoreCapabilities
@@ -547,8 +550,10 @@ def _llm_module_settings(
     allow_proposed: bool,
     collection: str = "ckb_chunks_v1",
     protected: str = "",
+    merge: bool = False,
 ) -> Settings:
     return Settings.model_construct(
+        llm_module_enable_metadata_merge=merge,
         content_sink="llm_module",
         llm_module_base_url="https://llm-module.invalid",
         llm_module_collection=collection,
@@ -564,11 +569,14 @@ def _llm_module_settings(
     )
 
 
-def test_the_factory_refuses_the_llm_module_sink_while_the_contract_is_proposed() -> (
-    None
-):
+def test_the_factory_refuses_the_llm_module_sink_while_the_contract_is_proposed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Registered, but not selectable against a guess: the startup validator
-    refuses it first, and the factory says the same thing again."""
+    refuses it first, and the factory says the same thing again. Run against
+    PROPOSED_TERMS, so the refusal stays proven now that the contract is
+    agreed — and still fires if the agreement is withdrawn."""
+    monkeypatch.setattr(config_module, "AGREED_TERMS", PROPOSED_TERMS)
     with pytest.raises(ConfigurationError, match="PROPOSED"):
         build_sink(
             _llm_module_settings(allow_proposed=False), agency_id=AGENCY, run_id="r-1"
@@ -576,8 +584,9 @@ def test_the_factory_refuses_the_llm_module_sink_while_the_contract_is_proposed(
 
 
 def test_the_factory_builds_the_llm_module_sink_for_this_run() -> None:
+    # No development flag: the contract is agreed (AGREED_TERMS).
     sink = build_sink(
-        _llm_module_settings(allow_proposed=True), agency_id=AGENCY, run_id="r-7"
+        _llm_module_settings(allow_proposed=False), agency_id=AGENCY, run_id="r-7"
     )
 
     assert isinstance(sink, LlmModuleSink)
@@ -590,6 +599,34 @@ def test_the_factory_builds_the_llm_module_sink_for_this_run() -> None:
     # touched no token file, and calling it now fails on the missing one.
     with pytest.raises(CredentialUnavailableError, match="Vault Agent token"):
         sink._token_provider()  # noqa: SLF001
+
+
+def test_the_factory_leaves_the_metadata_merge_off_unless_the_deployment_opts_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L25: a far side that answered a merge without applying it would leave
+    stale metadata the manifest vouches for, so the agreed term alone does
+    not switch it on; LLM_MODULE_ENABLE_METADATA_MERGE does, and only on top
+    of the agreed term."""
+    assert sinks_factory_module.AGREED_TERMS.supports_metadata_only_merge
+
+    def merges(*, merge: bool) -> bool:
+        settings = _llm_module_settings(allow_proposed=False, merge=merge)
+        sink = build_sink(settings, agency_id=AGENCY, run_id="r-1")
+        return sink.capabilities.supports_metadata_only_merge
+
+    assert merges(merge=False) is False
+    assert merges(merge=True) is True
+
+    # The flag cannot switch on what the contract does not promise.
+    monkeypatch.setattr(
+        sinks_factory_module,
+        "AGREED_TERMS",
+        dataclasses.replace(
+            sinks_factory_module.AGREED_TERMS, supports_metadata_only_merge=False
+        ),
+    )
+    assert merges(merge=True) is False
 
 
 @pytest.mark.parametrize(
