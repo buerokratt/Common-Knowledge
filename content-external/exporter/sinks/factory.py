@@ -21,6 +21,10 @@ for one collection must never be diffed against another. The manifest
 records it (F17), and a mismatch fails the run rather than reading as a first
 run.
 
+The metadata merge is AGREED_TERMS's AND LLM_MODULE_ENABLE_METADATA_MERGE
+(L25): off by default, so a metadata change re-pushes the whole document
+until the deployment confirms the far side applies a merge.
+
 The collection is re-checked here against LLM_MODULE_PROTECTED_COLLECTIONS
 as well as the legacy names, and refused as a ConfigurationError like every
 other refusal here — so a Settings built without validation cannot write to
@@ -29,6 +33,7 @@ the alias either.
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 
 from exporter.api.config import (
     ConfigurationError,
@@ -72,6 +77,13 @@ def _build_llm_module(settings: Settings, agency_id: str, run_id: str) -> Conten
             "CONTENT_SINK=llm_module against the PROPOSED ingest contract "
             "(LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true): development only"
         )
+    # L25: the merge is the one agreed term a deployment must also opt into,
+    # because the far side answering a merge without applying it is silent.
+    terms = replace(
+        AGREED_TERMS,
+        supports_metadata_only_merge=AGREED_TERMS.supports_metadata_only_merge
+        and settings.llm_module_enable_metadata_merge,
+    )
     return LlmModuleSink(
         base_url=settings.llm_module_base_url,
         collection=settings.llm_module_collection,
@@ -83,6 +95,7 @@ def _build_llm_module(settings: Settings, agency_id: str, run_id: str) -> Conten
         max_request_bytes=settings.llm_module_max_request_bytes,
         connect_timeout=settings.llm_module_connect_timeout,
         read_timeout=settings.llm_module_read_timeout,
+        terms=terms,
     )
 
 

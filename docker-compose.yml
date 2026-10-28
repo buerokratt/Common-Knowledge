@@ -533,6 +533,12 @@ services:
       # - CONTENT_SINK=llm_module
       # - CHUNK_PROFILE=                  # REQUIRED here, no default: choose
       #                                   # from their embedder's token budget
+      # - LLM_MODULE_CHUNK_PROFILE_CONFIRMED= # the same preset name again, once
+      #                                   # checked against §13 q1; startup
+      #                                   # refuses llm_module until they match
+      # - LLM_MODULE_ENABLE_METADATA_MERGE=true # L25, off by default: only once
+      #                                   # the far side is confirmed to apply a
+      #                                   # merge all-or-nothing
       # - MANIFEST_STORE_BACKEND=s3
       # - MANIFEST_STORE_ENDPOINT_URL=
       # - MANIFEST_STORE_BUCKET=
@@ -550,9 +556,9 @@ services:
       #                                   # fetched per task, never cached;
       #                                   # needs the llm-module profile up
       # - VAULT_TOKEN_PATH=/agent/out/token
-      # The ingest contract is PROPOSED until the llm-module owner signs it
-      # off, and CONTENT_SINK=llm_module is refused until then. Against the
-      # stub (tests/llm_module_stub.py) only:
+      # The ingest contract is AGREED (recorded 2026-10-28, sign-off pending),
+      # so CONTENT_SINK=llm_module needs no development flag. Only if that
+      # agreement is withdrawn does it need, against the stub only:
       # - LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true
       #
       # The stale sweep (L10): off by default. When on, a committed run that

@@ -505,8 +505,10 @@ documents and leaves the rest pending, so it does **not** unlock the cron.
 2. **Check the profile** against their embedder's token budget (Open item 1).
    Retrieval quality is measured, not assumed: the cutover comparison (L20)
    is the template.
-3. Deploy the configuration change. Expect `rechunk=refused` on the next
-   tick — that is the guard working, not an incident.
+3. Deploy the configuration change, with `LLM_MODULE_CHUNK_PROFILE_CONFIRMED`
+   set to the new `CHUNK_PROFILE` (without it, startup refuses). Expect
+   `rechunk=refused` on the next tick — that is the guard working, not an
+   incident.
 4. **A slice first:**
    `python -m exporter.run_sync --agency-id … --limit 25 --accept-rechunk`.
    Check the report (`rechunk: accepted`, `publish_failed_count: 0`) and spot
@@ -542,12 +544,19 @@ a live document can carry a `synced_at` from weeks ago. Without the keep list
 | Value | Meaning | Action |
 |---|---|---|
 | `disabled` | `STALE_SWEEP_ENABLED` is off | none |
+| `not_run` | It is on, but the run ended `unchanged`, `failed` or `busy`, so it never reached the sweep step, which only follows a commit | none, unless `failed` repeats |
 | `refused` | The run cannot vouch for the whole corpus: `--limit`, an abort, a document held back, or an empty manifest | none — the next clean full run sweeps |
-| `not_supported` | The sink has no such sweep. Always so on the object-store sink, and on the llm-module sink until it agrees one (Open item 7) | none |
+| `not_supported` | The sink has no such sweep. Always so on the object-store sink, whose sweep is J5's tail rule. The llm-module sink has one under the agreed contract (§13 q12), so this appears there only if that agreement is withdrawn | none |
 | `failed` | The sweep call failed. **The run's commit stands** | look at the warning line; if it says the far side deleted a kept document, the manifest now claims content the destination lacks — escalate to the llm-module owner |
 | `done` | `stale_swept_count` documents were removed | none |
 
 `unchanged` runs never sweep: they classified nothing.
+
+The last run's value is also on `GET /health`, as `last_run.stale_sweep` and
+`last_run.stale_swept_count`, next to `last_run.rechunk` (L18:
+`refused` there means every tick is refusing until the re-chunk is run by
+hand, as described above). A `busy` tick or a failure before the run started
+keeps a `refused` value. Only a run that completes clears it.
 
 ## llm-module cutover (L19–L25)
 
@@ -600,6 +609,14 @@ disable, re-schedule or remove `trigger_zipping`. Without it,
 `agency.data_hash` freezes and the Classifier goes stale with no error.
 `tests/test_classifier_safety.py` fails if the job is removed. Re-run
 Verification 14–17 after the swap.
+
+**Metadata merges are off until you switch them on (L25).** Leave
+`LLM_MODULE_ENABLE_METADATA_MERGE` unset until the llm-module owner confirms
+that merges are implemented all-or-nothing. Before you set it, check on
+staging that a metadata-only edit, such as a page title, reaches the
+collection. A far side that acknowledged a merge without applying it would
+leave stale metadata that the exporter never retries. While the flag is off,
+every `metadata_changed` document is re-pushed in full.
 
 ## Index
 

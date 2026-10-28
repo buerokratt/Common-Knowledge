@@ -1,9 +1,11 @@
 """The llm-module ingest contract (L2), as code.
 
-PROPOSED, NOT AGREED. content-external/docs/llm-module-ingest-contract.md is
-the human-readable side of this module and the thing taken to the llm-module
-owner; tests/test_llm_module_sink.py validates every JSON example in it
-against the models here, so the two cannot drift apart silently.
+AGREED, ON A RECORDED ASSUMPTION (2026-10-28): the llm-module owner accepts
+the contract as proposed. Written sign-off is still owed; see AGREED_TERMS.
+content-external/docs/llm-module-ingest-contract.md is the human-readable
+side of this module; tests/test_llm_module_sink.py validates every JSON
+example in it against the models here, so the two cannot drift apart
+silently.
 
 PYDANTIC HERE, NOT IN core/schemas.py. The core passes plain frozen
 dataclasses because nothing left to validate reaches it. This is the other
@@ -14,10 +16,12 @@ models ignore extras, so the llm-module can add fields without breaking us.
 
 AGREED_TERMS IS WHAT THE FAR SIDE HAS PROMISED. Every capability the sink
 declares that depends on the llm-module's behaviour, rather than on this
-code, is read from it. Each field starts at the value that is safe when
-nothing is agreed, and changes only when the contract document records the
-answer — never to make a deployment work. A capability lie is worse than a
-missing capability (D0).
+code, is read from it. A field changes only when the contract document
+records the answer — never to make a deployment work. A capability lie is
+worse than a missing capability (D0). PROPOSED_TERMS keeps the values that
+are safe when nothing is agreed: the tests use it to prove every refusal
+still works, and it is what AGREED_TERMS goes back to if the assumption
+behind it turns out wrong.
 """
 
 import re
@@ -31,6 +35,7 @@ __all__ = [
     "AGREED_TERMS",
     "COLLECTION_PATTERN",
     "LEGACY_COLLECTIONS",
+    "PROPOSED_TERMS",
     "RECORD_REF",
     "SUPPORTED_INGEST_SCHEMA_VERSIONS",
     "AgencyDeleteRequest",
@@ -168,7 +173,8 @@ class ContractTerms:
     # It embeds every chunk it receives, so the ceiling is its owner's to state.
     max_concurrency: int
     # "agreed" only once the contract document records the owner's sign-off
-    # (Open items 1, 5 and 7; §13 q1, q2, q4). Until then CONTENT_SINK=
+    # (Open items 5 and 7; §13 q2, q4 — q1 is enforced at startup instead, by
+    # LLM_MODULE_CHUNK_PROFILE_CONFIRMED). Until then CONTENT_SINK=
     # llm_module is refused at startup unless a development flag allows it.
     status: ContractStatus = "proposed"
     # Open item 7 (§13 q4): every point carries agency_id as a filterable
@@ -203,7 +209,37 @@ class ContractTerms:
                 )
 
 
-AGREED_TERMS = ContractTerms(supports_metadata_only_merge=False, max_concurrency=2)
+# Safe when nothing is agreed: no merge, no agency delete, no sweep, no
+# read-back, and the status that keeps CONTENT_SINK=llm_module refused.
+PROPOSED_TERMS = ContractTerms(supports_metadata_only_merge=False, max_concurrency=2)
+
+# Recorded 2026-10-28 ON AN ASSUMPTION, not a signature: the llm-module owner
+# accepts the contract document as proposed. Each field is the proposal's own
+# answer to its §13 question:
+#   q2, q10, q15  the endpoint, deletes and collection routing — `agreed`
+#   q3            metadata merge without re-embedding, all-or-nothing (L8,
+#                 L25); a deployment still opts in, see sinks/factory.py
+#   q4            point id = chunk_id, agency_id filterable (L4, Open item 7)
+#   q5            2 documents in parallel — the proposal's number, unchanged
+#   q11, q12      agency delete and the keep-list sweep (L9, L10)
+#   q13           read-back, listing ordinals (L17)
+# NOT covered by it, because they are facts only the llm-module can supply:
+# q1 (embedder and token limit — CHUNK_PROFILE stays a deployment value,
+# confirmed at startup by LLM_MODULE_CHUNK_PROFILE_CONFIRMED), q7
+# (enrichment) and q8 (swap owner) — cutover
+# questions, not wire terms. If written sign-off differs on any line,
+# that line changes here and in the contract document together; a field
+# with no confirmed answer goes back to PROPOSED_TERMS's value.
+AGREED_TERMS = ContractTerms(
+    status="agreed",
+    supports_metadata_only_merge=True,
+    max_concurrency=2,
+    agency_id_filterable=True,
+    supports_agency_scoped_delete=True,
+    supports_stale_sweep=True,
+    supports_read_back=True,
+    read_back_lists_ordinals=True,
+)
 
 
 class _Request(BaseModel):

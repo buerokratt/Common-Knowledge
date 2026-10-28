@@ -1,10 +1,13 @@
 # llm-module cutover — L19–L25
 
-> **Status: PLAN, not executed.** It needs the ingest contract agreed
+> **Status: PLAN, not executed.** The ingest contract is agreed
 > ([`llm-module-ingest-contract.md`](llm-module-ingest-contract.md),
-> `AGREED_TERMS.status = "agreed"`) and the llm-module owner's answers to §13
-> questions 7, 8 and 15. The commands below are templates until those answers
-> fill them in. Fill them in **before** step 2 runs, not after.
+> `AGREED_TERMS.status = "agreed"`, recorded 2026-10-28 on an assumption;
+> written sign-off pending), so step 1's code side is done. Still needed from
+> the llm-module owner before step 2: §13 q1 (the embedder's token limit,
+> which sets `CHUNK_PROFILE`), q7 (enrichment, §5) and q8 (the swap owner,
+> §2). The commands below stay templates until those answers fill them in.
+> Fill them in **before** step 2 runs, not after.
 
 The llm-module chunks documents itself today. After the cutover it will not:
 this pipeline becomes the only chunker on the retrieval path, and the
@@ -52,8 +55,16 @@ LLM_MODULE_COLLECTION=ckb_chunks_v1          # the NEW physical collection
 LLM_MODULE_PROTECTED_COLLECTIONS=ckb_retrieval   # the alias, + any live name
 MANIFEST_STORE_PREFIX=content-manifests/ckb_chunks_v1
 CHUNK_PROFILE=<pinned from §13 q1>
+LLM_MODULE_CHUNK_PROFILE_CONFIRMED=<the same preset name>
 DIFF_ON_MISSING_MANIFEST=fail                # from the start; see below
 ```
+
+- `LLM_MODULE_CHUNK_PROFILE_CONFIRMED` repeats `CHUNK_PROFILE` once it has
+  been checked against the embedder's token limit (§13 q1). Startup refuses
+  `llm_module` until the two match. `CHUNK_PROFILE` alone cannot show the
+  check happened, because compose and the chart set it for every
+  deployment.
+- `LLM_MODULE_ENABLE_METADATA_MERGE` stays unset for the bootstrap (§8).
 
 - `LLM_MODULE_COLLECTION` names the **physical** collection, never the
   alias. The swap and the rollback both move the alias, so if the exporter
@@ -74,8 +85,9 @@ DIFF_ON_MISSING_MANIFEST=fail                # from the start; see below
 - `DIFF_ON_MISSING_MANIFEST` defaults to `first_run`. Set it to `fail` in
   the deployment from the start, and override it **only on the slice
   command below**. With `fail` in place, a later lost manifest fails the run
-  loudly instead of republishing the corpus into a destination that cannot
-  be probed (`first_run_probe=unverifiable`).
+  loudly instead of treating it as a first run. The first-run probe is not
+  enough on its own: it reads back only the first 25 rows, so a destination
+  that holds none of those reads as `empty`.
 
 **Commands.** Run them inside the exporter container, by hand, with the cron
 (Stage G) still disabled:
@@ -86,9 +98,9 @@ DIFF_ON_MISSING_MANIFEST=fail                # from the start; see below
 DIFF_ON_MISSING_MANIFEST=first_run \
   python -m exporter.run_sync --agency-id <agency> --limit 25 --output-json slice.json
 
-# Check: outcome success, publish_failed_count 0, first_run_probe
-# "unverifiable" (or "empty" once read-back is agreed — §13 q13), and the
-# manifest now exists under MANIFEST_STORE_PREFIX.
+# Check: outcome success, publish_failed_count 0, first_run_probe "empty"
+# (read-back is agreed, §13 q13; a failed read-back fails the run instead),
+# and the manifest now exists under MANIFEST_STORE_PREFIX.
 
 # The full bootstrap, with the deployment's DIFF_ON_MISSING_MANIFEST=fail:
 # it continues from the slice's manifest, so the documents the slice
@@ -180,6 +192,7 @@ v2's, so v1 could no longer resume. Then:
 LLM_MODULE_COLLECTION=ckb_chunks_v2
 MANIFEST_STORE_PREFIX=content-manifests/ckb_chunks_v2   # fresh — keep v1's manifest
 CHUNK_PROFILE=<new preset>
+LLM_MODULE_CHUNK_PROFILE_CONFIRMED=<new preset>
 ```
 
 Then repeat §2 and §4. The new prefix is required, not a convenience. On the
@@ -190,7 +203,8 @@ it any more, so it falls behind CKB with every hourly tick. Keep it and its
 manifest as the **comparison baseline** until v2 has passed §4. It is **not
 a swap target** as it stands. If the decision is to swap to v1 after all,
 catch it up first: put `LLM_MODULE_COLLECTION`, `MANIFEST_STORE_PREFIX`
-**and `CHUNK_PROFILE`** back to v1's values, and run once. The sink_id and
+**and `CHUNK_PROFILE`** (with its confirmation) back to v1's values, and run
+once. The sink_id and
 the chunker fingerprint then match v1's manifest, so it is an ordinary
 incremental run that sends only what changed while v1 was frozen. If the
 profile were left at v2's, the run would be refused as an unacknowledged
@@ -296,16 +310,27 @@ Settled in the contract,
 all-or-nothing per document, and its answer is the single `record` item. A
 merge that is not acknowledged keeps the document's old manifest entry, so
 the next run sends the whole merge again. A merge answered point by point is
-refused. Until §13 q3 confirms both halves, the exporter never sends a
-merge: every metadata change is a counted full re-push.
+refused.
+
+§13 q3 is agreed, but on an assumption, and one failure stays invisible to
+the exporter: a far side that answers the `record` item `200` without
+applying the merge. The manifest would then vouch for metadata the
+destination does not hold, and nothing would retry it. So **the exporter
+sends no merge unless the deployment sets
+`LLM_MODULE_ENABLE_METADATA_MERGE=true`**. Until then, every metadata change
+is a counted full re-push, which is always correct and costs a re-embed. Set
+the flag only after the llm-module owner confirms the merge is implemented
+all-or-nothing. Before switching it on, check on staging that a metadata-only
+edit shows up in the collection.
 
 ## Gate checklist — before the swap (step 5)
 
 This mirrors the production-readiness checklist,
 [Before the llm-module cutover swap](../../content-external-pipeline-production-readiness.md).
 
-- [ ] Contract agreed: `AGREED_TERMS.status = "agreed"`, §13 q1, 2, 4, 10 and 15 answered
-- [ ] L25: §13 q3 answered (merge atomicity), or merges stay off
+- [x] Contract agreed: `AGREED_TERMS.status = "agreed"`, §13 q2, 4, 10 and 15 answered (recorded 2026-10-28 on an assumption; **written sign-off pending**)
+- [ ] §13 q1 answered, `CHUNK_PROFILE` pinned from it and confirmed in `LLM_MODULE_CHUNK_PROFILE_CONFIRMED`; q7 and q8 recorded (§5, §2)
+- [x] L25: merges are off by default (`LLM_MODULE_ENABLE_METADATA_MERGE` unset). Turn them on only after the far side's implementation is confirmed and checked on staging (§8)
 - [ ] §2 bootstrap complete; live collection unchanged; `/health` `sink_id` names the new collection
 - [ ] The alias is in `LLM_MODULE_PROTECTED_COLLECTIONS`, and `DIFF_ON_MISSING_MANIFEST=fail` is set on the deployment
 - [ ] Swap and rollback written down (§2) and **both exercised on staging** (Verification 28)

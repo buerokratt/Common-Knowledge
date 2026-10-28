@@ -203,7 +203,12 @@ from exporter.services.document_source import DocumentSource
 from exporter.services.locking import run_lock
 from exporter.services.manifest_service import ManifestService
 from exporter.services.run_log import log_run_outcome
-from exporter.services.run_state import RunOutcome, RunStateStore, utc_now_iso
+from exporter.services.run_state import (
+    RECHUNK_REFUSED,
+    RunOutcome,
+    RunStateStore,
+    utc_now_iso,
+)
 from exporter.sinks.base import (
     ContentSink,
     NotSupported,
@@ -593,6 +598,12 @@ class PublishCoordinator:
         report = replace(
             report, duration_seconds=time.perf_counter() - started, **asked
         )
+        if self._stale_sweep_enabled and report.stale_sweep == "disabled":
+            # Only a committed run reaches the sweep step, and that step
+            # always names what it did. Anything still at the default is an
+            # `unchanged`, `failed` or `busy` run with the sweep switched ON,
+            # and "disabled" would tell the operator it is off.
+            report = replace(report, stale_sweep="not_run")
         if report.outcome in ("failed", "busy"):
             # Neither updates the record, but it still stands: report its
             # size, so an alert on `dead_lettered=` does not see it drop to 0
@@ -839,7 +850,7 @@ class PublishCoordinator:
             )
             progress.rechunk = "accepted"
             return
-        progress.rechunk = "refused"
+        progress.rechunk = RECHUNK_REFUSED
         raise RechunkNotAcknowledged(
             f"agency {self.agency_id}: the chunker fingerprint changed, and "
             f"sink {self._sink.sink_id!r} re-embeds every chunk it receives, so "
@@ -1566,6 +1577,9 @@ class PublishCoordinator:
                 duration_seconds=report.duration_seconds,
                 error_type=report.error_type,
                 run_observed_full_corpus=report.run_observed_full_corpus,
+                stale_sweep=report.stale_sweep,
+                stale_swept_count=report.stale_swept_count,
+                rechunk=report.rechunk,
             )
 
 

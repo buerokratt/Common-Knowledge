@@ -1,14 +1,24 @@
 # llm-module ingest contract — `ingest_schema_version` 1
 
-> **Status: PROPOSED.** Nothing here has been agreed with the llm-module owner
-> yet (Open items 1, 5 and 7 in the task breakdown, which are questions 1, 2
-> and 4 in [§13](#13-open-questions-for-the-llm-module-owner)). This document is the
-> proposal to take to that conversation. Until it is signed off, the exporter's
-> `LlmModuleSink` is built and tested against it (against a stub of this
-> contract, `tests/llm_module_stub.py`) but **cannot be selected**:
-> `CONTENT_SINK=llm_module` is refused at startup while `AGREED_TERMS.status`
-> is `proposed`. `LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true` overrides that, for
-> development against the stub only.
+> **Status: AGREED — recorded 2026-10-28 on an assumption, written sign-off
+> pending.** The llm-module owner is taken to accept this document as
+> proposed. Each wire question in [§13](#13-questions-for-the-llm-module-owner-and-their-recorded-answers)
+> therefore has a recorded answer, and the exporter runs under them:
+> `AGREED_TERMS.status` is `agreed`, so `CONTENT_SINK=llm_module` starts
+> without the development flag, and metadata merges, the agency delete, the
+> keep-list sweep and read-back are all on.
+>
+> **What the assumption does not cover.** Three questions ask for facts only
+> the llm-module can supply, so they stay open: q1 (embedding model and token
+> limit, which sets `CHUNK_PROFILE`), q7 (an enrichment step) and q8 (who owns
+> the swap). None of them is a wire term. They gate the deployment's
+> configuration and the cutover, not this contract.
+>
+> **If written sign-off differs on any answer**, change that answer here and
+> the matching field of `AGREED_TERMS` together. A field with no confirmed
+> answer goes back to its `PROPOSED_TERMS` value. `PROPOSED_TERMS` is what the
+> exporter ran under before the agreement, and the tests still prove every
+> refusal against it.
 >
 > The code side of this contract is
 > [`exporter/sinks/llm_module_contract.py`](../exporter/sinks/llm_module_contract.py).
@@ -53,7 +63,7 @@ Every path in this contract starts `/ingest/v1/collections/{collection}/`.
   outright instead of reading "already gone".
 - 1–64 characters of `A-Z a-z 0-9 _ -`.
 - Either the llm-module creates it on first write, or its owner creates it
-  before the bootstrap ([§13](#13-open-questions-for-the-llm-module-owner)
+  before the bootstrap ([§13](#13-questions-for-the-llm-module-owner-and-their-recorded-answers)
   question 15).
 
 The exporter records the collection in its manifest. Pointing it at another
@@ -170,7 +180,7 @@ different here:
 | `409`, `422`, `503` | **retryable** — the exporter resends only the failed chunks, up to two more rounds |
 | anything else | **permanent** for that document — reported as failed, retried on the next hourly run |
 
-Note what follows from this table, and see [§13](#13-open-questions-for-the-llm-module-owner)
+Note what follows from this table, and see [§13](#13-questions-for-the-llm-module-owner-and-their-recorded-answers)
 question 9:
 
 - `422` on an item is retryable. If a chunk is *always* invalid, the document is
@@ -219,7 +229,7 @@ collection names suggest a context prefix or summary), the **point id must
 still be our `chunk_id` after enrichment**. Enrichment changes the text, so
 a point id derived from enriched text would bring back exactly the
 re-keying this section forbids. Whether enrichment stays is settled before
-the cutover (task L22, [§13](#13-open-questions-for-the-llm-module-owner)
+the cutover (task L22, [§13](#13-questions-for-the-llm-module-owner-and-their-recorded-answers)
 question 7).
 
 ## 5. Large documents: split into parts
@@ -350,10 +360,15 @@ would stay half-applied for good. The next run finds the hashes matching and
 sends nothing, so the document's passages disagree about its own title,
 indefinitely.
 
-**Not yet enabled.** The exporter will only send this once the llm-module
-confirms it supports it ([§13](#13-open-questions-for-the-llm-module-owner),
-question 3). Until then a metadata change is sent as a full re-push of the
-document, and the exporter's run report counts each one.
+**Agreed** ([§13](#13-questions-for-the-llm-module-owner-and-their-recorded-answers)
+question 3, both halves), **but off until each deployment opts in** with
+`LLM_MODULE_ENABLE_METADATA_MERGE=true`. One failure here is invisible from
+this side: a far side that answers `record` with `200` without applying the
+merge. The manifest would then vouch for metadata the collection does not
+hold, and nothing would retry it. So the flag is set only once the merge is
+confirmed implemented and checked on staging. Until then, and if the
+agreement on q3 is withdrawn, the exporter sends a full re-push of the
+document instead and counts each one in its run report.
 
 ## 9. Deletes
 
@@ -457,8 +472,8 @@ POST {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/agencies/{agency_i
 
 Every point and record whose `agency_id` matches. An empty list means there
 was nothing to delete. **This needs `agency_id` stored as a filterable field
-on every point (§4, §13 question 4).** Until that is confirmed the exporter never
-sends it.
+on every point (§4, §13 question 4).** Agreed (questions 4 and 11), so the
+exporter sends it for a purge.
 
 ## 10. The stale sweep
 
@@ -504,8 +519,10 @@ in `keep_document_ids`. Answer with `deleted-documents-response` (§9.3).
   sweep loudly if it happens, but it can only notice: by then the content is
   gone, and its manifest claims documents the destination no longer holds.
 
-Like the agency delete, **this needs a filterable `agency_id`**, and the
-exporter does not send it until that is agreed.
+Like the agency delete, **this needs a filterable `agency_id`**. Agreed
+(questions 4 and 12). The exporter sends it only when its deployment sets
+`STALE_SWEEP_ENABLED=true`, which is off by default, and only after a run
+that saw the whole corpus.
 
 ## 11. Read-back
 
@@ -524,11 +541,17 @@ GET {LLM_MODULE_BASE_URL}/ingest/v1/collections/{collection}/documents/{document
 }
 ```
 
-`404` when nothing is held for the document. `chunk_ordinals` is optional;
+`404` when nothing is held for the document, **with the same body saying
+so**: this `document_id`, `"record_present": false`, `"chunk_count": 0`. A
+bare `404` is also what a missing collection (§1) or a wrong route answers,
+so the exporter reads a `404` as "nothing held" only when its body says that,
+and treats any other `404` as a failed read-back. `chunk_ordinals` is optional;
 `chunk_count` alone is enough to be useful. This is what lets the exporter
 check, before a first run, that the destination is really empty, and lets a
-reconcile report "clean" rather than "unverifiable". It is optional: without
-it the exporter degrades to trusting its own manifest, and says so.
+reconcile report "clean" rather than "unverifiable". Agreed, with
+`chunk_ordinals` (question 13). The exporter uses it for the first-run check.
+If it were withdrawn, the exporter would go back to trusting its own
+manifest, and say so.
 
 ## 12. The cutover, and what it does not touch
 
@@ -563,35 +586,49 @@ the cutover changes `trigger_zipping`, `pipeline/zip.yml`, the
 `zip_dirty` / `is_zipping` pair, `data_hash`, `zipped_data_url` or
 `client/data/*`.
 
-## 13. Open questions for the llm-module owner
+## 13. Questions for the llm-module owner, and their recorded answers
 
 Each answer maps to one field in `AGREED_TERMS`
 (`exporter/sinks/llm_module_contract.py`) or to a setting. A field changes only
 when its question is answered.
+
+The answers below were **recorded 2026-10-28 on the assumption that the
+owner accepts this document as proposed**, so each wire question's answer is
+the proposal's own. Written sign-off is still owed. If it differs on any row,
+change that row and its field together. The three rows marked **open** ask
+for facts, not consent, so no assumption can answer them.
 
 **Two numberings.** The exporter's code, its startup messages and the task
 breakdown cite the breakdown's *Open items*. The last column gives that number
 for each question here, so a message that says "Open item 7" lands on
 question 4.
 
-| # | Question | What it decides | Current assumption | Open item |
+| # | Question | What it decides | Recorded answer | Open item |
 |---|---|---|---|---|
-| 1 | Which embedding model embeds our chunks, and what is its token limit? | `CHUNK_PROFILE` — a 1200-character Estonian chunk against a tight token budget is silently truncated | None — an `llm_module` deployment must set `CHUNK_PROFILE` explicitly | 1 |
-| 2 | Will you implement this endpoint, request and response (§1–§3)? | Everything | This proposal | 5 |
-| 3 | Can you merge metadata without content and without re-embedding (§8), **all-or-nothing per document**, answered with the single `record` item? | `supports_metadata_only_merge` — `True` only if both halves are yes | `False` — full re-push | 8 |
-| 4 | Will points be keyed on our `chunk_id`, with `agency_id` filterable (§4)? | Whether edits and deletes work at all; `agency_id_filterable`, which questions 11 and 12 need | Required | 7 |
-| 5 | What concurrency and request rate will you accept? | `max_concurrency` | `2` parallel documents | 9 |
-| 6 | What request-size ceiling will you accept? | `LLM_MODULE_MAX_REQUEST_BYTES` | 8 MiB | 9 |
-| 7 | Is there an enrichment step between chunk and embed, and will it stay? | Retrieval quality after the cutover | Unknown | 11 |
-| 8 | Who owns the collection swap and its rollback at cutover, and does retrieval read through an alias that can be switched atomically? | The cutover plan's swap and rollback commands (§12) | Unknown — an atomic Qdrant alias switch is proposed | 6 |
-| 9 | Which item statuses can clear on a resend (§3)? Is a `422` item ever transient, or always a bad chunk? | `_RETRYABLE_ITEM_STATUSES` — a deterministic failure classed retryable is re-embedded every hour and never reported as permanent | `409`, `422`, `503` retryable; everything else permanent | 5 |
-| 10 | Will you implement document and tail deletes (§9.1, §9.2), points before the record, with `404` for "already gone" **per item**, never for the whole request? | Whether deletions reach you at all | Required | 5 |
-| 11 | Will you implement the agency delete (§9.3)? | `supports_agency_scoped_delete` — and with it a purge | `False` | 7 |
-| 12 | Will you implement the keep-list sweep (§10), enforcing the keep list inside the delete itself? | `supports_stale_sweep` | `False` — no sweep runs | 7 |
-| 13 | Can you expose the read-back probe (§11), and does it list ordinals? | `supports_read_back`, `read_back_lists_ordinals` — reconcile "clean" vs "unverifiable", and the first-run check | `False` | 10 |
-| 14 | How many ids may one delete request name? | `DELETE_BATCH_IDS` | 500 | 5 |
-| 15 | Will you route every request by the `{collection}` path segment (§1), and is a new collection created on first write or by you beforehand? | `LLM_MODULE_COLLECTION`; whether the bootstrap needs a create step | Required; created on first write | 6 |
+| 1 | Which embedding model embeds our chunks, and what is its token limit? | `CHUNK_PROFILE` — a 1200-character Estonian chunk against a tight token budget is silently truncated | **Open.** Startup refuses an `llm_module` deployment unless `LLM_MODULE_CHUNK_PROFILE_CONFIRMED` repeats its `CHUNK_PROFILE`, so no run uses a guessed geometry. The cutover comparison (task L20) measures the choice | 1 |
+| 2 | Will you implement this endpoint, request and response (§1–§3)? | Everything | Yes, as written | 5 |
+| 3 | Can you merge metadata without content and without re-embedding (§8), **all-or-nothing per document**, answered with the single `record` item? | `supports_metadata_only_merge` — `True` only if both halves are yes | Yes, both halves → `True`. A deployment still sends merges only with `LLM_MODULE_ENABLE_METADATA_MERGE=true`, set once the implementation is confirmed (a `record` acknowledged but not applied is invisible to the exporter) | 8 |
+| 4 | Will points be keyed on our `chunk_id`, with `agency_id` filterable (§4)? | Whether edits and deletes work at all; `agency_id_filterable`, which questions 11 and 12 need | Yes → `agency_id_filterable = True` | 7 |
+| 5 | What concurrency and request rate will you accept? | `max_concurrency` | `2` parallel documents (the proposal's number) | 9 |
+| 6 | What request-size ceiling will you accept? | `LLM_MODULE_MAX_REQUEST_BYTES` | 8 MiB (the proposal's number) | 9 |
+| 7 | Is there an enrichment step between chunk and embed, and will it stay? | Retrieval quality after the cutover | **Open** — recorded in the cutover plan §5, before the comparison | 11 |
+| 8 | Who owns the collection swap and its rollback at cutover, and does retrieval read through an alias that can be switched atomically? | The cutover plan's swap and rollback commands (§12) | Alias switch: yes, as proposed. **Owner: open** — named in the cutover plan §2 | 6 |
+| 9 | Which item statuses can clear on a resend (§3)? Is a `422` item ever transient, or always a bad chunk? | `_RETRYABLE_ITEM_STATUSES` — a deterministic failure classed retryable is re-embedded every hour and never reported as permanent | As proposed: `409`, `422`, `503` retryable; everything else permanent | 5 |
+| 10 | Will you implement document and tail deletes (§9.1, §9.2), points before the record, with `404` for "already gone" **per item**, never for the whole request? | Whether deletions reach you at all | Yes, as written | 5 |
+| 11 | Will you implement the agency delete (§9.3)? | `supports_agency_scoped_delete` — and with it a purge | Yes → `True` | 7 |
+| 12 | Will you implement the keep-list sweep (§10), enforcing the keep list inside the delete itself? | `supports_stale_sweep` | Yes → `True` (still off per deployment unless `STALE_SWEEP_ENABLED`) | 7 |
+| 13 | Can you expose the read-back probe (§11), and does it list ordinals? | `supports_read_back`, `read_back_lists_ordinals` — reconcile "clean" vs "unverifiable", and the first-run check | Yes, with ordinals → both `True` | 10 |
+| 14 | How many ids may one delete request name? | `DELETE_BATCH_IDS` | 500 (the proposal's number) | 5 |
+| 15 | Will you route every request by the `{collection}` path segment (§1), and is a new collection created on first write or by you beforehand? | `LLM_MODULE_COLLECTION`; whether the bootstrap needs a create step | Yes; created on first write | 6 |
 
-`AGREED_TERMS.status` becomes `agreed` — and `CONTENT_SINK=llm_module` becomes
-selectable without the development flag — once questions 1, 2, 4, 10 and 15
-have recorded answers.
+`AGREED_TERMS.status` is `agreed`, so `CONTENT_SINK=llm_module` is selectable
+without the development flag. The original rule was "once questions 1, 2,
+4, 10 and 15 have recorded answers". It is amended to drop question 1,
+deliberately: q1 gated the status only so that no deployment would run
+against a guessed chunk geometry, and a startup check now ensures that. An
+explicit `CHUNK_PROFILE` is not enough on its own, because compose and the
+chart set it for every deployment. So startup also requires
+`LLM_MODULE_CHUNK_PROFILE_CONFIRMED` to name the same preset, a value no
+deployment surface sets by default. q1 remains a prerequisite for
+**deploying** the sink, because someone has to choose that value, but not
+for the contract being agreed.

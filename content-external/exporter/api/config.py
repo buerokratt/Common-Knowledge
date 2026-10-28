@@ -136,12 +136,12 @@ def llm_module_contract_refusal(*, allow_proposed: bool) -> str | None:
     return (
         "CONTENT_SINK=llm_module is refused: the llm-module ingest contract "
         "(content-external/docs/llm-module-ingest-contract.md) is still "
-        "PROPOSED. Open items 1, 5 and 7 (the contract's §13 questions 1, 2 "
-        "and 4) — the embedder's token budget, the endpoint itself, and "
-        "chunk_id keying with a filterable agency_id — are the llm-module "
-        "owner's to answer, and two of the wrong guesses "
-        "fail silently. LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true is for "
-        "development against the stub only."
+        "PROPOSED. Open items 5 and 7 (the contract's §13 questions 2 and "
+        "4) — the endpoint itself, and chunk_id keying with a filterable "
+        "agency_id — are the llm-module owner's to answer, and a wrong "
+        "guess at the keying fails silently. "
+        "LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true is for development against "
+        "the stub only."
     )
 
 
@@ -375,6 +375,18 @@ class Settings(BaseSettings):
     # is pushing against a guess, two of whose failures are silent (L4, B11).
     # This flag lets a laptop drive the stub (L15) before that.
     llm_module_allow_proposed_contract: bool = False
+    # L25. The contract promises an all-or-nothing metadata merge (§8, §13
+    # q3), but that promise is recorded on an assumption, and a far side that
+    # answered a lone `record` 200 without applying it would leave stale
+    # metadata the manifest then vouches for — never retried. So the merge
+    # stays off until the deployment confirms the far side implements it;
+    # off, a metadata change re-pushes the whole document, which is always
+    # correct and only costs a re-embed.
+    llm_module_enable_metadata_merge: bool = False
+    # B11 / §13 q1. The CHUNK_PROFILE value, typed again once it has been
+    # chosen from the llm-module embedder's token limit. CHUNK_PROFILE alone
+    # cannot show that: compose and the chart set it for every deployment.
+    llm_module_chunk_profile_confirmed: str = ""
 
     # --- the stale sweep (L10) ---------------------------------------------
     # Off by default: it is the first operation that deletes content no
@@ -657,7 +669,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_llm_module_chunk_profile_is_pinned(self) -> "Settings":
-        """B11: `llm_module` refuses the default chunk profile.
+        """B11: `llm_module` refuses a chunk profile nobody chose for it.
 
         On that sink the llm-module embeds our chunks and no longer chunks
         itself, so the profile is the geometry of the corpus the assistant
@@ -666,12 +678,17 @@ class Settings(BaseSettings):
         So the profile is pinned per deployment alongside the sink, never
         inherited from a default chosen for a different destination.
 
-        Last of the after-validators, so the matrix rows above report first.
+        Setting CHUNK_PROFILE is not enough to show that: compose and the
+        chart set it for every deployment, object-store ones included. So the
+        deployment also names the profile in
+        LLM_MODULE_CHUNK_PROFILE_CONFIRMED, which nothing sets by default and
+        which stops matching the moment CHUNK_PROFILE changes without it.
+
+        Last of the matrix rows, so a missing variable above reports first.
         """
-        if (
-            self.content_sink == "llm_module"
-            and "chunk_profile" not in self.model_fields_set
-        ):
+        if self.content_sink != "llm_module":
+            return self
+        if "chunk_profile" not in self.model_fields_set:
             raise ValueError(
                 "CONTENT_SINK=llm_module requires CHUNK_PROFILE to be set "
                 f"explicitly ({', '.join(sorted(CHUNK_PROFILES))}). On this "
@@ -680,6 +697,35 @@ class Settings(BaseSettings):
                 "that budget is silently truncated, with no error and no log "
                 "line. Changing it later re-chunks and re-embeds the whole "
                 "corpus, so choose it deliberately."
+            )
+        if self.llm_module_chunk_profile_confirmed != self.chunk_profile:
+            raise ValueError(
+                "CONTENT_SINK=llm_module requires "
+                f"LLM_MODULE_CHUNK_PROFILE_CONFIRMED={self.chunk_profile}, "
+                "naming the CHUNK_PROFILE in force, got "
+                f"{self.llm_module_chunk_profile_confirmed or '(unset)'!r}. Set "
+                "it once the profile has been checked against the llm-module "
+                "embedder's token limit (the contract's §13 question 1): a "
+                "chunk larger than that limit is silently truncated, with no "
+                "error and no log line. CHUNK_PROFILE on its own does not show "
+                "that, because compose and the chart set it for every "
+                "deployment."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_llm_module_merge_is_promised(self) -> "Settings":
+        """L25: the merge opt-in needs the contract's promise behind it."""
+        if (
+            self.content_sink == "llm_module"
+            and self.llm_module_enable_metadata_merge
+            and not AGREED_TERMS.supports_metadata_only_merge
+        ):
+            raise ValueError(
+                "LLM_MODULE_ENABLE_METADATA_MERGE=true, but the ingest contract "
+                "does not promise an all-or-nothing metadata merge (§8, §13 "
+                "question 3). Leave it unset: a metadata change then re-pushes "
+                "the whole document."
             )
         return self
 

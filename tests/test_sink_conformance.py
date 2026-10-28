@@ -29,9 +29,9 @@ own parser. The live variant needs CONFORMANCE_S3_* — see
 tests/test_store_conformance.py.
 
 The llm-module sink runs against the FastAPI stub (L15, L16), twice: under
-AGREED_TERMS as they stand (no merge, no read-back, no agency delete, no
-sweep) and under every term agreed, so each capability's declared-works and
-undeclared-raises paths both run. It is observed through the fake behind the
+PROPOSED_TERMS (no merge, no read-back, no agency delete, no sweep) and under
+AGREED_TERMS, which promise every one of them, so each capability's
+declared-works and undeclared-raises paths both run. It is observed through the fake behind the
 stub, never through its own read-back. Tests that plant objects in a keyspace
 skip it: it has none.
 """
@@ -63,7 +63,11 @@ from exporter.sinks.base import (
     SinkCapabilities,
     UpsertStatus,
 )
-from exporter.sinks.llm_module_contract import AGREED_TERMS, ContractTerms
+from exporter.sinks.llm_module_contract import (
+    AGREED_TERMS,
+    PROPOSED_TERMS,
+    ContractTerms,
+)
 from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import MAX_CONCURRENCY, ObjectStoreSink
 from exporter.stores.base import StoreCapabilities
@@ -258,6 +262,9 @@ class LlmHarness(Harness):
 
 
 # Every term the far side could agree, so each capability's promise runs.
+# The recorded agreement promises all of them; if it ever stops doing so,
+# this suite must keep running the full set, so it is spelled out here and
+# checked against AGREED_TERMS rather than aliased to it.
 _ALL_TERMS = ContractTerms(
     supports_metadata_only_merge=True,
     max_concurrency=2,
@@ -268,6 +275,12 @@ _ALL_TERMS = ContractTerms(
     supports_read_back=True,
     read_back_lists_ordinals=True,
 )
+
+
+def test_the_agreed_terms_are_the_full_set_this_suite_runs() -> None:
+    """The deployment runs AGREED_TERMS; the suite's 'all terms' harness is
+    what proves those capabilities work. Kept equal on purpose."""
+    assert AGREED_TERMS == _ALL_TERMS
 
 
 def _llm_module_sink(fake: FakeLlmModule, terms: ContractTerms) -> LlmModuleSink:
@@ -325,7 +338,7 @@ def _recording_harness() -> Harness:
         "object_store[in-memory]",
         "recording-fake",
         "llm_module[stub, proposed terms]",
-        "llm_module[stub, all terms]",
+        "llm_module[stub, agreed terms]",
         "object_store[s3-live]",
     ]
 )
@@ -335,8 +348,8 @@ def harness(request: pytest.FixtureRequest) -> Iterator[Harness]:
     elif request.param == "recording-fake":
         yield _recording_harness()
     elif request.param == "llm_module[stub, proposed terms]":
-        yield _llm_harness(AGREED_TERMS)
-    elif request.param == "llm_module[stub, all terms]":
+        yield _llm_harness(PROPOSED_TERMS)
+    elif request.param == "llm_module[stub, agreed terms]":
         yield _llm_harness(_ALL_TERMS)
     else:
         live = live_s3_store_or_skip()
@@ -708,7 +721,7 @@ def _degraded_sinks() -> dict[str, ContentSink]:
                 max_concurrency=1,
             ),
         ),
-        "llm_module[proposed terms]": _llm_module_sink(FakeLlmModule(), AGREED_TERMS),
+        "llm_module[proposed terms]": _llm_module_sink(FakeLlmModule(), PROPOSED_TERMS),
     }
 
 

@@ -18,10 +18,15 @@ surface (README, rules 2-5):
 
 A grep rather than an AST walk, unlike test_exporter_sink_resolution.py: the
 surface is a set of names, not a branching shape, and it has to be checked in
-YAML and the Dockerfile as well as Python. Prose (`*.md`) is excluded — the
-README and the runbook explain these rules by naming them — and so is
-`scripts/`, the measurement SQL, which writes synthetic rows to a disposable
-local database and is never shipped.
+YAML, HCL, Helm templates and the Dockerfile as well as Python. Prose (`*.md`)
+is excluded — the README and the runbook explain these rules by naming them —
+and so is the top-level `scripts/`, the measurement SQL, which writes
+synthetic rows to a disposable local database and is never shipped.
+
+What it cannot see: a name built at runtime (string concatenation, an env
+var holding the path), the chart's values.yaml and compose (shared with the
+zipping services), and what `pipeline/zip.yml` itself does — only that it
+exists. Verification 14–17 after the swap is what covers the job's behaviour.
 """
 
 import re
@@ -57,26 +62,38 @@ FORBIDDEN = re.compile(
     re.IGNORECASE,
 )
 
-SCANNED_SUFFIXES = frozenset({".py", ".yml", ".yaml", ".toml", ".ini", ".sh"})
-SKIPPED_DIRS = frozenset({"scripts", "__pycache__"})
+SCANNED_SUFFIXES = frozenset(
+    {".py", ".yml", ".yaml", ".toml", ".ini", ".sh", ".json", ".hcl", ".tpl", ".sql"}
+)
+
+# The service's own deployment surfaces outside its directory. Not
+# values.yaml or docker-compose.yml as a whole: they configure every CKB
+# service, the zipping ones included, so they name the zip surface on purpose.
+DEPLOYMENT_FILES = (
+    *sorted((REPO_ROOT / "charts" / "ckb" / "templates").glob("content-external*")),
+    REPO_ROOT / "vault" / "agents" / "content" / "agent.hcl",
+)
 
 
 def _shipped_files() -> list[Path]:
-    """What this service ships: code, config and its Dockerfile."""
+    """What this service ships: code, config, its Dockerfile and its own
+    deployment templates. Only the top-level scripts/ is skipped, so a
+    `scripts` package anywhere else is still scanned."""
     found: list[Path] = []
     for path in SERVICE_ROOT.rglob("*"):
         if not path.is_file():
             continue
-        relative = path.relative_to(SERVICE_ROOT)
-        if SKIPPED_DIRS.intersection(relative.parts[:-1]):
+        parts = path.relative_to(SERVICE_ROOT).parts
+        if parts[0] == "scripts" or "__pycache__" in parts:
             continue
         if path.suffix in SCANNED_SUFFIXES or path.name == "Dockerfile":
             found.append(path)
+    found.extend(path for path in DEPLOYMENT_FILES if path.is_file())
     return sorted(found)
 
 
 def _relative(path: Path) -> str:
-    return path.relative_to(SERVICE_ROOT).as_posix()
+    return path.relative_to(REPO_ROOT).as_posix()
 
 
 def _mentions(text: str) -> list[str]:
@@ -138,15 +155,17 @@ def test_the_service_is_present() -> None:
     """Guards the guard: a moved service would make every check below pass by
     scanning nothing at all."""
     files = {_relative(path) for path in _shipped_files()}
-    assert "Dockerfile" in files
-    assert "exporter/api/config.py" in files
+    assert "content-external/Dockerfile" in files
+    assert "content-external/exporter/api/config.py" in files
+    assert "charts/ckb/templates/content-external-deployment.yaml" in files
+    assert "vault/agents/content/agent.hcl" in files
 
 
 @pytest.mark.parametrize("path", _shipped_files(), ids=_relative)
 def test_nothing_shipped_names_the_zip_surface(path: Path) -> None:
     mentions = _mentions(path.read_text(encoding="utf-8"))
     assert not mentions, (
-        f"content-external/{_relative(path)} names the zip surface:\n  "
+        f"{_relative(path)} names the zip surface:\n  "
         + "\n  ".join(mentions)
         + "\n\nRules 2-5 (README) and L24: this service never writes zipped/, "
         "any agency column, or calls update-zip-dirty / update-data-hash, and "

@@ -29,9 +29,8 @@ auto_auth {
   }
 }
 
-# Vault Agent 1.16+ requires at least one of: cache, listener, or api_proxy
-# alongside auto_auth. A minimal cache block satisfies this without adding
-# any proxy behaviour — the agent's only job is to write and renew the token.
-cache {
-  use_auto_auth_token = true
-}
+# Deliberately no cache, listener or api_proxy block: the agent's only job is
+# to write and renew the token. Vault 1.21.3 (the image compose runs) REFUSES
+# a `cache` block with no listener or template — "enabling the cache requires
+# at least 1 template or 1 listener to be defined" — so the agent would exit
+# at startup and no token would ever be written. Checked against that image.

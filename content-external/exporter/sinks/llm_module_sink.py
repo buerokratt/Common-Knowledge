@@ -570,8 +570,8 @@ class LlmModuleSink(ContentSink):
         Every verb goes through here, so all of them get the same bounded
         read, timeouts, no redirects and redacted failure codes. `key` is the
         Idempotency-Key less its body digest; a request with a body always
-        has one. `absent_ok` returns a 404 as (404, b"") instead of failing —
-        read-back's "nothing held".
+        has one. `absent_ok` returns a 404 as (404, body) instead of failing,
+        for read-back to decide whether the body says "nothing held".
         """
         headers = {"Authorization": f"Bearer {token}"}
         if body is not None:
@@ -596,7 +596,7 @@ class LlmModuleSink(ContentSink):
                 stream=True,
             ) as response:
                 if absent_ok and response.status_code == 404:
-                    return 404, b""
+                    return 404, self._read_capped(response)
                 response.raise_for_status()
                 return response.status_code, self._read_capped(response)
 
@@ -1026,6 +1026,22 @@ class LlmModuleSink(ContentSink):
             absent_ok=True,
         )
         if not isinstance(answer, _Failure) and answer[0] == 404:
+            # "Nothing held" only when the body says so for this document
+            # (contract §11). A bare 404 is also what a missing collection or
+            # a wrong route answers, and reading that as empty would pass the
+            # first-run check against a destination nobody looked at.
+            absent = self._answer((200, answer[1]), DocumentProbeResponse)
+            if (
+                isinstance(absent, _Failure)
+                or absent.document_id != document_id
+                or absent.record_present
+                or absent.chunk_count != 0
+            ):
+                raise StoreError(
+                    f"llm-module read-back of {document_id} failed (http-404 "
+                    "without a document-level body: a missing collection or a "
+                    "wrong route, not an empty document)"
+                )
             return None
         probe = self._answer(answer, DocumentProbeResponse)
         if isinstance(probe, _Failure):

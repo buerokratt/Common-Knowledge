@@ -1,0 +1,60 @@
+{{- if and .Values.contentExternal.enabled .Values.contentExternal.vaultAgent.enabled }}
+{{- $method := include "ckb.contentExternal.vaultAgentMethod" . }}
+{{- $va := .Values.contentExternal.vaultAgent }}
+# L11: the Vault Agent sidecar's config — the cluster counterpart of
+# vault/agents/content/agent.hcl in compose. The agent's only job is to keep
+# a valid token at /agent/out/token; content-external reads it on every
+# llm-module operation and never caches it, so a renewed token is picked up
+# without a restart.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.contentExternal.nameOverride }}-vault-agent
+  labels:
+    app: {{ .Values.contentExternal.nameOverride }}
+data:
+  agent.hcl: |-
+    vault {
+      address = {{ $va.vaultAddr | quote }}
+      retry {
+        num_retries = 5
+      }
+    }
+
+    pid_file = "/agent/out/pidfile"
+
+    auto_auth {
+    {{- if eq $method "kubernetes" }}
+      # The pod's service account token; nothing to rotate. The Vault role
+      # must be bound to this chart's service account (values.yaml).
+      method "kubernetes" {
+        mount_path = {{ $va.auth.mountPath | default "auth/kubernetes" | quote }}
+        config = {
+          role = {{ $va.auth.role | quote }}
+        }
+      }
+    {{- else }}
+      method "approle" {
+        mount_path = {{ $va.auth.mountPath | default "auth/approle" | quote }}
+        config = {
+          role_id_file_path                   = "/agent/credentials/role_id"
+          secret_id_file_path                 = "/agent/credentials/secret_id"
+          remove_secret_id_file_after_reading = false
+        }
+      }
+    {{- end }}
+
+      sink "file" {
+        config = {
+          path = "/agent/out/token"
+          mode = 0640
+        }
+      }
+    }
+
+    # Deliberately no cache, listener or api_proxy block: auto_auth plus a
+    # file sink is the agent's whole job here. Checked against Vault 1.21.3,
+    # which REFUSES a `cache` block without a listener or template ("enabling
+    # the cache requires at least 1 template or 1 listener") and an
+    # `api_proxy` without a listener, and accepts this config as it stands.
+{{- end }}

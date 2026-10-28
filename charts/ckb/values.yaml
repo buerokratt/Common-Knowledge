@@ -631,35 +631,57 @@ contentExternal:
   # content-external/exporter/core/constants.py CHUNK_PROFILES. There is
   # deliberately no _helpers.tpl check: a copy of the preset list here would
   # drift, and startup already refuses an unknown name. An llm_module
-  # deployment MUST set it explicitly — chosen from that embedder's token
-  # budget — and startup refuses one that relies on the default. Changing it
-  # re-chunks the whole corpus on the next run (on llm_module, re-embeds it,
-  # and the run is refused until an operator passes --accept-rechunk — L18).
+  # deployment MUST choose it from that embedder's token budget (the
+  # contract's §13 q1) and then name it again in
+  # LLM_MODULE_CHUNK_PROFILE_CONFIRMED: the value below is set for every
+  # deployment, so on its own it shows no choice was made, and startup refuses
+  # llm_module until the two match. Never give the confirmation a default
+  # here. Changing CHUNK_PROFILE re-chunks the whole corpus on the next run (on
+  # llm_module, re-embeds it, and the run is refused until an operator passes
+  # --accept-rechunk — L18).
   #
-  # llm_module is ALSO refused while the ingest contract is PROPOSED
-  # (content-external/docs/llm-module-ingest-contract.md). Its credential is
+  # LLM_MODULE_ENABLE_METADATA_MERGE (L25) is off by default even though the
+  # contract agrees the merge: a far side that answered a merge without
+  # applying it would leave stale metadata nobody retries. Set "true" only
+  # once the llm-module is confirmed to apply it all-or-nothing; until then a
+  # metadata change re-pushes (and re-embeds) the whole document.
+  #
+  # The ingest contract is AGREED (content-external/docs/
+  # llm-module-ingest-contract.md; recorded 2026-10-28 on an assumption,
+  # written sign-off pending), so llm_module needs no development flag; it
+  # would be refused again only if that agreement were withdrawn. Its credential is
   # read from Vault per task (L11) through VAULT_ADDR + VAULT_TOKEN_PATH, a
-  # token Vault Agent keeps fresh. This chart runs no Vault Agent itself —
-  # compose's vault-agent-content is the reference — so a cluster deployment
-  # provides that token file through podAnnotations / extraVolumes /
-  # extraVolumeMounts below. With the Vault Agent Injector, for example:
+  # token Vault Agent keeps fresh. Two ways to provide that agent:
   #
-  #   podAnnotations:
-  #     vault.hashicorp.com/agent-inject: "true"
-  #     vault.hashicorp.com/role: "content-external"
-  #     vault.hashicorp.com/agent-inject-token: "true"   # -> /vault/secrets/token
+  #   1. The chart's own sidecar — `vaultAgent.enabled: true` below. The
+  #      cluster counterpart of compose's vault-agent-content. It sets
+  #      VAULT_ADDR and VAULT_TOKEN_PATH itself; do not also set them in env.
+  #   2. The Vault Agent Injector, if the cluster runs one — leave vaultAgent
+  #      disabled and annotate instead:
   #
-  # and for an llm_module deployment, in env:
+  #        podAnnotations:
+  #          vault.hashicorp.com/agent-inject: "true"
+  #          vault.hashicorp.com/role: "content-external"
+  #          vault.hashicorp.com/agent-inject-token: "true"   # -> /vault/secrets/token
+  #
+  #      with VAULT_ADDR and VAULT_TOKEN_PATH=/vault/secrets/token in env.
+  #
+  # Rendering refuses both at once. It recognises the injector only by the
+  # `vault.hashicorp.com/agent-inject` annotation in podAnnotations; an
+  # injector enabled any other way (a namespace-wide mutating webhook rule,
+  # annotations added by another controller) is not seen, so do not combine
+  # the two. For an llm_module deployment, in env:
   #
   #   - name: CONTENT_SINK                  value: "llm_module"
   #   - name: LLM_MODULE_BASE_URL           value: "https://..."
   #   - name: LLM_MODULE_COLLECTION         value: "ckb_chunks_v1"
   #   - name: LLM_MODULE_PROTECTED_COLLECTIONS  value: "ckb_retrieval"
   #   - name: LLM_MODULE_VAULT_SECRET_PATH  value: "content-external/llm_module"
-  #   - name: VAULT_ADDR                    value: "http://vault:8200"
-  #   - name: VAULT_TOKEN_PATH              value: "/vault/secrets/token"
+  #   - name: CHUNK_PROFILE                 value: "<from §13 q1>"
+  #   - name: LLM_MODULE_CHUNK_PROFILE_CONFIRMED  value: "<the same name>"
+  #   (+ VAULT_ADDR / VAULT_TOKEN_PATH only for option 2)
   #
-  # The service never caches the credential, so the injector's renewal is
+  # The service never caches the credential, so the agent's renewal is
   # picked up without a restart.
   #
   # STALE_SWEEP_ENABLED (L10) is off by default; "true" lets a committed run
@@ -675,6 +697,69 @@ contentExternal:
   podAnnotations: {}
   extraVolumes: []
   extraVolumeMounts: []
+  # The pod's identity. The sidecar's kubernetes auth binds a Vault role to
+  # it, and rendering refuses kubernetes auth without one: binding the role
+  # to `default` would hand the llm-module credential to every pod in the
+  # namespace running as `default`.
+  serviceAccount:
+    create: false
+    name: ""        # empty + create: true -> contentExternal.nameOverride
+  # Pod-level securityContext. With vaultAgent enabled and either container
+  # running as non-root, set fsGroup too: the sidecar writes the token 0640
+  # and the approle Secret is mounted 0440, so without a shared group the
+  # exporter cannot read the token (every llm-module run then fails with
+  # `credential unavailable`) and a non-root agent cannot read its role_id.
+  podSecurityContext: {}
+  # L11: the built-in Vault Agent sidecar (option 1 above). Off by default;
+  # an object_store deployment needs no Vault at all.
+  #
+  # It keeps a token at <tokenMountPath>/token in a memory-backed emptyDir,
+  # renewed and re-authenticated by the agent, and the chart points
+  # VAULT_ADDR / VAULT_TOKEN_PATH at it. The exporter reads it on every
+  # llm-module operation and never at startup, so a Vault outage is a
+  # `failed` run with `credential unavailable`, never a pod that will not
+  # start — and the sidecar has no readiness probe, so it never takes /health
+  # off the Service either.
+  #
+  # auth.method:
+  #   kubernetes (default, recommended) — the pod's service-account token;
+  #     nothing to rotate. Vault-side, once, with the content-external-policy
+  #     vault/init.sh already defines:
+  #       vault auth enable kubernetes
+  #       vault write auth/kubernetes/config \
+  #           kubernetes_host="https://$KUBERNETES_SERVICE_HOST:$KUBERNETES_SERVICE_PORT"
+  #       vault write auth/kubernetes/role/content-external-service \
+  #           bound_service_account_names=<serviceAccount name> \
+  #           bound_service_account_namespaces=<namespace> \
+  #           token_policies=content-external-policy token_ttl=1h token_max_ttl=4h
+  #   approle — compose's method. auth.approleSecret names a Secret holding
+  #     the role_id and secret_id. vault/init.sh gives secret_id a 24h TTL,
+  #     so something must rotate that Secret, or re-authentication fails a
+  #     day after it was minted.
+  vaultAgent:
+    enabled: false
+    image:
+      repository: hashicorp/vault
+      tag: "1.21.3"     # the version compose's agents run
+      pullPolicy: IfNotPresent
+    vaultAddr: "http://vault:8200"
+    # Where the exporter container sees the token directory, read-only.
+    tokenMountPath: /vault/agent
+    auth:
+      method: kubernetes
+      mountPath: ""     # default: auth/kubernetes or auth/approle
+      role: content-external-service   # kubernetes only
+      approleSecret:                   # approle only
+        name: ""
+        roleIdKey: role_id
+        secretIdKey: secret_id
+    resources:
+      limits:
+        cpu: "100m"
+        memory: "64Mi"
+      requests:
+        cpu: "10m"
+        memory: "32Mi"
   # The object-store sink's destination (D6/D7): any S3-compatible endpoint,
   # chosen by URL alone. A DIFFERENT bucket and DIFFERENT credentials from
   # CKB's own — never CKB's read-only AWS_* keys. Left blank, the service still

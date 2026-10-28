@@ -33,10 +33,17 @@ from pydantic import BaseModel, ValidationError
 from exporter.core.chunking import Chunker
 from exporter.core.constants import CHUNK_PROFILES
 from exporter.core.ids import chunker_fingerprint, make_chunk_id
-from exporter.core.schemas import Chunk, DocumentRecord, TextSpan, to_json_dict
+from exporter.core.schemas import (
+    Chunk,
+    DocumentRecord,
+    RunReport,
+    TextSpan,
+    to_json_dict,
+)
 from exporter.services.manifest_service import ManifestService
 from exporter.services.manifest_store import ManifestStore
 from exporter.services.publish_service import PublishCoordinator
+from exporter.services.run_state import RunStateStore
 from exporter.sinks import llm_module_sink
 from exporter.sinks.base import (
     CredentialUnavailableError,
@@ -48,6 +55,7 @@ from exporter.sinks.base import (
 )
 from exporter.sinks.llm_module_contract import (
     AGREED_TERMS,
+    PROPOSED_TERMS,
     AgencyDeleteRequest,
     ChunkDeleteRequest,
     ContractTerms,
@@ -137,7 +145,7 @@ def _chunks(
 def _sink(
     fake: FakeLlmModule,
     *,
-    terms: ContractTerms = AGREED_TERMS,
+    terms: ContractTerms = PROPOSED_TERMS,
     max_request_bytes: int = 8_388_608,
     token_provider: Callable[[], str] = lambda: TOKEN,
     run_id: str = "run-1",
@@ -178,7 +186,7 @@ def _id(ordinal: int, document_id: str = "d1") -> str:
 # --------------------------------------------------------------------------
 
 
-def test_capabilities_are_declared_from_the_code_and_the_agreed_terms(
+def test_capabilities_are_declared_from_the_code_and_the_proposed_terms(
     fake: FakeLlmModule,
 ) -> None:
     capabilities = _sink(fake).capabilities
@@ -190,17 +198,61 @@ def test_capabilities_are_declared_from_the_code_and_the_agreed_terms(
     assert capabilities.supports_agency_scoped_delete is False
     assert capabilities.supports_metadata_only_merge is False
     assert capabilities.rechunk_requires_ack is True
-    assert capabilities.max_concurrency == AGREED_TERMS.max_concurrency
+    assert capabilities.max_concurrency == PROPOSED_TERMS.max_concurrency
 
 
-def test_the_agreed_terms_are_still_the_safe_ones() -> None:
-    """Each field changes only when the contract document records the
-    owner's answer — never to make a deployment work (L13)."""
-    assert AGREED_TERMS.status == "proposed"
-    assert not AGREED_TERMS.supports_metadata_only_merge
-    assert not AGREED_TERMS.supports_agency_scoped_delete
-    assert not AGREED_TERMS.supports_stale_sweep
-    assert not AGREED_TERMS.supports_read_back
+def test_the_proposed_terms_are_the_safe_ones() -> None:
+    """What the sink falls back to if the recorded agreement is withdrawn,
+    and what the tests use to prove every refusal still works (L13)."""
+    assert PROPOSED_TERMS.status == "proposed"
+    assert not PROPOSED_TERMS.supports_metadata_only_merge
+    assert not PROPOSED_TERMS.agency_id_filterable
+    assert not PROPOSED_TERMS.supports_agency_scoped_delete
+    assert not PROPOSED_TERMS.supports_stale_sweep
+    assert not PROPOSED_TERMS.supports_read_back
+
+
+def test_the_agreed_terms_are_the_recorded_agreement() -> None:
+    """The contract as proposed, accepted (recorded 2026-10-28 as an
+    assumption). Pinned field by field, so a change to what the far side has
+    promised is a visible edit to this test as well as to the constant."""
+    assert AGREED_TERMS == replace(
+        PROPOSED_TERMS,
+        status="agreed",
+        supports_metadata_only_merge=True,
+        agency_id_filterable=True,
+        supports_agency_scoped_delete=True,
+        supports_stale_sweep=True,
+        supports_read_back=True,
+        read_back_lists_ordinals=True,
+    )
+    # §13 q5: the proposal's concurrency, not a new number.
+    assert AGREED_TERMS.max_concurrency == PROPOSED_TERMS.max_concurrency == 2
+
+
+def test_a_sink_built_without_terms_declares_the_agreed_capabilities() -> None:
+    """Production builds the sink with no `terms` (sinks/factory.py), so it
+    runs under AGREED_TERMS: every far-side capability is declared."""
+    capabilities = LlmModuleSink(
+        base_url=BASE_URL,
+        collection=TEST_COLLECTION,
+        agency_id=AGENCY,
+        sink_id=SINK_ID,
+        run_id="run-1",
+        token_provider=lambda: TOKEN,
+        ingest_schema_version=1,
+        max_request_bytes=1024,
+        connect_timeout=5.0,
+        read_timeout=120.0,
+    ).capabilities
+
+    assert capabilities.supports_metadata_only_merge is True
+    assert capabilities.supports_agency_scoped_delete is True
+    assert capabilities.can_read_back is True
+    # Code facts, unchanged by any agreement.
+    assert capabilities.can_list is False
+    assert capabilities.atomic_per_document is False
+    assert capabilities.rechunk_requires_ack is True
 
 
 @pytest.mark.parametrize(
@@ -214,14 +266,14 @@ def test_the_agreed_terms_are_still_the_safe_ones() -> None:
 def test_a_capability_that_depends_on_the_far_side_follows_its_term(
     fake: FakeLlmModule, term: str, capability: str
 ) -> None:
-    terms = replace(AGREED_TERMS, agency_id_filterable=True, **{term: True})
+    terms = replace(PROPOSED_TERMS, agency_id_filterable=True, **{term: True})
     assert getattr(_sink(fake, terms=terms).capabilities, capability) is True
     assert getattr(_sink(fake).capabilities, capability) is False
 
 
 def test_terms_refuse_ordinals_without_read_back() -> None:
     with pytest.raises(ValueError, match="read_back_lists_ordinals"):
-        replace(AGREED_TERMS, read_back_lists_ordinals=True)
+        replace(PROPOSED_TERMS, read_back_lists_ordinals=True)
 
 
 @pytest.mark.parametrize(
@@ -588,7 +640,7 @@ def _oversized(chunk_count: int) -> DocumentRecord:
 
 @pytest.mark.parametrize(
     ("terms", "chunks"),
-    [(AGREED_TERMS, []), (MERGE_TERMS, None)],
+    [(PROPOSED_TERMS, []), (MERGE_TERMS, None)],
     ids=["no-chunks", "metadata-only"],
 )
 def test_a_record_that_cannot_fit_alone_is_refused_without_sending(
@@ -999,10 +1051,10 @@ def test_the_default_session_ignores_the_environment() -> None:
 )
 def test_a_delete_by_agency_filter_needs_the_filter_agreed(flag: str) -> None:
     with pytest.raises(ValueError, match="agency_id_filterable"):
-        replace(AGREED_TERMS, **{flag: True})
+        replace(PROPOSED_TERMS, **{flag: True})
 
     assert getattr(
-        replace(AGREED_TERMS, agency_id_filterable=True, **{flag: True}), flag
+        replace(PROPOSED_TERMS, agency_id_filterable=True, **{flag: True}), flag
     )
 
 
@@ -1230,6 +1282,7 @@ def _coordinator(
     profile_name: str = "compact",
     stale_sweep_enabled: bool = False,
     manifest_prefix: str = "manifests",
+    run_state: RunStateStore | None = None,
 ) -> PublishCoordinator:
     profile = CHUNK_PROFILES[profile_name]
     return PublishCoordinator(
@@ -1247,7 +1300,7 @@ def _coordinator(
         bootstrap_checkpoint_every=250,
         concurrency=4,
         sink_failure_abort_threshold=25,
-        run_state=None,
+        run_state=run_state,
         stale_sweep_enabled=stale_sweep_enabled,
     )
 
@@ -1272,7 +1325,7 @@ def test_the_coordinator_publishes_through_the_sink_and_falls_back_on_metadata(
     assert all(fake.points_of(d) for d in ("d1", "d2", "d3"))
     assert "capped at 2 by the sink" in caplog.text
 
-    # Only d1's sidecar changes. AGREED_TERMS has no metadata merge, so the
+    # Only d1's sidecar changes. PROPOSED_TERMS has no metadata merge, so the
     # coordinator re-pushes it in full and says so.
     current = source.documents["d1"]
     source.put(
@@ -1344,7 +1397,7 @@ def test_a_failed_metadata_merge_keeps_the_old_entry_and_is_retried_whole(
 
 def test_every_verb_names_the_collection_in_its_path(fake: FakeLlmModule) -> None:
     terms = replace(
-        AGREED_TERMS,
+        PROPOSED_TERMS,
         agency_id_filterable=True,
         supports_agency_scoped_delete=True,
         supports_stale_sweep=True,
@@ -1513,10 +1566,10 @@ def test_a_re_bootstrap_with_a_fresh_manifest_prefix_succeeds(
 # --------------------------------------------------------------------------
 
 SWEEP_TERMS = replace(
-    AGREED_TERMS, agency_id_filterable=True, supports_stale_sweep=True
+    PROPOSED_TERMS, agency_id_filterable=True, supports_stale_sweep=True
 )
 AGENCY_DELETE_TERMS = replace(
-    AGREED_TERMS, agency_id_filterable=True, supports_agency_scoped_delete=True
+    PROPOSED_TERMS, agency_id_filterable=True, supports_agency_scoped_delete=True
 )
 
 
@@ -1891,7 +1944,7 @@ def test_a_sweep_without_a_credential_raises(fake: FakeLlmModule) -> None:
 # --------------------------------------------------------------------------
 
 READ_BACK_TERMS = replace(
-    AGREED_TERMS, supports_read_back=True, read_back_lists_ordinals=True
+    PROPOSED_TERMS, supports_read_back=True, read_back_lists_ordinals=True
 )
 
 
@@ -1913,7 +1966,7 @@ def test_read_back_reports_what_the_far_side_holds(fake: FakeLlmModule) -> None:
 def test_read_back_drops_ordinals_unless_the_terms_promise_them(
     fake: FakeLlmModule,
 ) -> None:
-    sink = _sink(fake, terms=replace(AGREED_TERMS, supports_read_back=True))
+    sink = _sink(fake, terms=replace(PROPOSED_TERMS, supports_read_back=True))
     sink.upsert_document(_record("d1"), _chunks("d1"))
 
     probe = sink.read_document("d1")
@@ -1957,6 +2010,36 @@ def test_read_back_drops_ordinals_unless_the_terms_promise_them(
             ),
             "inconsistent",
         ),
+        # A bare 404 is what a wrong route or a missing collection answers.
+        (Reply(404), "without a document-level body"),
+        (
+            Reply(
+                404,
+                body=json.dumps(
+                    {
+                        "ingest_schema_version": 1,
+                        "document_id": "d2",
+                        "record_present": False,
+                        "chunk_count": 0,
+                    }
+                ).encode(),
+            ),
+            "without a document-level body",
+        ),
+        (
+            Reply(
+                404,
+                body=json.dumps(
+                    {
+                        "ingest_schema_version": 1,
+                        "document_id": "d1",
+                        "record_present": True,
+                        "chunk_count": 0,
+                    }
+                ).encode(),
+            ),
+            "without a document-level body",
+        ),
     ],
 )
 def test_a_read_back_that_cannot_be_trusted_raises_never_reads_as_absent(
@@ -1967,12 +2050,23 @@ def test_a_read_back_that_cannot_be_trusted_raises_never_reads_as_absent(
         _sink(fake, terms=READ_BACK_TERMS).read_document("d1")
 
 
+def test_read_back_of_a_missing_collection_is_a_failure_not_empty(
+    fake: FakeLlmModule,
+) -> None:
+    """The first-run check reads 'nothing held' as an empty destination, so a
+    collection that does not exist must not answer it that way (contract §1,
+    §11)."""
+    fake.require_existing_collections()
+    with pytest.raises(StoreError, match="without a document-level body"):
+        _sink(fake, terms=READ_BACK_TERMS).read_document("d1")
+
+
 # --------------------------------------------------------------------------
 # L12 — transport, on every verb
 # --------------------------------------------------------------------------
 
 ALL_TERMS = replace(
-    AGREED_TERMS,
+    PROPOSED_TERMS,
     agency_id_filterable=True,
     supports_agency_scoped_delete=True,
     supports_stale_sweep=True,
@@ -2062,7 +2156,7 @@ def test_the_default_session_pools_a_connection_per_concurrent_document() -> Non
         max_request_bytes=1024,
         connect_timeout=5.0,
         read_timeout=120.0,
-        terms=replace(AGREED_TERMS, max_concurrency=3),
+        terms=replace(PROPOSED_TERMS, max_concurrency=3),
     )
     adapter = sink._session.get_adapter(BASE_URL)
     assert isinstance(adapter, requests.adapters.HTTPAdapter)
@@ -2220,6 +2314,99 @@ def test_a_pending_rechunk_is_refused_without_an_acknowledgement(
     assert report.error_type == "RechunkNotAcknowledged"
     assert report.rechunk == "refused"
     assert len(fake.requests) == sent
+
+
+def test_under_the_agreed_terms_the_cheap_paths_are_taken(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    """What the agreement buys, end to end:
+    - the first run probes the destination by read-back and finds it empty,
+      rather than reporting `unverifiable` (F21, L17);
+    - a sidecar-only change goes as a metadata merge — the record with
+      `chunks: null`, no chunk text resent, nothing re-embedded — instead of
+      a counted full re-push (L8);
+    - the stale sweep runs, with the manifest as its keep list (L10)."""
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    _orphan(fake)
+
+    def run(run_id: str) -> RunReport:
+        return _coordinator(
+            _sink(fake, terms=AGREED_TERMS, run_id=run_id),
+            source,
+            manifests,
+            tmp_path,
+            stale_sweep_enabled=True,
+        ).export(run_id)
+
+    first = run("run-1")
+    assert first.outcome == "success"
+    assert first.first_run_probe == "empty"
+    assert first.stale_sweep == "done"
+    assert "orphan" not in fake.records
+
+    current = source.documents["d1"]
+    source.put(
+        replace(current.row, updated_at="2026-10-08T09:00:00Z"),
+        current.text,
+        sidecar={"source_url": current.row.url, "page_title": "Uus pealkiri"},
+    )
+    texts = {k: p["text"] for k, p in fake.points_of("d1").items()}
+    sent = len(fake.requests)
+
+    second = run("run-2")
+
+    assert second.outcome == "success"
+    assert second.metadata_changed_count == 1
+    assert second.metadata_full_repush_count == 0
+    upserts = [s for s in fake.requests[sent:] if s.path.endswith("/documents")]
+    assert [s.body["chunks"] for s in upserts] == [None]
+    assert fake.records["d1"]["source"]["page_title"] == "Uus pealkiri"
+    assert {k: p["text"] for k, p in fake.points_of("d1").items()} == texts
+
+
+def test_the_last_run_record_carries_the_sweep_and_the_rechunk(
+    fake: FakeLlmModule, tmp_path: Path
+) -> None:
+    """What /health reports, from the coordinator's own record. Includes the
+    case the run line used to get wrong: with the sweep switched on, a run
+    that never reached the sweep step says `not_run`, not `disabled`."""
+    source = _source("d1", "d2")
+    manifests = InMemoryStore()
+    state = RunStateStore(tmp_path / "state")
+
+    def run(run_id: str, profile_name: str = "compact") -> RunReport:
+        return _coordinator(
+            _sink(fake, terms=SWEEP_TERMS, run_id=run_id),
+            source,
+            manifests,
+            tmp_path,
+            profile_name=profile_name,
+            stale_sweep_enabled=True,
+            run_state=state,
+        ).export(run_id)
+
+    assert run("run-1").stale_sweep == "done"
+    last = state.read()
+    assert last is not None
+    assert (last.stale_sweep, last.rechunk) == ("done", None)
+
+    quiet = run("run-2")
+    assert quiet.outcome == "unchanged"
+    assert quiet.stale_sweep == "not_run"
+    last = state.read()
+    assert last is not None
+    assert last.stale_sweep == "not_run"
+
+    refused = run("run-3", profile_name="azure_native")
+    assert refused.outcome == "failed"
+    last = state.read()
+    assert last is not None
+    assert (last.outcome, last.rechunk, last.stale_sweep) == (
+        "failed",
+        "refused",
+        "not_run",
+    )
 
 
 def test_an_acknowledged_rechunk_runs_and_a_limited_slice_unlocks_nothing(

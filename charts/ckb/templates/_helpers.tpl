@@ -64,3 +64,60 @@ guard block can be deleted and everything still renders.
 {{- end -}}
 {{- $mode -}}
 {{- end -}}
+
+{{/*
+L11, chart side. Returns contentExternal.vaultAgent.auth.method, or aborts.
+
+The built-in Vault Agent sidecar (contentExternal.vaultAgent) keeps the token
+the llm-module sink reads on every operation fresh, as compose's
+vault-agent-content does. Same shape as the two helpers above: the sidecar's
+config cannot be rendered without going through this.
+
+What it refuses, and why:
+- an unknown method;
+- `kubernetes` without a named service account. The Vault role binds to a
+  service account; binding it to `default` hands the credential to every pod
+  in the namespace that runs as `default`;
+- `approle` without the Secret holding role_id and secret_id;
+- VAULT_ADDR or VAULT_TOKEN_PATH also set in contentExternal.env. The sidecar
+  sets both, from the same values it mounts the token with; a second value
+  would win or lose by list order, and a token path that misses the mount is
+  `credential unavailable` on every push;
+- the Vault Agent Injector's annotation as well. Two agents would each write
+  a token, to different places.
+*/}}
+{{- define "ckb.contentExternal.vaultAgentMethod" -}}
+{{- $va := .Values.contentExternal.vaultAgent -}}
+{{- $method := $va.auth.method | default "" -}}
+{{- if not (has $method (list "kubernetes" "approle")) -}}
+{{- fail (printf "contentExternal.vaultAgent.auth.method must be kubernetes or approle, got %q" $method) -}}
+{{- end -}}
+{{- if and (eq $method "kubernetes") (not (include "ckb.contentExternal.serviceAccountName" .)) -}}
+{{- fail "contentExternal.vaultAgent.auth.method=kubernetes needs a named service account: set contentExternal.serviceAccount.create=true or contentExternal.serviceAccount.name. The Vault role binds to it, and binding it to `default` would hand the llm-module credential to every pod in the namespace that runs as `default`." -}}
+{{- end -}}
+{{- if and (eq $method "approle") (not $va.auth.approleSecret.name) -}}
+{{- fail "contentExternal.vaultAgent.auth.method=approle needs contentExternal.vaultAgent.auth.approleSecret.name: a Secret holding the role_id and secret_id. Note that vault/init.sh gives secret_id a 24h TTL, so something must rotate that Secret — kubernetes auth needs no rotation." -}}
+{{- end -}}
+{{- range .Values.contentExternal.env -}}
+{{- if has .name (list "VAULT_ADDR" "VAULT_TOKEN_PATH") -}}
+{{- fail (printf "contentExternal.env sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.vaultAddr / vaultAgent.tokenMountPath). Remove it from env." .name) -}}
+{{- end -}}
+{{- end -}}
+{{- if hasKey (.Values.contentExternal.podAnnotations | default dict) "vault.hashicorp.com/agent-inject" -}}
+{{- fail "contentExternal.vaultAgent is enabled AND podAnnotations asks the Vault Agent Injector for an agent. Use one: two agents write two tokens, and the service reads only one of them." -}}
+{{- end -}}
+{{- $method -}}
+{{- end -}}
+
+{{/*
+The service account content-external runs as: the created one, the named one,
+or empty (the namespace default, rendered as no serviceAccountName at all).
+*/}}
+{{- define "ckb.contentExternal.serviceAccountName" -}}
+{{- $sa := .Values.contentExternal.serviceAccount | default dict -}}
+{{- if $sa.create -}}
+{{- $sa.name | default .Values.contentExternal.nameOverride -}}
+{{- else -}}
+{{- $sa.name | default "" -}}
+{{- end -}}
+{{- end -}}

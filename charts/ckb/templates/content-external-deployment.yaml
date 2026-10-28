@@ -1,4 +1,10 @@
 {{- if .Values.contentExternal.enabled }}
+{{- $va := .Values.contentExternal.vaultAgent }}
+{{- $vaultMethod := "" }}
+{{- if $va.enabled }}
+{{- $vaultMethod = include "ckb.contentExternal.vaultAgentMethod" . }}
+{{- end }}
+{{- $serviceAccount := include "ckb.contentExternal.serviceAccountName" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,13 +28,27 @@ spec:
     metadata:
       labels:
         app: {{ .Values.contentExternal.nameOverride }}
-      # L11: how a cluster hands the llm-module sink its Vault token — e.g.
-      # the Vault Agent Injector's annotations. See values.yaml.
-      {{- with .Values.contentExternal.podAnnotations }}
+      # L11: how a cluster hands the llm-module sink its Vault token — the
+      # built-in sidecar (vaultAgent), or the Vault Agent Injector's
+      # annotations. See values.yaml.
+      {{- if or .Values.contentExternal.podAnnotations $va.enabled }}
       annotations:
+        {{- with .Values.contentExternal.podAnnotations }}
         {{- toYaml . | nindent 8 }}
+        {{- end }}
+        {{- if $va.enabled }}
+        # A changed agent config restarts the pod; nothing else would.
+        checksum/vault-agent: {{ include (print $.Template.BasePath "/content-external-vault-agent-configmap.yaml") . | sha256sum }}
+        {{- end }}
       {{- end }}
     spec:
+      {{- if $serviceAccount }}
+      serviceAccountName: {{ $serviceAccount }}
+      {{- end }}
+      {{- with .Values.contentExternal.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       containers:
         - name: {{ .Values.contentExternal.nameOverride }}
           image: "{{ .Values.contentExternal.image.repository }}:{{ .Values.contentExternal.image.tag }}"
@@ -44,6 +64,16 @@ spec:
             {{- range .Values.contentExternal.env }}
             - name: {{ .name }}
               value: {{ .value | quote }}
+            {{- end }}
+            {{- if $va.enabled }}
+            # L11: the token the sidecar below keeps fresh, read on every
+            # llm-module operation. Templated from the same value as the
+            # mount, so the two cannot drift; vaultAgentMethod refuses a
+            # second definition in env.
+            - name: VAULT_ADDR
+              value: {{ $va.vaultAddr | quote }}
+            - name: VAULT_TOKEN_PATH
+              value: {{ printf "%s/token" (trimSuffix "/" $va.tokenMountPath) | quote }}
             {{- end }}
             # The external destination: a different bucket and different
             # credentials from CKB's own (rule 6). The keys come from a Secret.
@@ -127,13 +157,74 @@ spec:
           volumeMounts:
             - name: content-external-work
               mountPath: {{ include "ckb.contentExternal.workDir" . }}
+            {{- if $va.enabled }}
+            - name: vault-agent-token
+              mountPath: {{ trimSuffix "/" $va.tokenMountPath }}
+              readOnly: true
+            {{- end }}
             {{- with .Values.contentExternal.extraVolumeMounts }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
+        {{- if $va.enabled }}
+        # L11: compose's vault-agent-content, as a sidecar. It writes and
+        # renews the token; it serves nothing, so it needs no port. The
+        # exporter does not read Vault at startup, so the two start in any
+        # order: until the first token lands, an llm-module push fails as
+        # `credential unavailable` and the next tick retries.
+        - name: vault-agent
+          image: "{{ $va.image.repository }}:{{ $va.image.tag }}"
+          imagePullPolicy: {{ $va.image.pullPolicy }}
+          command: ["vault", "agent", "-config=/vault/config/agent.hcl", "-log-level=info"]
+          env:
+            - name: VAULT_ADDR
+              value: {{ $va.vaultAddr | quote }}
+          resources:
+            {{- toYaml $va.resources | nindent 12 }}
+          # Deliberately no readiness probe. A pod is Ready only when every
+          # container is, so a token-file probe would turn a Vault outage
+          # into content-external dropping off its Service — /health and the
+          # export endpoint gone — when the design is for it to surface as a
+          # `failed` run with `credential unavailable` and keep serving.
+          volumeMounts:
+            - name: vault-agent-token
+              mountPath: /agent/out
+            - name: vault-agent-config
+              mountPath: /vault/config
+              readOnly: true
+            {{- if eq $vaultMethod "approle" }}
+            - name: vault-agent-approle
+              mountPath: /agent/credentials
+              readOnly: true
+            {{- end }}
+        {{- end }}
       volumes:
         - name: content-external-work
           persistentVolumeClaim:
             claimName: "{{ .Values.contentExternal.nameOverride }}-work-pvc"
+        {{- if $va.enabled }}
+        # Memory-backed: the token never touches a node's disk. Memory
+        # counts against the pod's limit, so it is capped: a token is bytes.
+        - name: vault-agent-token
+          emptyDir:
+            medium: Memory
+            sizeLimit: 1Mi
+        - name: vault-agent-config
+          configMap:
+            name: {{ .Values.contentExternal.nameOverride }}-vault-agent
+        {{- if eq $vaultMethod "approle" }}
+        - name: vault-agent-approle
+          secret:
+            secretName: {{ $va.auth.approleSecret.name | quote }}
+            # Group-readable, so a podSecurityContext.fsGroup lets a
+            # non-root agent read it.
+            defaultMode: 0440
+            items:
+              - key: {{ $va.auth.approleSecret.roleIdKey | quote }}
+                path: role_id
+              - key: {{ $va.auth.approleSecret.secretIdKey | quote }}
+                path: secret_id
+        {{- end }}
+        {{- end }}
         {{- with .Values.contentExternal.extraVolumes }}
         {{- toYaml . | nindent 8 }}
         {{- end }}

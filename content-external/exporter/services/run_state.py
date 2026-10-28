@@ -60,6 +60,9 @@ _OUTCOMES: frozenset[str] = frozenset({"success", "unchanged", "busy", "failed"}
 # and not a skipped one.
 _SUCCESSFUL: frozenset[str] = frozenset({"success", "unchanged"})
 
+# LastRun.rechunk's value for a re-chunk the run would not perform (L18).
+RECHUNK_REFUSED = "refused"
+
 
 @dataclass(frozen=True, slots=True)
 class LastRun:
@@ -86,12 +89,28 @@ class LastRun:
     # not say (a record from before F20, or a failure reported before the
     # coordinator could run), which is not the same as False.
     run_observed_full_corpus: bool | None = None
+    # L10. What the stale sweep did: disabled / not_run / refused /
+    # not_supported / failed / done, as the run line says. None when the
+    # recorder did not say: a record from before this field, or a failure
+    # reported before the coordinator ran.
+    stale_sweep: str | None = None
+    stale_swept_count: int = 0
+    # L18. None when no re-chunk was pending; otherwise proceeded / accepted /
+    # refused. `refused` repeats on every tick until an operator runs the
+    # re-chunk by hand, so it is the one worth alerting on — and a `busy` or
+    # pre-coordinator `failed` record carries it forward rather than clear it.
+    rechunk: str | None = None
 
 
 def _optional_bool(value: object) -> bool | None:
     """A JSON boolean, or None for anything else: absent on an older record,
     and never coerced from a string, where "false" would read as True."""
     return value if isinstance(value, bool) else None
+
+
+def _optional_str(value: object) -> str | None:
+    """A JSON string, or None for anything else, including absent."""
+    return value if isinstance(value, str) else None
 
 
 def utc_now_iso() -> str:
@@ -130,6 +149,9 @@ class RunStateStore:
         finished_at: str | None = None,
         error_type: str | None = None,
         run_observed_full_corpus: bool | None = None,
+        stale_sweep: str | None = None,
+        stale_swept_count: int = 0,
+        rechunk: str | None = None,
     ) -> LastRun:
         """Persist a terminal outcome, maintaining the consecutive counters.
 
@@ -160,6 +182,9 @@ class RunStateStore:
                 finished_at=finished_at,
                 error_type=error_type,
                 run_observed_full_corpus=run_observed_full_corpus,
+                stale_sweep=stale_sweep,
+                stale_swept_count=stale_swept_count,
+                rechunk=rechunk,
             )
 
     @contextmanager
@@ -207,6 +232,9 @@ class RunStateStore:
         finished_at: str | None,
         error_type: str | None,
         run_observed_full_corpus: bool | None,
+        stale_sweep: str | None,
+        stale_swept_count: int,
+        rechunk: str | None,
     ) -> LastRun:
         # Parsed afresh, not through read()'s cache: the cache is keyed on
         # (mtime, size), and two records of the same size written within the
@@ -228,6 +256,19 @@ class RunStateStore:
             failures = 0
             busy = 0
 
+        # A pending re-chunk that was refused stays refused until a run that
+        # completes says otherwise. A `busy` tick never ran, and a failure
+        # reported before the coordinator (catch_error) never looked, so
+        # neither knows — and recording null over `refused` would clear the
+        # one condition that needs an operator.
+        if (
+            rechunk is None
+            and outcome in ("busy", "failed")
+            and previous is not None
+            and previous.rechunk == RECHUNK_REFUSED
+        ):
+            rechunk = RECHUNK_REFUSED
+
         current = LastRun(
             outcome=outcome,
             run_id=run_id,
@@ -240,6 +281,9 @@ class RunStateStore:
             # read as a current fault.
             error_type=error_type if outcome == "failed" else None,
             run_observed_full_corpus=run_observed_full_corpus,
+            stale_sweep=stale_sweep,
+            stale_swept_count=stale_swept_count,
+            rechunk=rechunk,
         )
         self._write(current)
         return current
@@ -306,6 +350,9 @@ class RunStateStore:
                 run_observed_full_corpus=_optional_bool(
                     raw.get("run_observed_full_corpus")
                 ),
+                stale_sweep=_optional_str(raw.get("stale_sweep")),
+                stale_swept_count=int(raw.get("stale_swept_count", 0)),
+                rechunk=_optional_str(raw.get("rechunk")),
             )
         except (KeyError, TypeError, ValueError):
             logger.warning("last-run record at %s is missing fields", self._path)

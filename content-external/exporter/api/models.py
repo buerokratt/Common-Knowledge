@@ -55,6 +55,16 @@ class LastRunSummary(BaseModel):
     # `success` with false is a --limit run: the watermark was withheld, and
     # no sweep may treat that run as having seen the corpus.
     run_observed_full_corpus: bool | None = None
+    # L10. The stale sweep's result, the same value as the run line's
+    # `stale_sweep=`: disabled / not_run / refused / not_supported / failed /
+    # done. `failed` means the commit stood but the sweep did not; null when
+    # unknown.
+    stale_sweep: str | None = None
+    stale_swept_count: int = 0
+    # L18. null when no re-chunk was pending; proceeded / accepted / refused.
+    # `refused` repeats every tick until the re-chunk is run by hand
+    # (RUNBOOK: changing chunk geometry on the llm-module sink).
+    rechunk: str | None = None
 
 
 class HealthResponse(BaseModel):

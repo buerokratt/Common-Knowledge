@@ -29,6 +29,7 @@ from exporter.core.constants import (
 )
 from exporter.core.ids import chunker_fingerprint
 from exporter.sinks.base import CredentialUnavailableError
+from exporter.sinks.llm_module_contract import PROPOSED_TERMS
 
 WORK_DIR_ENV = "CONTENT_WORK_DIR"
 
@@ -144,6 +145,7 @@ def test_nothing_but_the_work_dir_is_required(clean_env: None) -> None:
 _LLM_MODULE_MINIMUM: dict[str, str] = {
     "content_sink": "llm_module",
     "chunk_profile": "azure_native",
+    "llm_module_chunk_profile_confirmed": "azure_native",
     "manifest_store_backend": "s3",
     "manifest_store_endpoint_url": "https://store.example",
     "manifest_store_bucket": "content-manifests",
@@ -153,9 +155,8 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     "llm_module_base_url": "https://llm.example/ingest",
     "llm_module_collection": "ckb_chunks_v1",
     "llm_module_vault_secret_path": "llm/connections/ingest",
-    # The contract is PROPOSED; without this every llm_module row is refused
-    # by the contract gate before the matrix row under test.
-    "llm_module_allow_proposed_contract": "true",
+    # No LLM_MODULE_ALLOW_PROPOSED_CONTRACT: the contract is AGREED
+    # (AGREED_TERMS), so the minimum deployment needs no development flag.
 }
 
 
@@ -786,6 +787,62 @@ def test_llm_module_without_an_explicit_chunk_profile_is_refused(
     assert "silently truncated" in message
 
 
+@pytest.mark.parametrize("confirmed", ["", "compact", "Azure_Native"])
+def test_llm_module_needs_the_chunk_profile_confirmed_by_name(
+    clean_env: None, confirmed: str
+) -> None:
+    """B11 / §13 q1: compose and the chart set CHUNK_PROFILE for every
+    deployment, so an explicit CHUNK_PROFILE proves nothing was chosen. The
+    confirmation must name the profile in force — and stops matching when
+    CHUNK_PROFILE changes without it."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_chunk_profile_confirmed=confirmed)
+    message = str(excinfo.value)
+    assert "LLM_MODULE_CHUNK_PROFILE_CONFIRMED=azure_native" in message
+    assert "silently truncated" in message
+
+
+def test_a_confirmed_chunk_profile_is_accepted(clean_env: None) -> None:
+    settings = _llm_module_settings(
+        chunk_profile="compact", llm_module_chunk_profile_confirmed="compact"
+    )
+    assert settings.chunk_profile == "compact"
+
+
+def test_compose_and_chart_never_confirm_a_chunk_profile() -> None:
+    """The confirmation is a deliberate act per llm_module deployment; a
+    default on either surface would make it the same rubber stamp an
+    explicit CHUNK_PROFILE already is there."""
+    for surface in (
+        REPO_ROOT / "docker-compose.yml",
+        REPO_ROOT / "charts" / "ckb" / "values.yaml",
+    ):
+        for line in surface.read_text(encoding="utf-8").splitlines():
+            if "LLM_MODULE_CHUNK_PROFILE_CONFIRMED" in line:
+                assert line.lstrip().startswith("#"), (surface.name, line)
+
+
+def test_the_metadata_merge_is_off_unless_the_deployment_opts_in(
+    clean_env: None,
+) -> None:
+    """L25: the far side answering a merge without applying it is silent, so
+    the agreed term alone does not switch the merge on (sinks/factory.py)."""
+    assert _llm_module_settings().llm_module_enable_metadata_merge is False
+    settings = _llm_module_settings(llm_module_enable_metadata_merge=True)
+    assert settings.llm_module_enable_metadata_merge is True
+
+
+def test_the_merge_opt_in_is_refused_when_the_contract_does_not_promise_it(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_module, "AGREED_TERMS", PROPOSED_TERMS)
+    with pytest.raises(ValidationError, match="LLM_MODULE_ENABLE_METADATA_MERGE"):
+        _llm_module_settings(
+            llm_module_enable_metadata_merge=True,
+            llm_module_allow_proposed_contract=True,
+        )
+
+
 def test_object_store_may_rely_on_the_default_chunk_profile(clean_env: None) -> None:
     settings = _settings()
     assert "chunk_profile" not in settings.model_fields_set
@@ -992,32 +1049,39 @@ def test_echo_logs_once_at_info_with_no_secret(
 # --------------------------------------------------------------------------
 
 
-def test_llm_module_is_refused_while_the_contract_is_proposed() -> None:
+@pytest.fixture
+def proposed_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contract as it was before the agreement was recorded — so the
+    gate's refusal is still proven, and still works if the agreement is
+    withdrawn (AGREED_TERMS back to PROPOSED_TERMS)."""
+    monkeypatch.setattr(config_module, "AGREED_TERMS", PROPOSED_TERMS)
+
+
+def test_llm_module_is_refused_while_the_contract_is_proposed(
+    proposed_contract: None,
+) -> None:
     """Against an unagreed contract two wrong guesses fail silently (L4,
     B11), so the sink is refused at startup, naming the open items."""
     with pytest.raises(ValidationError, match="PROPOSED") as excinfo:
         _llm_module_settings(llm_module_allow_proposed_contract=False)
-    assert "Open items 1, 5 and 7" in str(excinfo.value)
+    assert "Open items 5 and 7" in str(excinfo.value)
     assert "LLM_MODULE_ALLOW_PROPOSED_CONTRACT" in str(excinfo.value)
 
 
-def test_the_development_flag_lets_llm_module_start_against_the_proposal() -> None:
+def test_the_development_flag_lets_llm_module_start_against_the_proposal(
+    proposed_contract: None,
+) -> None:
     settings = _llm_module_settings(llm_module_allow_proposed_contract=True)
     assert settings.content_sink == "llm_module"
 
 
-def test_the_contract_gate_is_lifted_by_an_agreed_contract(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    from dataclasses import replace
-
-    monkeypatch.setattr(
-        config_module,
-        "AGREED_TERMS",
-        replace(config_module.AGREED_TERMS, status="agreed"),
-    )
+def test_the_agreed_contract_lifts_the_gate() -> None:
+    """The recorded agreement (AGREED_TERMS.status = "agreed"): an
+    llm_module deployment starts with no development flag."""
+    assert config_module.AGREED_TERMS.status == "agreed"
     settings = _llm_module_settings(llm_module_allow_proposed_contract=False)
     assert settings.content_sink == "llm_module"
+    assert config_module.llm_module_contract_refusal(allow_proposed=False) is None
 
 
 def test_the_contract_gate_never_touches_an_object_store_deployment() -> None:

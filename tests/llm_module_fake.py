@@ -295,7 +295,16 @@ class FakeLlmModule:
         if method == "GET" and len(parts) == 2 and parts[0] == "documents":
             probe = self.probe(parts[1])
             if probe is None:
-                return 404, {}, b""
+                # Contract §11: a document-level 404 says so in its body,
+                # which is what tells it apart from a wrong route.
+                return self._json(
+                    {
+                        "document_id": parts[1],
+                        "record_present": False,
+                        "chunk_count": 0,
+                    },
+                    status=404,
+                )
             return self._json(probe)
         if method != "POST" or body is None:
             return 404, {}, b""
@@ -320,10 +329,12 @@ class FakeLlmModule:
             return self._json({"deleted_document_ids": swept})
         return 404, {}, b""
 
-    def _json(self, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
+    def _json(
+        self, payload: dict[str, Any], *, status: int = 200
+    ) -> tuple[int, dict[str, str], bytes]:
         payload = {"ingest_schema_version": self.schema_version, **payload}
         return (
-            200,
+            status,
             {"Content-Type": "application/json"},
             json.dumps(payload).encode("utf-8"),
         )
