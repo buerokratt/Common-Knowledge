@@ -474,30 +474,143 @@ def _beautifulsoup_extract(html: str) -> str:
     return extracted
 
 
+# ---------------------------------------------------------------------------
+# HTML pre-processing shared by the deterministic extractors
+# ---------------------------------------------------------------------------
+
+# Inline formatting tags unwrapped before trafilatura. Its writer trims the
+# whitespace around them, so "an <strong>x</strong> based" became "an **x**based",
+# and in list items it moved bold runs out of place. Their text is kept.
+_INLINE_FORMATTING_TAGS = ["strong", "b", "em", "i", "u", "span", "font"]
+
+# Cloudflare "email protection" replaces addresses with /cdn-cgi/l/email-protection#<hex>
+# links and data-cfemail spans whose visible text is "[email protected]".
+_CF_EMAIL_HREF_RE = re.compile(r"/cdn-cgi/l/email-protection#([0-9a-fA-F]+)")
+
+# A Markdown link directly followed by a word: the writer dropped the space.
+_LINK_GLUED_TO_WORD_RE = re.compile(r"(\]\([^)\s]*\))(?=[^\W_])")
+
+
+def _decode_cf_email(encoded: str) -> str | None:
+    """Decode a Cloudflare-obfuscated address: first byte is the XOR key."""
+    try:
+        key = int(encoded[:2], 16)
+        return "".join(
+            chr(int(encoded[i : i + 2], 16) ^ key) for i in range(2, len(encoded), 2)
+        )
+    except ValueError:
+        return None
+
+
+def _decode_cf_emails(soup: BeautifulSoup) -> None:
+    """Replace Cloudflare-obfuscated email links and spans with the real address."""
+    for span in soup.select("[data-cfemail]"):
+        email = _decode_cf_email(span.get("data-cfemail", ""))
+        if email:
+            span.replace_with(email)
+    for a in soup.find_all("a", href=_CF_EMAIL_HREF_RE):
+        email = _decode_cf_email(_CF_EMAIL_HREF_RE.search(a["href"]).group(1))
+        if email:
+            a["href"] = f"mailto:{email}"
+            a.string = email
+
+
+def _unwrap_layout_tables(soup: BeautifulSoup) -> None:
+    """
+    Turn single-column tables into plain blocks.
+
+    CMS editors use a one-cell table as a framed box (e.g. a contact panel on
+    tallinn.ee). Kept as a table, it is one unreadable row; its cells are
+    really paragraphs.
+    """
+    for table in soup.find_all("table"):
+        rows = table.find_all("tr")
+        if not rows or any(len(r.find_all(["td", "th"], recursive=False)) > 1 for r in rows):
+            continue
+        box = soup.new_tag("div")
+        for cell in table.find_all(["td", "th"]):
+            if cell.find_parent("table") is not table:
+                continue
+            block = soup.new_tag("div")
+            for child in list(cell.contents):
+                block.append(child.extract())
+            box.append(block)
+        table.replace_with(box)
+
+
+def _prepare_html(html: str) -> BeautifulSoup:
+    """Parse *html* and apply the clean-ups both deterministic extractors need."""
+    soup = BeautifulSoup(html, "lxml")
+    _decode_cf_emails(soup)
+    _unwrap_layout_tables(soup)
+    return soup
+
+
+def _page_title(soup: BeautifulSoup) -> str:
+    h1 = soup.find("h1")
+    return h1.get_text(" ", strip=True) if h1 else ""
+
+
+def _ensure_page_title(title: str, extracted: str) -> str:
+    """
+    Prepend the page's <h1> as a Markdown heading when the extract lacks it.
+
+    trafilatura treats the <h1> as metadata and leaves it out of the body on
+    most Drupal/WordPress templates (id.ee, emta.ee).
+    """
+    if not title or _normalize_for_match(title) in _normalize_for_match(extracted):
+        return extracted
+    return f"# {title}\n\n{extracted}"
+
+
+_WORD_RE = re.compile(r"[\W_]+")
+
+
+def _normalize_for_match(text: str) -> str:
+    """Lower-case and collapse punctuation/whitespace so Markdown and HTML text compare."""
+    return _WORD_RE.sub(" ", text).lower().strip()
+
+
+def _html_to_markdown(html: str) -> str:
+    md = markdownify(html, heading_style="ATX")
+    md = _LINK_GLUED_TO_WORD_RE.sub(r"\1 ", md)
+    md = re.sub(r"[ \t]+\n", "\n", md)
+    return normalize_newlines(md).strip()
+
+
 def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     """
     Extract main content as Markdown, preserving tables as raw HTML.
 
     Two-pass strategy: BeautifulSoup replaces each <table> with a plain-text
     placeholder before trafilatura runs; the original table HTML is then
-    substituted back into trafilatura's Markdown output. This avoids
-    trafilatura's lossy Markdown table renderer (which cannot represent
-    colspan/rowspan or multi-line cells) while keeping trafilatura's strong
-    prose extraction.
+    substituted back into the output. This avoids trafilatura's lossy
+    Markdown table renderer (which cannot represent colspan/rowspan or
+    multi-line cells) while keeping trafilatura's strong prose extraction.
+
+    trafilatura returns HTML and markdownify writes the Markdown: trafilatura's
+    own Markdown writer ran list items together and dropped spaces around
+    links. Default precision, not favor_precision: on tallinn.ee
+    favor_precision dropped whole tab/accordion bodies without removing more
+    noise. Links are kept so the knowledge base retains their targets.
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = _prepare_html(html)
+    title = _page_title(soup)
+    for tag in soup.find_all(_INLINE_FORMATTING_TAGS):
+        tag.unwrap()
     tables, markers = _swap_tables_for_placeholders(soup)
 
     result = trafilatura.extract(
-        str(soup) if tables else html,
+        str(soup),
         url=url,
-        output_format="markdown",
+        output_format="html",
         include_comments=False,
-        include_tables=not tables,
-        favor_precision=True,
+        include_tables=False,
+        include_links=True,
     )
     if not result:
         return None
+    result = _html_to_markdown(result)
 
     result, missing = _restore_tables(result, tables, markers)
     if missing:
@@ -505,7 +618,124 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
             f"[html] trafilatura dropped {missing} of {len(tables)} table(s) "
             "as out-of-scope content"
         )
-    return result or None
+    return _ensure_page_title(title, result) if result else None
+
+
+# ---------------------------------------------------------------------------
+# <main>-region extraction for pages trafilatura gets wrong
+# ---------------------------------------------------------------------------
+
+# Elements inside <main> that are page furniture, not content.
+_MAIN_DROP_TAGS = ["script", "style", "noscript", "template", "form", "nav",
+                   "button", "svg", "img", "iframe"]
+_MAIN_DROP_CLASS_RE = re.compile(
+    r"(^|[-_])(breadcrumbs?|share|social-share|feedback|visually-hidden|skip-to-content)([-_]|$)"
+)
+
+# Gate thresholds, fitted on the 5-agency benchmark (id.ee, EMTA, PPA,
+# Tervisekassa, tallinn.ee; 500 pages, gpt-5 usability labels).
+_MAIN_MIN_BLOCK_CHARS = 60
+_MAIN_COVERAGE_MIN = 0.8
+_MAIN_OUTSIDE_MAX = 0.3
+_MAIN_SIZE_RATIO_MIN = 0.25
+
+
+def _main_region(soup: BeautifulSoup) -> Tag | None:
+    main = soup.find("main")
+    return main if isinstance(main, Tag) and main.get_text(strip=True) else None
+
+
+def _strip_main_furniture(main: Tag) -> None:
+    for tag in main.find_all(_MAIN_DROP_TAGS):
+        tag.decompose()
+    for tag in main.find_all(True):
+        if tag.decomposed:
+            continue
+        if any(_MAIN_DROP_CLASS_RE.search(c) for c in tag.get("class") or []):
+            tag.decompose()
+
+
+def _main_region_extract(html: str) -> str | None:
+    """
+    Convert the page's <main> element to Markdown, minus page furniture.
+
+    Used when trafilatura's boilerplate heuristics misfire: link-hub pages,
+    whose whole content is a link list, make it fall back to dumping the site
+    menus; sections whose CSS class mentions "sidebar" are dropped outright.
+    """
+    soup = _prepare_html(html)
+    main = _main_region(soup)
+    if main is None:
+        return None
+    title = _page_title(main)
+    _strip_main_furniture(main)
+    for tag in main.find_all(["span", "font"]):
+        tag.unwrap()
+    # Swapped across the whole soup (new_tag lives there); only <main> is rendered.
+    tables, markers = _swap_tables_for_placeholders(soup)
+    result = _html_to_markdown(str(main))
+    result, _ = _restore_tables(result, tables, markers)
+    return _ensure_page_title(title, result) if result.strip() else None
+
+
+def _main_text_blocks(main: Tag) -> list[str]:
+    """Normalised text of the leaf blocks in *main* long enough to be content."""
+    blocks = []
+    for el in main.find_all(["p", "li", "td", "dd"]):
+        if el.find(["p", "li", "table"]):
+            continue
+        text = el.get_text(" ", strip=True)
+        if len(text) >= _MAIN_MIN_BLOCK_CHARS:
+            blocks.append(_normalize_for_match(text))
+    return blocks
+
+
+def _prefer_main_region(html: str, extracted: str) -> bool:
+    """
+    Decide whether trafilatura's *extracted* text should be replaced by the
+    <main>-region extract. True when any of these holds:
+
+      - coverage: trafilatura kept under 80% (by length) of the content
+        blocks inside <main> -- it dropped real sections;
+      - outside: over 30% of its lines are not in <main> -- it dumped the
+        site menus/footer instead of the page;
+      - size: its text is under a quarter of <main>'s -- typically a link
+        hub reduced to one headline.
+    """
+    soup = _prepare_html(html)
+    main = _main_region(soup)
+    if main is None:
+        return False
+    _strip_main_furniture(main)
+    main_norm = _normalize_for_match(main.get_text(" "))
+    ext_text = re.sub(r"\]\([^)]*\)", "]", extracted)
+    ext_norm = _normalize_for_match(ext_text)
+
+    blocks = _main_text_blocks(main)
+    total = sum(len(b) for b in blocks)
+    if total:
+        missing = sum(len(b) for b in blocks if b[:60] not in ext_norm)
+        if 1 - missing / total < _MAIN_COVERAGE_MIN:
+            return True
+
+    lines = [_normalize_for_match(x) for x in ext_text.split("\n")]
+    lines = [x for x in lines if len(x) > 30]
+    if lines and sum(x[:50] not in main_norm for x in lines) / len(lines) > _MAIN_OUTSIDE_MAX:
+        return True
+
+    return len(ext_norm) < _MAIN_SIZE_RATIO_MIN * len(main_norm)
+
+
+def _deterministic_extract(html: str, url: str | None = None) -> str | None:
+    """trafilatura, swapped for the <main>-region extract when the gate says so."""
+    extracted = _trafilatura_extract(html, url=url)
+    if extracted and not _prefer_main_region(html, extracted):
+        return extracted
+    main_extract = _main_region_extract(html)
+    if main_extract:
+        logger.info(f"[html] using <main>-region extract for {url}")
+        return main_extract
+    return extracted
 
 
 # ---------------------------------------------------------------------------
@@ -800,9 +1030,9 @@ def clean_html(
 
     # No LLM path
     if not entity.use_llm:
-        extracted = _trafilatura_extract(html, url=entity.url)
+        extracted = _deterministic_extract(html, url=entity.url)
         if extracted:
-            logger.info(f"[html] trafilatura succeeded for {entity.url}")
+            logger.info(f"[html] deterministic extraction succeeded for {entity.url}")
             return extracted
         logger.warning(
             f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}"
@@ -815,10 +1045,10 @@ def clean_html(
         "use_llm=True requires Azure OpenAI client and deployment"
     )
 
-    extracted = _trafilatura_extract(html, url=entity.url)
+    extracted = _deterministic_extract(html, url=entity.url)
     if not extracted:
         logger.warning(
-            f"[html] trafilatura empty for {entity.url}; using BeautifulSoup before LLM eval"
+            f"[html] deterministic extraction empty for {entity.url}; using BeautifulSoup before LLM eval"
         )
         extracted = _beautifulsoup_extract(html)
 
