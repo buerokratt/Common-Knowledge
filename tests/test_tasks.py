@@ -244,6 +244,19 @@ class TestCloudflareEmails:
         assert soup.a["href"] == "mailto:a@b.ee"
         assert soup.get_text() == "a@b.eea@b.ee"
 
+    def test_fallback_and_llm_input_see_real_address(self) -> None:
+        from worker.tasks import _beautifulsoup_extract, _prestrip_html_for_llm
+
+        key = 0x42
+        encoded = f"{key:02x}" + "".join(f"{ord(c) ^ key:02x}" for c in "a@b.ee")
+        html = (
+            f'<html><body><main><p>Mail <a href="/cdn-cgi/l/email-protection#{encoded}">'
+            "[email&#160;protected]</a></p></main></body></html>"
+        )
+        assert "a@b.ee" in _beautifulsoup_extract(html)
+        assert "a@b.ee" in _prestrip_html_for_llm(html)
+        assert "protected" not in _prestrip_html_for_llm(html)
+
     def test_malformed_hex_left_alone(self) -> None:
         from bs4 import BeautifulSoup
         from worker.tasks import _decode_cf_emails

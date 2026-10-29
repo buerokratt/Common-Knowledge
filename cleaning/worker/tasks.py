@@ -440,6 +440,7 @@ def _beautifulsoup_extract(html: str) -> str:
       4. Put the original table HTML back.
     """
     soup = BeautifulSoup(html, "lxml")
+    _decode_cf_emails(soup)
     for tag in soup(["header", "footer", "nav", "script", "style", "aside", "form"]):
         tag.decompose()
 
@@ -802,6 +803,7 @@ def _prestrip_html_for_llm(html: str) -> str:
     re-extract path.
     """
     soup = BeautifulSoup(html, "lxml")
+    _decode_cf_emails(soup)
 
     for tag_name in _LLM_HTML_DROP_TAGS:
         for tag in soup.find_all(tag_name):
