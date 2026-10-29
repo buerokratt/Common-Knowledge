@@ -1,0 +1,35 @@
+name: scheduler-gate
+
+on:
+  push:
+    paths:
+      - "DSL/CronManager/**"
+      - "DSL/CronManagerScripts/**"
+      - ".github/workflows/scheduler-gate.yml"
+      - "tests/test_scheduler_yml.py"
+  pull_request:
+    paths:
+      - "DSL/CronManager/**"
+      - "DSL/CronManagerScripts/**"
+      - ".github/workflows/scheduler-gate.yml"
+      - "tests/test_scheduler_yml.py"
+
+jobs:
+  scheduler-yml:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          version: "0.11.8"
+
+      - name: Install Python
+        run: uv python install
+
+      - name: Sync dependencies (all extras + dev)
+        run: uv sync --frozen --all-extras --group dev
+
+      - name: Pytest
+        run: uv run pytest tests/test_scheduler_yml.py

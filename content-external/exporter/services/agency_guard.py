@@ -1,10 +1,10 @@
 """CKB is one agency per deployment, and this service asserts it.
 
-A17. G1 fans out from `list_agencies` and POSTs an export per agency; F2 takes
-a **whole-run** lock. With two agencies the second POST finds the lock held,
-reports `busy` and **exits 0** — every hour, forever, and nothing complains,
-because `busy` is by design not an error. That is silent starvation: the
-second agency is simply never exported.
+A17. G1 reads `list_agencies` with `page_size` 1 and `name asc` and POSTs
+only that first agency. With two agencies the second is **never posted**: the
+first agency's runs keep succeeding, every hour, forever, and nothing
+complains. That is silent starvation: the second agency is simply never
+exported. This check turns it into a failed run instead.
 
 CKB enforces one agency per deployment (agency creation is existence-checked
 and returns 409), so this is dormant. It is asserted anyway because the design
@@ -88,12 +88,11 @@ class MultipleAgenciesError(RuntimeError):
 def _explain(count: int) -> str:
     return (
         f"{count} agencies exist, and this service supports exactly one per "
-        "deployment. The export takes a single whole-run lock, so a second "
-        "agency's export would find it held, report `busy` and exit 0 — every "
-        "hour, forever, with no error anywhere, because a concurrent run is "
-        "by design not a failure. The second agency would simply never be "
-        "exported. Run one deployment per agency, or implement the "
-        "drain-and-recurse shape pipeline/zip.yml uses."
+        "deployment. The scheduled trigger posts only the first agency by "
+        "name, so the second would simply never be exported, with no error "
+        "anywhere; every run fails here instead. Run one deployment per "
+        "agency, or implement the drain-and-recurse shape pipeline/zip.yml "
+        "uses."
     )
 
 
