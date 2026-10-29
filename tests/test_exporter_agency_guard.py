@@ -2,11 +2,11 @@
 
 No network: `requests.get` is stubbed throughout.
 
-The failure this guards is the quietest one in the plan. G1 fans out from
-`list_agencies`; F2 takes a whole-run lock. With two agencies the second POST
-finds the lock held, reports `busy` and exits 0 — every hour, forever, with
-nothing logged as an error, because a concurrent run is by design not a
-failure. The second agency is simply never exported and no signal says so.
+The failure this guards is the quietest one in the plan. G1 posts only the
+first agency from `list_agencies` (`page_size` 1, `name asc`). With two
+agencies the second is never posted, the first agency's runs keep succeeding,
+and nothing is logged as an error. The second agency is simply never exported
+and no signal says so.
 """
 
 import logging
@@ -241,7 +241,7 @@ def test_startup_refuses_for_more_than_one_agency(
     assert "2 agencies" in message
     # The message has to explain the mechanism, because "only one agency is
     # supported" invites someone to try it anyway and see nothing break.
-    assert "busy" in message
+    assert "only the first agency" in message
     assert "never be exported" in message
 
 
