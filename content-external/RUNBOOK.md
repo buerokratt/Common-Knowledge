@@ -3,6 +3,95 @@
 Operator notes for running the exporter. Design and configuration are in
 [README.md](README.md).
 
+## Operating the export
+
+For a manual export, use [Running an export](README.md#running-an-export).
+To invoke the registered cron job by hand, including while its schedule is
+disabled, call `POST /execute/scheduler/trigger_content_export`:
+
+```bash
+curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_export'
+```
+
+CronManager names the job group after the job file, so `scheduler.yml` gives
+the group `scheduler`. In HTTP commands here, `<cron-manager>` and
+`<content-external>` stand for the configured base URLs.
+Submission is not completion. Read the summary in `/health`'s `last_run`,
+the `content-external run` log line, or the full CLI report from
+`--output-json`; see [Observability](README.md#observability--how-to-tell-this-is-working).
+
+| Outcome | What to do |
+|---|---|
+| `success` | The run completed. Check skipped documents and per-document publish failures before treating every document as published. |
+| `unchanged` | The committed manifest still matches; nothing needed publishing. Wait for the next tick. |
+| `busy` | Another run holds the lock. This invocation did no export work; let the active run finish and watch `consecutive_busy`. |
+| `failed` | Read `error_type` and the error log, then check credentials, connectivity and the destination before retrying. |
+
+The destination holding fewer documents than CKB's GUI is expected: only
+`status = 'finished'` rows are published. Confirm the difference in the
+report's skipped count and its reasons, rather than comparing totals alone.
+
+This deployment is configured for `CONTENT_SINK=object_store`. Confirm the
+running value using [Which sink is this deployment running?](README.md#which-sink-is-this-deployment-running).
+On a non-listable sink such as `llm_module`, reconcile (not built yet) can
+only report `unverifiable`, never `clean`; see
+[Sink parity](README.md#sink-parity--what-each-sink-can-and-cant-do). A failed run may mean the destination is down rather
+than that CKB is wrong.
+
+If `duration_seconds` routinely approaches the schedule interval, or
+`consecutive_busy` keeps rising, **lengthen the interval** using the
+[Schedule](README.md#schedule). Use the existing
+[alert thresholds](README.md#the-alert-thresholds-to-agree-with-ops).
+
+## First deployment (bootstrap)
+
+Run the CLI commands in the exporter container with its configured
+environment. Replace `<agency_base_id>` with the agency's base id. Flag
+semantics and first-run safeguards are in
+[Running an export](README.md#running-an-export).
+
+1. Keep `trigger_content_export` non-firing with `trigger: "false"` in
+   [scheduler.yml](../DSL/CronManager/scheduler.yml).
+2. Confirm the exporter container is up, the destination bucket is
+   accessible, and both sets of credentials work: CKB's `S3_*` / `AWS_*`
+   read keys and the destination's own keys. See
+   [Environment variables](README.md#environment-variables) and
+   [Reading CKB's bucket](README.md#reading-ckbs-bucket). Check the service:
+
+   ```bash
+   curl -fsS '<content-external>/health'
+   ```
+
+   A health response confirms the listener, not bucket access; verify the
+   credentials separately before starting the sample.
+3. Run a limited sample first:
+
+   ```bash
+   python -m exporter.run_sync --agency-id '<agency_base_id>' --limit 25 --output-json -
+   ```
+
+   Check the stored chunk shape, recompute a few chunk ids locally with
+   `make_chunk_id(agency_id, document_id, ordinal)` from
+   [ids.py](exporter/core/ids.py), and read one `metadata.json`.
+4. Run the full export by hand and retain the JSON report:
+
+   ```bash
+   python -m exporter.run_sync --agency-id '<agency_base_id>' --output-json '<report-path>'
+   ```
+
+5. Read the report: new and skipped document counts, skip reasons, durations
+   and failures. Resolve failures before enabling the schedule.
+6. Spot-check the destination against the committed manifest: sampled
+   document ids, metadata and chunk counts should agree.
+7. Only then enable the cron entry with the one-line change in
+   [Schedule](README.md#schedule).
+8. Set `DIFF_ON_MISSING_MANIFEST=fail` in the service's configuration; see
+   [Environment variables](README.md#environment-variables).
+
+A large skipped count on a fresh CKB is expected: most documents may still
+be scraping or cleaning, or waiting in `in_review`. Later ticks pick them
+up once they are finished.
+
 ## Export query ceiling (#320)
 
 Enumeration makes one watermark call and one document call per page, from
