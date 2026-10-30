@@ -96,7 +96,7 @@ fileProcessing:
     - name: SOURCE_PATH
       value: "/app/data"
     - name: S3_PRESIGNED_URL_EXPIRATION
-      value: "3600"
+      value: "604800"
     - name: S3_UPLOAD_URL_EXPIRATION
       value: "3600"
     - name: AUTO_CLEANUP_COMPLETED_TASKS
