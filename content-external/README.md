@@ -73,7 +73,13 @@ it — see the note in the table below.
 | `EXTERNAL_S3_SUPPORTS_BATCH_DELETE` | no (default `true`) | Set `false` for a store whose `DeleteObjects` is missing or partial. Deletes then go one key at a time, with the same per-key outcome |
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
-| `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. Not used by the `object_store` sink |
+| `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. `LLM_MODULE_VAULT_SECRET_PATH` names the KV v2 secret holding `{"token": …}` (compose: `content-external/llm_module`), read through `VAULT_TOKEN_PATH` on every operation. Not used by the `object_store` sink |
+| `LLM_MODULE_COLLECTION` | required for `llm_module` | L19: the **physical** collection this deployment writes to, in every request path (`/ingest/v1/collections/{collection}/…`). A new one beside the live corpus, never the retrieval alias, and never `contextual_chunks_azure` / `contextual_chunks_aws` (refused at startup). 1–64 of `A-Z a-z 0-9 _ -`. Part of the manifest's sink_id (`llm_module:<collection>`), so changing it against an existing manifest fails the run; a re-bootstrap into another collection also takes a fresh `MANIFEST_STORE_PREFIX`. See [docs/llm-module-cutover.md](docs/llm-module-cutover.md) |
+| `LLM_MODULE_PROTECTED_COLLECTIONS` | no (default empty) | Comma-separated names `LLM_MODULE_COLLECTION` may never be, case-insensitive, on top of the built-in `contextual_chunks_*`. Put the **retrieval alias** here, and any other live collection on that llm-module: startup refuses them, and so does the sink factory |
+| `LLM_MODULE_CHUNK_PROFILE_CONFIRMED` | required for `llm_module` | The `CHUNK_PROFILE` name typed again, once it has been checked against the llm-module embedder's token limit (contract §13 q1). Startup refuses `llm_module` until the two match. Compose and the chart set `CHUNK_PROFILE` for every deployment, so it cannot show the check happened on its own. Never give this a default on a deployment surface |
+| `LLM_MODULE_ENABLE_METADATA_MERGE` | no (default `false`) | L25. `true` lets a metadata-only change send the record alone (contract §8). Off, every metadata change is a full re-push and a re-embed, which is always correct. Set it only once the llm-module is confirmed to apply a merge all-or-nothing: a far side that answered a merge without applying it would leave stale metadata that nothing retries |
+| `LLM_MODULE_ALLOW_PROPOSED_CONTRACT` | no (default `false`) | Development only, and **not needed now that the contract is agreed** (`AGREED_TERMS.status = "agreed"`, recorded 2026-10-28). It matters only if the agreement is withdrawn and `llm_module` is refused again |
+| `STALE_SWEEP_ENABLED` | no (default `false`) | L10. After a committed run that saw the whole corpus and held nothing back, ask the destination to delete what was synced before the run and is not in the committed manifest's keep list. Never changes a run's outcome; reported as `stale_sweep=` (`disabled`, `refused`, `not_supported`, `failed`, `done`) |
 | `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; the llm-module's is its owner's to state), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
 | `SINK_FAILURE_ABORT_THRESHOLD` | no (default `25`) | Consecutive **permanent** upsert failures (a refused credential, a missing bucket, a wrong base URL) after which the run aborts with nothing committed and reports `failed` / `SystemicSinkFailure`. A published document resets the count, and retryable failures never count. One permanent failure is a document's problem: it is held and retried. This many in a row is the destination's |
 | `DIFF_ON_MISSING_MANIFEST` | no (default `first_run`) | `first_run` treats a missing manifest as a bootstrap. `fail` refuses it. Flip to `fail` once the bootstrap is done. Even under `first_run`, a first run refuses a destination that already holds the agency's content (see *Running an export*) |
@@ -109,10 +115,14 @@ so, which is indistinguishable from never having run.
 |---|---|
 | `object_store`, no `MANIFEST_STORE_*` | **OK** — inherits the sink's own store, bucket and prefix. Zero new configuration for this deployment |
 | `llm_module`, no manifest store | **refuses to start** — names `MANIFEST_STORE_BACKEND` |
-| `llm_module`, no `LLM_MODULE_BASE_URL` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
+| `llm_module`, no `LLM_MODULE_BASE_URL`, no `LLM_MODULE_COLLECTION` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
+| `llm_module` with `LLM_MODULE_COLLECTION` set to `contextual_chunks_*`, or not one plain path segment | **refuses to start** — L19: bootstrap beside, never in place |
 | `MANIFEST_STORE_BACKEND=local` without `MANIFEST_STORE_ALLOW_LOCAL=true` | **refuses to start** |
 | `MANIFEST_STORE_BACKEND=azure_blob` | **refuses to start** — names Stage H, which builds that backend |
 | `llm_module` with no explicit `CHUNK_PROFILE` | **refuses to start** — names `CHUNK_PROFILE`; the default was chosen for a destination that embeds its own chunks |
+| `llm_module` with `LLM_MODULE_CHUNK_PROFILE_CONFIRMED` unset or not equal to `CHUNK_PROFILE` | **refuses to start** — names the value it expects |
+| `LLM_MODULE_ENABLE_METADATA_MERGE=true` while the contract does not promise a merge | **refuses to start**. Not currently reachable: the agreed contract promises it |
+| `llm_module` while the ingest contract is PROPOSED | **refuses to start** — names Open items 5 and 7. **Not currently reachable:** the contract is agreed. It would apply again if the agreement were withdrawn, and `LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true` would then override it for development against the stub only |
 | `CHUNK_PROFILE` not a known preset (any sink) | **refuses to start** — lists the valid presets |
 
 One more check is implied by the second row: an explicitly-set manifest store must
@@ -166,6 +176,7 @@ curl -s localhost:8125/health | jq
 {
   "status": "ok",
   "sink": "object_store",
+  "sink_id": "object_store",
   "store_backend": "s3",
   "chunk_profile": "azure_native",
   "work_dir": "/var/lib/content-external",
@@ -178,10 +189,19 @@ curl -s localhost:8125/health | jq
     "consecutive_failures": 3,
     "consecutive_busy": 0,
     "error_type": "StoreError",
-    "run_observed_full_corpus": false
+    "run_observed_full_corpus": false,
+    "stale_sweep": "not_run",
+    "stale_swept_count": 0,
+    "rechunk": null
   }
 }
 ```
+
+`sink_id` is the destination's identity as the manifest records it, and it is
+the same value every `content-external run` and `content-external error`
+line carries as `sink=`. On `object_store` it equals `sink`. On `llm_module`
+it is `llm_module:<LLM_MODULE_COLLECTION>`, which tells you which collection
+this deployment writes to at a cutover swap or rollback (L19).
 
 `error_type` is the exception class behind a `failed` run, and only that: this
 endpoint is unauthenticated. The sanitised message is in the
@@ -190,6 +210,15 @@ endpoint is unauthenticated. The sanitised message is in the
 `run_observed_full_corpus` is true only for a run that classified every row.
 A `--limit` run, an aborted run and any `busy` or `failed` run report false.
 It is `null` on a record written before the field existed.
+
+`stale_sweep` and `stale_swept_count` are the L10 sweep's result, the same
+value as the run line's `stale_sweep=`. `not_run` means the sweep is enabled
+but the run never reached it (`unchanged`, `failed`, `busy`). `rechunk` is
+L18's: `null` when no re-chunk is pending, and `refused` on every tick until
+an operator runs one by hand (RUNBOOK). The sweep fields are `null` / `0` on
+a failure reported before the coordinator ran. `rechunk` is not: a `busy`
+tick or an early failure carries a previous `refused` forward, because
+neither looked, and only a run that completes clears it.
 
 `last_run` is `null` until a run completes — an hourly job that has never run
 is not the same as one that ran and succeeded.
@@ -297,7 +326,7 @@ checked on a slice, a re-export by hand.
 
 ```bash
 python -m exporter.run_sync --agency-id … [--run-id …] [--force] [--limit N] \
-  [--accept-existing-content] [--output-json PATH|-]
+  [--accept-existing-content] [--accept-rechunk] [--output-json PATH|-]
 ```
 
 The report is JSON on stdout (or the file); logs go to stderr. Exit codes are
@@ -376,6 +405,15 @@ configuration error. CLI runs take the same lock and show up in `/health`.
   - Such a run never writes a marker and removes any it finds, because the
     destination's content is no longer all this service's own. If it fails,
     the retry needs the flag again.
+- **A re-chunk on the llm-module sink needs `--accept-rechunk` (L18).** A
+  `CHUNK_PROFILE`, `CHUNKER_VERSION` or `NORMALISER_VERSION` change re-chunks
+  every document, and on a sink that re-embeds what it receives that is a
+  full corpus re-embed on someone else's service. While any committed
+  document is on another geometry, a run without the flag fails
+  (`RechunkNotAcknowledged`, `rechunk: refused`) having sent nothing — every
+  tick, until an operator runs it by hand. A `--limit` slice does not unlock
+  the cron: the rest of the corpus is still pending. CLI only. Procedure:
+  [RUNBOOK.md](RUNBOOK.md#changing-chunk-geometry-on-the-llm-module-sink).
 
 **Interrupting a run.** On SIGTERM or Ctrl-C the export stops submitting
 documents and waits for the ones already in flight. One stuck S3 call can
@@ -517,11 +555,14 @@ not a fault in this run.
 | Per-document upsert | `metadata.json` + `chunks/NNNNN.json` | one request carrying the record + its chunks | The sink owns batching; the coordinator calls `upsert_document()` either way |
 | Deterministic addressing | blob key from `ids.py` | `chunk_id` as the point id — a contract requirement | If the far side re-keys on a content hash instead, idempotency is void |
 | `list` | yes | no | Reconcile degrades to manifest-trusted reporting; the orphan sweep uses `synced_at` instead of a listing |
-| Batch delete | yes, or per-key fallback | per-document / per-agency delete | `DeleteOutcome` is identical either way — a missing batch API stays a performance note |
-| Metadata-only merge | 1 small blob write, 0 chunk writes | merge on N chunk payloads, `content` not resent | If unsupported, `metadata_changed` degrades to a full re-push and a re-embed. Always reported, never hidden |
-| Atomic per document | no — publish write order provides it | yes, when the document fits one request | No chunk is ever retrievable before its document's metadata, regardless of sink |
+| Batch delete | yes, or per-key fallback | batches of up to 500 document ids, one item each; tails by point id | `DeleteOutcome` is identical either way — a missing batch API stays a performance note |
+| Stale sweep (`STALE_SWEEP_ENABLED`) | not supported — the ordinal tail rule (Stage J) | `synced_at < run start` **and not in the manifest's keep list** (agreed: §13 q4, q12) | Reported as `stale_sweep=not_supported`; never improvised |
+| Agency delete (purge) | prefix delete | by the filterable `agency_id` (agreed: §13 q4, q11). Nothing calls it yet | `NotSupported` |
+| Re-chunk (a fingerprint change) | a longer run | a full corpus **re-embed** | On the llm-module sink the run is refused until an operator passes `--accept-rechunk` (RUNBOOK) |
+| Metadata-only merge | 1 small blob write, 0 chunk writes | the record alone, merged onto every point all-or-nothing (agreed: §13 q3), **only with `LLM_MODULE_ENABLE_METADATA_MERGE=true`** | If unsupported or not enabled, `metadata_changed` degrades to a full re-push and a re-embed. Always reported, never hidden |
+| Atomic per document | no — publish write order provides it | when the document fits one request; a larger one is split into ordered parts, **each carrying the full record** | No chunk is ever retrievable before its document's metadata, regardless of sink |
 | Holds the manifest | yes | no | Manifest store is configured separately for `llm_module` |
-| Read-back for reconcile | via `list` | only if the llm-module exposes one | Reconcile reports **"unverifiable"** rather than "clean" |
+| Read-back for reconcile | via `list` | `GET` per document, listing ordinals (agreed: §13 q13). A `404` counts as "nothing held" only when its body says so | Reconcile reports **"unverifiable"** rather than "clean" |
 
 So: on the `llm_module` sink, `list`-dependent operations (reconcile,
 orphan sweep) are expected to report degraded results. That is the sink's
@@ -553,11 +594,80 @@ Two rules an operator reading a report should know:
   fails having committed nothing.
 
 `exporter/sinks/factory.py` is the only place `CONTENT_SINK` is resolved, and
-`exporter/stores/factory.py` the only place a store backend is. Startup does
-not call either yet; Stage F wires them into the run. `object_store` builds
-`ObjectStoreSink` over the `s3` backend (`exporter/stores/s3_store.py`).
-`llm_module` (Stage L), `azure_blob` (Stage H) and a `local` manifest store
-(D19) each refuse, naming the task that builds them.
+`exporter/stores/factory.py` the only place a store backend is. Each run
+builds them; startup does not. `object_store` builds `ObjectStoreSink` over
+the `s3` backend (`exporter/stores/s3_store.py`). `azure_blob` (Stage H) and
+a `local` manifest store (D19) each refuse, naming the task that builds
+them. `llm_module` builds `LlmModuleSink` (`exporter/sinks/llm_module_sink.py`
+— push, split parts, per-item partial failure, idempotency keys, deletes,
+the keep-list sweep, read-back), carrying the run id its Idempotency-Keys
+name and a credential read from Vault on every operation (L11). The sink is
+selectable because the contract is agreed.
+
+The llm-module wire contract is
+[`docs/llm-module-ingest-contract.md`](docs/llm-module-ingest-contract.md),
+with its models in `exporter/sinks/llm_module_contract.py`. It is
+**agreed — recorded 2026-10-28 on the assumption that the llm-module owner
+accepts it as proposed; written sign-off is pending.** What the far side has
+promised lives in one constant, `AGREED_TERMS`:
+- status `agreed`;
+- metadata-only merges (a sidecar change sends the record alone; nothing is
+  re-embedded). These stay off per deployment unless
+  `LLM_MODULE_ENABLE_METADATA_MERGE=true`, because a far side that
+  acknowledged a merge without applying it would fail silently;
+- the agency delete;
+- the keep-list stale sweep (still off per deployment unless
+  `STALE_SWEEP_ENABLED`);
+- read-back with ordinals, which the first-run check uses;
+- at most 2 documents in parallel.
+
+`PROPOSED_TERMS` keeps the safe values that applied before the agreement:
+no merge, no agency delete, no sweep, no read-back, and the sink refused at
+startup. If written sign-off differs on any answer, that field goes back to
+its `PROPOSED_TERMS` value. Still open, because they are facts rather than
+terms: the embedder's token limit (an `llm_module` deployment must set
+`CHUNK_PROFILE` and confirm it in `LLM_MODULE_CHUNK_PROFILE_CONFIRMED`), any
+enrichment step, and who owns the cutover swap.
+
+**Credential (L11).** `LLM_MODULE_VAULT_SECRET_PATH` names a KV v2 secret
+holding `{"token": "..."}`, read with the token Vault Agent keeps at
+`VAULT_TOKEN_PATH`. In compose that agent is `vault-agent-content`, behind
+the `llm-module` profile (`docker compose --profile llm-module up -d`), and
+`vault/init.sh` creates its role and a `REPLACE_ME` placeholder at
+`content-external/llm_module` — deliberately outside `llm/connections/*`,
+which other services' policies can read. A placeholder is refused, never
+sent. In a cluster, `contentExternal.vaultAgent.enabled: true` runs the same
+agent as a sidecar. It authenticates with the pod's service account
+(Kubernetes auth, the default, so there is nothing to rotate) or with
+AppRole, keeps the token in a memory-backed volume, and points
+`VAULT_ADDR` / `VAULT_TOKEN_PATH` at it. A cluster with the Vault Agent
+Injector can use its annotations instead. The Vault-side setup and the
+render-time guards are in `charts/ckb/values.yaml`.
+
+**Against the stub, on a laptop (L15).** `tests/llm_module_stub.py` is the
+contract as a FastAPI app. The sink refuses `http://`, so serve it over TLS
+and trust its certificate:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -days 7 -subj /CN=localhost \
+    -keyout stub.key -out stub.crt
+uv run uvicorn --app-dir tests llm_module_stub:app --port 8443 \
+    --ssl-keyfile stub.key --ssl-certfile stub.crt
+# then, for the exporter:
+CONTENT_SINK=llm_module CHUNK_PROFILE=compact \
+LLM_MODULE_CHUNK_PROFILE_CONFIRMED=compact \
+LLM_MODULE_BASE_URL=https://localhost:8443 LLM_MODULE_COLLECTION=ckb_chunks_v1 \
+REQUESTS_CA_BUNDLE=$PWD/stub.crt ...
+```
+
+**The cutover (L19–L25)** — bootstrapping beside the llm-module's existing
+corpus, the retrieval comparison, the swap and its rollback, and dropping the
+old corpus — is planned in
+[`docs/llm-module-cutover.md`](docs/llm-module-cutover.md). The hourly ZIP
+job is not part of it and keeps running (L24).
+
+The stub serves a well-behaved llm-module; its failure scripting is for the
+tests, which run it in-process with no network.
 
 What the object-store sink does and doesn't touch:
 
@@ -571,6 +681,23 @@ What the object-store sink does and doesn't touch:
   to the manifest store and survive a purge.
 - **`sweep_stale` is not supported.** On a listable store, orphans are swept
   by the ordinal tail rule; the `synced_at` sweep is for the llm-module sink.
+
+What the llm-module sink does on delete and sweep:
+
+- **Document deletes go in batches, one item per document.** The far side
+  deletes a document's points before its record. `404` is "already gone" and
+  counts as success; a retryable item is resent alone, and whatever is still
+  failing is journalled for a later run.
+- **A tail goes as point ids**, rendered from the ordinals the diff hands
+  over. The record stays.
+- **The sweep carries a keep list.** `STALE_SWEEP_ENABLED=true` (off by
+  default) runs it after a committed run that saw the whole corpus and held
+  nothing back. It asks the far side to delete what was synced before this
+  run started **and** is not among the documents the committed manifest
+  lists. An unchanged document is never re-sent, so it keeps an old
+  `synced_at` while being live — the keep list is what spares it. A keep
+  list is never split and never empty. The outcome is `stale_sweep=` in the
+  run line and report; it never changes the run's outcome.
 
 ### Does this store work? — the conformance suites
 

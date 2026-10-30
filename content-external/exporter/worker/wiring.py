@@ -42,11 +42,13 @@ def build_coordinator(
     settings: Settings,
     *,
     agency_id: str,
+    run_id: str,
     work_dir: Path,
     run_state: RunStateStore | None,
     source_factory: SourceFactory = build_document_source,
 ) -> PublishCoordinator:
-    """One run's coordinator, bound to `agency_id`.
+    """One run's coordinator, bound to `agency_id`, for the run `run_id`
+    (which the llm-module sink's Idempotency-Keys carry).
 
     `work_dir` is the RESOLVED work dir assert_work_dir_usable() returned,
     not settings.content_work_dir: the lock, the journal and the last-run
@@ -54,7 +56,7 @@ def build_coordinator(
     tests use to swap in a fake source.
     """
     source = source_factory(settings)
-    sink = build_sink(settings, agency_id=agency_id)
+    sink = build_sink(settings, agency_id=agency_id, run_id=run_id)
     profile = settings.resolved_chunk_profile
     return PublishCoordinator(
         sink=sink,
@@ -73,4 +75,5 @@ def build_coordinator(
         concurrency=settings.export_concurrency,
         sink_failure_abort_threshold=settings.sink_failure_abort_threshold,
         run_state=run_state,
+        stale_sweep_enabled=settings.stale_sweep_enabled,
     )

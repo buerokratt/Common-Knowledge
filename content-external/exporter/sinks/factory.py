@@ -6,55 +6,111 @@ dispatch table on a sink name here, in stores/factory.py and in api/config.py,
 and nowhere else.
 
 `object_store` is built over the destination store from stores/factory.py
-(D7, D14). `llm_module` still maps to the task that builds it (L1) and
-refuses with a message naming it. Nothing calls this at startup yet — Stage F
-wires it into the run — so neither the refusal nor a missing EXTERNAL_S3_*
-value can affect /health.
+(D7, D14). `llm_module` is the HTTP sink (Stage L), given the run id its
+Idempotency-Keys carry and a token provider that reads Vault on every call
+(L11). It is refused while the ingest contract is PROPOSED — the startup
+validator refuses it first, and this re-asserts it, so no path selects the
+sink against an unagreed contract. Nothing calls this at startup, so neither
+a refusal here nor a missing EXTERNAL_S3_* value can affect /health.
 
-THE SINK ID IS THE CONTENT_SINK VALUE. The manifest records it (F17), and a
-mismatch fails the run rather than reading as a first run. Bucket and endpoint
-are deliberately not part of it: moving the same objects to a new endpoint is
-not a change of destination, and must not trip that guard.
+THE SINK ID NAMES THE DESTINATION'S CONTENT, NOT ITS ADDRESS. It is
+`Settings.sink_id`: the CONTENT_SINK value for `object_store`, and
+`llm_module:<LLM_MODULE_COLLECTION>` for `llm_module`, because the cutover
+bootstraps a new collection beside the live one (L19) and a manifest written
+for one collection must never be diffed against another. The manifest
+records it (F17), and a mismatch fails the run rather than reading as a first
+run.
+
+The metadata merge is AGREED_TERMS's AND LLM_MODULE_ENABLE_METADATA_MERGE
+(L25): off by default, so a metadata change re-pushes the whole document
+until the deployment confirms the far side applies a merge.
+
+The collection is re-checked here against LLM_MODULE_PROTECTED_COLLECTIONS
+as well as the legacy names, and refused as a ConfigurationError like every
+other refusal here — so a Settings built without validation cannot write to
+the alias either.
 """
 
+import logging
 from collections.abc import Callable
+from dataclasses import replace
 
-from exporter.api.config import ConfigurationError, Settings
+from exporter.api.config import (
+    ConfigurationError,
+    Settings,
+    fetch_llm_module_token,
+    llm_module_contract_refusal,
+)
 from exporter.sinks.base import ContentSink
+from exporter.sinks.llm_module_contract import AGREED_TERMS, validate_collection
+from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import ObjectStoreSink
 from exporter.stores.factory import build_destination_store
 
+logger = logging.getLogger(__name__)
 
-def _build_object_store(settings: Settings, agency_id: str) -> ContentSink:
+
+def _build_object_store(settings: Settings, agency_id: str, run_id: str) -> ContentSink:
     return ObjectStoreSink(
         store=build_destination_store(settings),
         prefix=settings.content_external_prefix,
         agency_id=agency_id,
-        sink_id=settings.content_sink,
+        sink_id=settings.sink_id,
+    )
+
+
+def _build_llm_module(settings: Settings, agency_id: str, run_id: str) -> ContentSink:
+    refusal = llm_module_contract_refusal(
+        allow_proposed=settings.llm_module_allow_proposed_contract
+    )
+    if refusal is not None:
+        raise ConfigurationError(refusal)
+    try:
+        validate_collection(
+            settings.llm_module_collection,
+            settings.protected_llm_module_collections,
+        )
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
+    if AGREED_TERMS.status != "agreed":
+        logger.warning(
+            "CONTENT_SINK=llm_module against the PROPOSED ingest contract "
+            "(LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true): development only"
+        )
+    # L25: the merge is the one agreed term a deployment must also opt into,
+    # because the far side answering a merge without applying it is silent.
+    terms = replace(
+        AGREED_TERMS,
+        supports_metadata_only_merge=AGREED_TERMS.supports_metadata_only_merge
+        and settings.llm_module_enable_metadata_merge,
+    )
+    return LlmModuleSink(
+        base_url=settings.llm_module_base_url,
+        collection=settings.llm_module_collection,
+        agency_id=agency_id,
+        sink_id=settings.sink_id,
+        run_id=run_id,
+        token_provider=lambda: fetch_llm_module_token(settings),
+        ingest_schema_version=settings.llm_module_ingest_schema_version,
+        max_request_bytes=settings.llm_module_max_request_bytes,
+        connect_timeout=settings.llm_module_connect_timeout,
+        read_timeout=settings.llm_module_read_timeout,
+        terms=terms,
     )
 
 
 # CONTENT_SINK value -> builder.
-_SINKS: dict[str, Callable[[Settings, str], ContentSink]] = {
+_SINKS: dict[str, Callable[[Settings, str, str], ContentSink]] = {
     "object_store": _build_object_store,
-}
-
-# CONTENT_SINK value -> the task that will register an implementation.
-_NOT_YET_BUILT: dict[str, str] = {
-    "llm_module": "L1",
+    "llm_module": _build_llm_module,
 }
 
 
-def build_sink(settings: Settings, *, agency_id: str) -> ContentSink:
-    """The configured sink, bound to `agency_id`."""
-    name = settings.content_sink
-    builder = _SINKS.get(name)
-    if builder is not None:
-        return builder(settings, agency_id)
-    task = _NOT_YET_BUILT.get(name)
-    if task is not None:
+def build_sink(settings: Settings, *, agency_id: str, run_id: str) -> ContentSink:
+    """The configured sink, bound to `agency_id` for the run `run_id`."""
+    builder = _SINKS.get(settings.content_sink)
+    if builder is None:
         raise ConfigurationError(
-            f"CONTENT_SINK={name} has no implementation in this build yet "
-            f"(task {task})."
+            f"CONTENT_SINK={settings.content_sink} is not a known sink"
         )
-    raise ConfigurationError(f"CONTENT_SINK={name} is not a known sink")
+    return builder(settings, agency_id, run_id)

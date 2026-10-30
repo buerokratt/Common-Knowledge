@@ -69,6 +69,8 @@ _RESERVED = frozenset(
         "error_type",
         "full_corpus",
         "dead_lettered",
+        "stale_sweep",
+        "rechunk",
         *(f"{_UPSERT_PREFIX}{outcome}" for outcome in UPSERT_OUTCOMES),
     }
 )
@@ -100,6 +102,8 @@ def format_run_line(
     upsert_outcomes: Mapping[str, int] | None = None,
     full_corpus: bool = False,
     dead_lettered: int = 0,
+    stale_sweep: str = "disabled",
+    rechunk: str | None = None,
 ) -> str:
     """Render the terminal line. Pure — no logging, so it is testable.
 
@@ -131,6 +135,11 @@ def format_run_line(
         # E9: documents in the dead-letter record. Nonzero is worth an alert
         # that is not a page: the export works, these documents do not.
         "dead_lettered": str(int(dead_lettered)),
+        # L10: what the stale sweep did after the commit; `failed` here is
+        # worth a look but never a page, the commit stood.
+        "stale_sweep": scrub_value(stale_sweep),
+        # L18: `refused` means a re-chunk is waiting for an operator.
+        "rechunk": scrub_value(rechunk) if rechunk else "-",
     }
     for bucket in DIFF_BUCKETS:
         fields[f"{_COUNT_PREFIX}{bucket}"] = str(int(counts.get(bucket, 0)))
@@ -155,6 +164,8 @@ def log_run_outcome(
     upsert_outcomes: Mapping[str, int] | None = None,
     full_corpus: bool = False,
     dead_lettered: int = 0,
+    stale_sweep: str = "disabled",
+    rechunk: str | None = None,
 ) -> str:
     """Emit the terminal line once, and return it.
 
@@ -174,6 +185,8 @@ def log_run_outcome(
         upsert_outcomes=upsert_outcomes,
         full_corpus=full_corpus,
         dead_lettered=dead_lettered,
+        stale_sweep=stale_sweep,
+        rechunk=rechunk,
     )
     logger.error(line) if outcome == "failed" else logger.info(line)
     return line

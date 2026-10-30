@@ -40,14 +40,18 @@ services:
       - vault-init-data:/vault/data
       - vault-agent-creds:/agent/credentials
       - vault-agent-token:/agent/out
+      # vault-agent-content's token volume, prepared here so the agent (which
+      # runs as vault) can write to it. Unused unless the llm-module profile
+      # is up.
+      - vault-agent-content-token:/agent/content-out
       - ./vault/init.sh:/vault/init.sh:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         apk add --no-cache curl jq >/dev/null 2>&1 &&
         chmod -R 755 /agent/credentials &&
-        chmod -R 770 /agent/out &&
-        chown -R vault:vault /agent/credentials /agent/out /vault/data &&
+        chmod -R 770 /agent/out /agent/content-out &&
+        chown -R vault:vault /agent/credentials /agent/out /agent/content-out /vault/data &&
         su vault -s /bin/sh /vault/init.sh
     environment:
       VAULT_ADDR: "http://vault:8200"
@@ -70,6 +74,38 @@ services:
       - vault-agent-token:/agent/out
       - ./vault/agents/cleaner/agent.hcl:/vault/agent-cleaner.hcl:ro
     command: ["vault", "agent", "-config=/vault/agent-cleaner.hcl", "-log-level=info"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /agent/out/token && test -s /agent/out/token"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  # ─────────────────────────────────────────────
+  # VAULT AGENT — for content-external's llm-module sink (L11; Stage H's
+  # Azure credential will share it). Behind a profile: an object-store
+  # deployment needs no credential from Vault, so it does not run this.
+  #   docker compose --profile llm-module up -d
+  # ─────────────────────────────────────────────
+  vault-agent-content:
+    image: hashicorp/vault:1.21.3
+    container_name: vault-agent-content
+    profiles: ["llm-module"]
+    restart: unless-stopped
+    networks:
+      - bykstack
+    volumes:
+      - vault-agent-creds:/agent/credentials:ro
+      - vault-agent-content-token:/agent/out
+      - ./vault/agents/content/agent.hcl:/vault/agent-content.hcl:ro
+    command: ["vault", "agent", "-config=/vault/agent-content.hcl", "-log-level=info"]
     environment:
       VAULT_ADDR: "http://vault:8200"
     cap_add:
@@ -446,6 +482,12 @@ services:
       - 8125:8125
     volumes:
       - content-external-work:/var/lib/content-external
+      # vault-agent-content's token, read per llm-module operation (L11).
+      # Empty unless the llm-module profile runs; an object-store deployment
+      # never reads it. No depends_on, deliberately: a missing token fails
+      # each push as credential-unavailable, which F19 turns into an aborted
+      # run, rather than this service refusing to start.
+      - vault-agent-content-token:/agent/out:ro
     environment:
       # Required, with no default in the code: a fallback would let a
       # deployment that forgot this write the run lock and the deletion
@@ -491,6 +533,12 @@ services:
       # - CONTENT_SINK=llm_module
       # - CHUNK_PROFILE=                  # REQUIRED here, no default: choose
       #                                   # from their embedder's token budget
+      # - LLM_MODULE_CHUNK_PROFILE_CONFIRMED= # the same preset name again, once
+      #                                   # checked against §13 q1; startup
+      #                                   # refuses llm_module until they match
+      # - LLM_MODULE_ENABLE_METADATA_MERGE=true # L25, off by default: only once
+      #                                   # the far side is confirmed to apply a
+      #                                   # merge all-or-nothing
       # - MANIFEST_STORE_BACKEND=s3
       # - MANIFEST_STORE_ENDPOINT_URL=
       # - MANIFEST_STORE_BUCKET=
@@ -499,7 +547,24 @@ services:
       #   EXTERNAL_S3_SECRET_ACCESS_KEY above — required at startup here)
       # - LLM_MODULE_BASE_URL=            # https:// only — the body is
       #                                   # Estonian government document text
-      # - LLM_MODULE_VAULT_SECRET_PATH=   # fetched per task, never cached
+      # - LLM_MODULE_COLLECTION=          # L19: the NEW physical collection,
+      #                                   # never the retrieval alias and never
+      #                                   # contextual_chunks_* (refused)
+      # - LLM_MODULE_PROTECTED_COLLECTIONS= # the retrieval alias (+ any live
+      #                                   # collection), comma-separated: refused
+      # - LLM_MODULE_VAULT_SECRET_PATH=content-external/llm_module
+      #                                   # fetched per task, never cached;
+      #                                   # needs the llm-module profile up
+      # - VAULT_TOKEN_PATH=/agent/out/token
+      # The ingest contract is AGREED (recorded 2026-10-28, sign-off pending),
+      # so CONTENT_SINK=llm_module needs no development flag. Only if that
+      # agreement is withdrawn does it need, against the stub only:
+      # - LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true
+      #
+      # The stale sweep (L10): off by default. When on, a committed run that
+      # saw the whole corpus asks the destination to drop what the manifest
+      # no longer accounts for. The object-store sink reports not_supported.
+      # - STALE_SWEEP_ENABLED=true
       #
       # MANIFEST_STORE_BACKEND=local is development only and additionally
       # requires MANIFEST_STORE_ALLOW_LOCAL=true. Do not set it here: a
@@ -551,6 +616,7 @@ volumes:
   vault-logs:
   vault-agent-creds:
   vault-agent-token:
+  vault-agent-content-token:
   # vault-agent-cleaner-token removed — was unused (agent writes to vault-agent-token)
 
 networks:

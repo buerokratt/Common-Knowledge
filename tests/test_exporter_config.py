@@ -28,6 +28,8 @@ from exporter.core.constants import (
     MAX_CHUNK_ORDINAL,
 )
 from exporter.core.ids import chunker_fingerprint
+from exporter.sinks.base import CredentialUnavailableError
+from exporter.sinks.llm_module_contract import PROPOSED_TERMS
 
 WORK_DIR_ENV = "CONTENT_WORK_DIR"
 
@@ -143,6 +145,7 @@ def test_nothing_but_the_work_dir_is_required(clean_env: None) -> None:
 _LLM_MODULE_MINIMUM: dict[str, str] = {
     "content_sink": "llm_module",
     "chunk_profile": "azure_native",
+    "llm_module_chunk_profile_confirmed": "azure_native",
     "manifest_store_backend": "s3",
     "manifest_store_endpoint_url": "https://store.example",
     "manifest_store_bucket": "content-manifests",
@@ -150,7 +153,10 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     "external_s3_access_key_id": "manifest-key-id",
     "external_s3_secret_access_key": "manifest-secret",
     "llm_module_base_url": "https://llm.example/ingest",
+    "llm_module_collection": "ckb_chunks_v1",
     "llm_module_vault_secret_path": "llm/connections/ingest",
+    # No LLM_MODULE_ALLOW_PROPOSED_CONTRACT: the contract is AGREED
+    # (AGREED_TERMS), so the minimum deployment needs no development flag.
 }
 
 
@@ -185,6 +191,7 @@ def test_matrix_row_2_llm_module_without_a_manifest_store_is_refused() -> None:
     ("dropped", "expected"),
     [
         ("llm_module_base_url", "LLM_MODULE_BASE_URL"),
+        ("llm_module_collection", "LLM_MODULE_COLLECTION"),
         ("llm_module_vault_secret_path", "LLM_MODULE_VAULT_SECRET_PATH"),
     ],
 )
@@ -203,6 +210,57 @@ def test_matrix_row_3_names_both_when_both_are_missing() -> None:
     message = str(excinfo.value)
     assert "LLM_MODULE_BASE_URL" in message
     assert "LLM_MODULE_VAULT_SECRET_PATH" in message
+
+
+@pytest.mark.parametrize(
+    ("collection", "expected"),
+    [
+        ("contextual_chunks_azure", "never in place"),
+        ("Contextual_Chunks_AWS", "never in place"),
+        ("ckb/chunks", "LLM_MODULE_COLLECTION"),
+        ("ckb chunks", "LLM_MODULE_COLLECTION"),
+        ("..", "LLM_MODULE_COLLECTION"),
+        ("c" * 65, "LLM_MODULE_COLLECTION"),
+    ],
+)
+def test_l19_the_collection_is_a_new_one_and_a_plain_segment(
+    collection: str, expected: str
+) -> None:
+    """L19: bootstrap beside, never into the llm-module's existing corpus,
+    and the name goes into a URL path, so it must be one plain segment."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_collection=collection)
+    assert expected in str(excinfo.value)
+
+
+def test_l19_a_new_collection_is_accepted() -> None:
+    settings = _llm_module_settings(llm_module_collection="ckb_chunks-v2")
+    assert settings.llm_module_collection == "ckb_chunks-v2"
+    assert settings.sink_id == "llm_module:ckb_chunks-v2"
+
+
+@pytest.mark.parametrize("collection", ["ckb_retrieval", "CKB_RETRIEVAL"])
+def test_l19_a_protected_collection_is_refused(collection: str) -> None:
+    """The retrieval alias, named by the deployment: prose saying "never the
+    alias" protects nothing, a startup refusal does."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(
+            llm_module_collection=collection,
+            llm_module_protected_collections="ckb_live, ckb_retrieval,",
+        )
+    assert "LLM_MODULE_PROTECTED_COLLECTIONS" in str(excinfo.value)
+
+
+def test_l19_protected_collections_parse_and_do_not_block_others() -> None:
+    settings = _llm_module_settings(
+        llm_module_protected_collections=" ckb_retrieval ,, ckb_live "
+    )
+    assert settings.protected_llm_module_collections == {"ckb_retrieval", "ckb_live"}
+    assert settings.llm_module_collection == "ckb_chunks_v1"
+
+
+def test_the_object_store_sink_id_is_the_sink_name(clean_env: None) -> None:
+    assert _settings().sink_id == "object_store"
 
 
 def test_matrix_row_4_local_manifest_store_needs_the_dev_flag() -> None:
@@ -729,6 +787,62 @@ def test_llm_module_without_an_explicit_chunk_profile_is_refused(
     assert "silently truncated" in message
 
 
+@pytest.mark.parametrize("confirmed", ["", "compact", "Azure_Native"])
+def test_llm_module_needs_the_chunk_profile_confirmed_by_name(
+    clean_env: None, confirmed: str
+) -> None:
+    """B11 / §13 q1: compose and the chart set CHUNK_PROFILE for every
+    deployment, so an explicit CHUNK_PROFILE proves nothing was chosen. The
+    confirmation must name the profile in force — and stops matching when
+    CHUNK_PROFILE changes without it."""
+    with pytest.raises(ValidationError) as excinfo:
+        _llm_module_settings(llm_module_chunk_profile_confirmed=confirmed)
+    message = str(excinfo.value)
+    assert "LLM_MODULE_CHUNK_PROFILE_CONFIRMED=azure_native" in message
+    assert "silently truncated" in message
+
+
+def test_a_confirmed_chunk_profile_is_accepted(clean_env: None) -> None:
+    settings = _llm_module_settings(
+        chunk_profile="compact", llm_module_chunk_profile_confirmed="compact"
+    )
+    assert settings.chunk_profile == "compact"
+
+
+def test_compose_and_chart_never_confirm_a_chunk_profile() -> None:
+    """The confirmation is a deliberate act per llm_module deployment; a
+    default on either surface would make it the same rubber stamp an
+    explicit CHUNK_PROFILE already is there."""
+    for surface in (
+        REPO_ROOT / "docker-compose.yml",
+        REPO_ROOT / "charts" / "ckb" / "values.yaml",
+    ):
+        for line in surface.read_text(encoding="utf-8").splitlines():
+            if "LLM_MODULE_CHUNK_PROFILE_CONFIRMED" in line:
+                assert line.lstrip().startswith("#"), (surface.name, line)
+
+
+def test_the_metadata_merge_is_off_unless_the_deployment_opts_in(
+    clean_env: None,
+) -> None:
+    """L25: the far side answering a merge without applying it is silent, so
+    the agreed term alone does not switch the merge on (sinks/factory.py)."""
+    assert _llm_module_settings().llm_module_enable_metadata_merge is False
+    settings = _llm_module_settings(llm_module_enable_metadata_merge=True)
+    assert settings.llm_module_enable_metadata_merge is True
+
+
+def test_the_merge_opt_in_is_refused_when_the_contract_does_not_promise_it(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(config_module, "AGREED_TERMS", PROPOSED_TERMS)
+    with pytest.raises(ValidationError, match="LLM_MODULE_ENABLE_METADATA_MERGE"):
+        _llm_module_settings(
+            llm_module_enable_metadata_merge=True,
+            llm_module_allow_proposed_contract=True,
+        )
+
+
 def test_object_store_may_rely_on_the_default_chunk_profile(clean_env: None) -> None:
     settings = _settings()
     assert "chunk_profile" not in settings.model_fields_set
@@ -928,3 +1042,221 @@ def test_echo_logs_once_at_info_with_no_secret(
     message = records[0].getMessage()
     assert message.startswith(CONFIG_LOG_PREFIX)
     assert "s3cr3t-never-log-me" not in message
+
+
+# --------------------------------------------------------------------------
+# The contract gate (Stage L)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def proposed_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The contract as it was before the agreement was recorded — so the
+    gate's refusal is still proven, and still works if the agreement is
+    withdrawn (AGREED_TERMS back to PROPOSED_TERMS)."""
+    monkeypatch.setattr(config_module, "AGREED_TERMS", PROPOSED_TERMS)
+
+
+def test_llm_module_is_refused_while_the_contract_is_proposed(
+    proposed_contract: None,
+) -> None:
+    """Against an unagreed contract two wrong guesses fail silently (L4,
+    B11), so the sink is refused at startup, naming the open items."""
+    with pytest.raises(ValidationError, match="PROPOSED") as excinfo:
+        _llm_module_settings(llm_module_allow_proposed_contract=False)
+    assert "Open items 5 and 7" in str(excinfo.value)
+    assert "LLM_MODULE_ALLOW_PROPOSED_CONTRACT" in str(excinfo.value)
+
+
+def test_the_development_flag_lets_llm_module_start_against_the_proposal(
+    proposed_contract: None,
+) -> None:
+    settings = _llm_module_settings(llm_module_allow_proposed_contract=True)
+    assert settings.content_sink == "llm_module"
+
+
+def test_the_agreed_contract_lifts_the_gate() -> None:
+    """The recorded agreement (AGREED_TERMS.status = "agreed"): an
+    llm_module deployment starts with no development flag."""
+    assert config_module.AGREED_TERMS.status == "agreed"
+    settings = _llm_module_settings(llm_module_allow_proposed_contract=False)
+    assert settings.content_sink == "llm_module"
+    assert config_module.llm_module_contract_refusal(allow_proposed=False) is None
+
+
+def test_the_contract_gate_never_touches_an_object_store_deployment() -> None:
+    assert _settings(llm_module_allow_proposed_contract=False).content_sink == (
+        "object_store"
+    )
+
+
+def test_the_stale_sweep_is_off_unless_asked_for(clean_env: None) -> None:
+    assert _settings().stale_sweep_enabled is False
+
+
+# --------------------------------------------------------------------------
+# L11 — the llm-module credential, from Vault, per call
+# --------------------------------------------------------------------------
+
+_SECRET_PATH = "llm/connections/llm_module/content"
+
+
+class _VaultResponse:
+    def __init__(self, status: int, payload: object) -> None:
+        self.status_code = status
+        self._payload = payload
+        self.headers: dict[str, str] = {}
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            import requests
+
+            raise requests.HTTPError(response=self)  # type: ignore[arg-type]
+
+    def json(self) -> object:
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+def _vault(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    response: _VaultResponse,
+    *,
+    agent_token: str = "agent-token-1",
+) -> tuple[Settings, list[dict[str, object]]]:
+    token_file = tmp_path / "token"
+    token_file.write_text(agent_token, encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    def get(url: str, **kwargs: object) -> _VaultResponse:
+        calls.append({"url": url, **kwargs})
+        return response
+
+    monkeypatch.setattr(config_module.requests, "get", get)
+    settings = Settings.model_construct(
+        vault_addr="http://vault:8200/",
+        vault_token_path=str(token_file),
+        llm_module_vault_secret_path=f"/{_SECRET_PATH}/",
+    )
+    return settings, calls
+
+
+def _secret(token: object) -> _VaultResponse:
+    return _VaultResponse(200, {"data": {"data": {"token": token}}})
+
+
+def test_the_credential_is_read_from_vault_with_the_agent_token(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("  bearer-xyz  "))
+
+    assert config_module.fetch_llm_module_token(settings) == "bearer-xyz"
+    assert config_module.fetch_llm_module_token(settings) == "bearer-xyz"
+
+    # Read on every call, never cached: Vault Agent's rotation is respected.
+    assert len(calls) == 2
+    assert calls[0]["url"] == f"http://vault:8200/v1/secret/data/{_SECRET_PATH}"
+    assert calls[0]["headers"] == {"X-Vault-Token": "agent-token-1"}
+    assert calls[0]["allow_redirects"] is False
+    assert calls[0]["timeout"]
+
+
+@pytest.mark.parametrize(
+    ("response", "match"),
+    [
+        (_secret("REPLACE_ME"), "placeholder"),
+        (_secret(""), "no 'token' value"),
+        (_secret(None), "no 'token' value"),
+        (_VaultResponse(200, {"data": {}}), "unexpected shape"),
+        (_VaultResponse(200, ValueError("not json")), "unexpected shape"),
+        (_VaultResponse(403, {}), "HTTP 403"),
+    ],
+)
+def test_an_unusable_vault_answer_is_refused_without_echoing_it(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    response: _VaultResponse,
+    match: str,
+) -> None:
+    settings, _ = _vault(monkeypatch, tmp_path, response)
+
+    with pytest.raises(CredentialUnavailableError, match=match) as excinfo:
+        config_module.fetch_llm_module_token(settings, sleep=_no_sleep)
+    assert "agent-token-1" not in str(excinfo.value)
+
+
+def _no_sleep(_: float) -> None:
+    pass
+
+
+def test_a_refused_vault_read_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _VaultResponse(403, {}))
+
+    with pytest.raises(CredentialUnavailableError, match="HTTP 403"):
+        config_module.fetch_llm_module_token(settings, sleep=_no_sleep)
+    assert len(calls) == 1
+
+
+def test_a_vault_blip_is_retried_inside_one_fetch(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("bearer-xyz"))
+    answers = iter([_VaultResponse(503, {}), _VaultResponse(503, {})])
+
+    def get(url: str, **kwargs: object) -> _VaultResponse:
+        calls.append({"url": url, **kwargs})
+        return next(answers, _secret("bearer-xyz"))
+
+    monkeypatch.setattr(config_module.requests, "get", get)
+    slept: list[float] = []
+
+    assert (
+        config_module.fetch_llm_module_token(settings, sleep=slept.append)
+        == "bearer-xyz"
+    )
+    assert len(calls) == 3
+    assert len(slept) == 2
+
+
+def test_vault_down_past_the_backoff_names_it(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import requests
+
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("x"))
+
+    def get(url: str, **kwargs: object) -> _VaultResponse:
+        calls.append({"url": url, **kwargs})
+        raise requests.ConnectionError("connection refused to http://vault:8200")
+
+    monkeypatch.setattr(config_module.requests, "get", get)
+
+    with pytest.raises(CredentialUnavailableError, match="is Vault up") as excinfo:
+        config_module.fetch_llm_module_token(settings, sleep=_no_sleep)
+    assert len(calls) == config_module.VAULT_READ_POLICY.max_attempts
+    assert "agent-token-1" not in str(excinfo.value)
+
+
+def test_a_missing_agent_token_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("bearer-xyz"))
+    Path(settings.vault_token_path).unlink()
+
+    with pytest.raises(CredentialUnavailableError, match="Vault Agent token"):
+        config_module.fetch_llm_module_token(settings)
+    assert calls == []
+
+
+def test_an_empty_agent_token_is_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    settings, calls = _vault(monkeypatch, tmp_path, _secret("x"), agent_token="  ")
+
+    with pytest.raises(CredentialUnavailableError, match="is empty"):
+        config_module.fetch_llm_module_token(settings)
+    assert calls == []

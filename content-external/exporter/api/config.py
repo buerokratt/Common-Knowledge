@@ -39,10 +39,12 @@ deployment's manifest.
 import logging
 import os
 import posixpath
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
+import requests
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -55,7 +57,14 @@ from exporter.core.constants import (
 )
 from exporter.core.ids import chunker_fingerprint, validate_prefix
 from exporter.core.redaction import sanitize_sensitive_text
+from exporter.services.backoff import (
+    BackoffPolicy,
+    is_retryable_http,
+    retry_with_backoff,
+)
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
+from exporter.sinks.base import CredentialUnavailableError
+from exporter.sinks.llm_module_contract import AGREED_TERMS, validate_collection
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +123,126 @@ _ADDRESS_NOT_CREDENTIAL = frozenset(
 
 class ConfigurationError(RuntimeError):
     """The environment is unusable. Always fatal — never degraded service."""
+
+
+def llm_module_contract_refusal(*, allow_proposed: bool) -> str | None:
+    """Why CONTENT_SINK=llm_module may not run, or None if it may.
+
+    The startup validator and the sink factory both ask, so neither path can
+    select the sink against an unagreed contract.
+    """
+    if AGREED_TERMS.status == "agreed" or allow_proposed:
+        return None
+    return (
+        "CONTENT_SINK=llm_module is refused: the llm-module ingest contract "
+        "(content-external/docs/llm-module-ingest-contract.md) is still "
+        "PROPOSED. Open items 5 and 7 (the contract's §13 questions 2 and "
+        "4) — the endpoint itself, and chunk_id keying with a filterable "
+        "agency_id — are the llm-module owner's to answer, and a wrong "
+        "guess at the keying fails silently. "
+        "LLM_MODULE_ALLOW_PROPOSED_CONTRACT=true is for development against "
+        "the stub only."
+    )
+
+
+# L11. The key the llm-module credential is stored under in its Vault
+# secret, and the marker vault/init.sh writes before a real value exists.
+LLM_MODULE_TOKEN_KEY = "token"
+_VAULT_PLACEHOLDER = "REPLACE_ME"
+_VAULT_TIMEOUT = (5.0, 10.0)
+
+# F8's backoff on the Vault read, sized to ride out a Vault restart (~15s at
+# most across five attempts). A blip is absorbed here, inside one document,
+# so it never reaches the coordinator. An outage that outlasts it fails the
+# document permanently, and F19's consecutive-permanent abort then stops the
+# run — the right answer to a credential store that is down, rather than
+# grinding every remaining document through this backoff in turn.
+VAULT_READ_POLICY = BackoffPolicy(max_attempts=5, base_delay=1.0, max_delay=8.0)
+
+
+def _read_vault_agent_token(token_path: str) -> str:
+    """The token Vault Agent keeps fresh in its sink file."""
+    try:
+        token = Path(token_path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise CredentialUnavailableError(
+            f"could not read the Vault Agent token at {token_path} "
+            f"({type(exc).__name__})"
+        ) from None
+    if not token:
+        raise CredentialUnavailableError(
+            f"the Vault Agent token at {token_path} is empty"
+        )
+    return token
+
+
+def fetch_llm_module_token(
+    settings: "Settings",
+    *,
+    policy: BackoffPolicy = VAULT_READ_POLICY,
+    sleep: Callable[[float], None] = time.sleep,
+) -> str:
+    """The llm-module bearer credential, read from Vault now (L11, H4).
+
+    Called for every operation the llm-module sink performs and never
+    cached, as cleaning/api/config.py does per task, so a credential Vault
+    Agent rotates is picked up without a restart. A transient Vault failure
+    is retried with backoff (VAULT_READ_POLICY); a placeholder is refused
+    loudly rather than sent. Every failure is a CredentialUnavailableError
+    whose message names the check that failed and never carries the token or
+    the Vault response, so the sink logs it as it stands.
+    """
+    path = settings.llm_module_vault_secret_path.strip("/")
+    if not path:
+        raise CredentialUnavailableError("LLM_MODULE_VAULT_SECRET_PATH is not set")
+    agent_token = _read_vault_agent_token(settings.vault_token_path)
+    url = f"{settings.vault_addr.rstrip('/')}/v1/secret/data/{path}"
+
+    def get() -> requests.Response:
+        response = requests.get(
+            url,
+            headers={"X-Vault-Token": agent_token},
+            timeout=_VAULT_TIMEOUT,
+            allow_redirects=False,
+        )
+        response.raise_for_status()
+        return response
+
+    try:
+        # A read is idempotent, so F8's rule applies as it stands: timeouts
+        # included, unlike a Resql query.
+        response = retry_with_backoff(
+            get,
+            describe=f"Vault read of {path}",
+            policy=policy,
+            is_retryable=is_retryable_http,
+            sleep=sleep,
+        )
+        data = response.json()["data"]["data"]
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else "?"
+        raise CredentialUnavailableError(
+            f"Vault refused the read of {path} (HTTP {status})"
+        ) from None
+    except requests.RequestException as exc:
+        raise CredentialUnavailableError(
+            f"Vault read of {path} failed ({type(exc).__name__}); is Vault up?"
+        ) from None
+    except (KeyError, TypeError, ValueError):
+        raise CredentialUnavailableError(
+            f"Vault secret {path} has an unexpected shape"
+        ) from None
+    raw = data.get(LLM_MODULE_TOKEN_KEY) if isinstance(data, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        raise CredentialUnavailableError(
+            f"Vault secret {path} has no {LLM_MODULE_TOKEN_KEY!r} value"
+        )
+    if _VAULT_PLACEHOLDER in raw:
+        raise CredentialUnavailableError(
+            f"Vault secret {path} still holds a placeholder "
+            f"({_VAULT_PLACEHOLDER}); store the real llm-module credential"
+        )
+    return raw.strip()
 
 
 def normalise_container_path(raw: str, *, variable: str) -> str:
@@ -223,11 +352,47 @@ class Settings(BaseSettings):
 
     # --- llm-module sink (Stage L) -----------------------------------------
     llm_module_base_url: str = ""
+    # L19: the collection this deployment writes to, in every request path.
+    # The PHYSICAL collection, never the retrieval alias: the cutover swap
+    # and its rollback move the alias, and an exporter that followed it would
+    # write into the old corpus on rollback. Part of the sink_id, so changing
+    # it against an existing manifest fails the run rather than claiming
+    # content the new collection does not hold (F17).
+    llm_module_collection: str = ""
+    # Comma-separated names LLM_MODULE_COLLECTION may never be, on top of the
+    # llm-module's own contextual_chunks_* corpora: the retrieval alias, and
+    # any other live collection on that deployment. Prose saying "never the
+    # alias" protects nothing; startup refusing it does.
+    llm_module_protected_collections: str = ""
     llm_module_ingest_schema_version: Annotated[int, Field(ge=1)] = 1
     llm_module_max_request_bytes: Annotated[int, Field(ge=1)] = 8_388_608
     llm_module_connect_timeout: Annotated[float, Field(gt=0)] = 5.0
     llm_module_read_timeout: Annotated[float, Field(gt=0)] = 120.0
     llm_module_vault_secret_path: str = ""
+    # Development only. The ingest contract is PROPOSED until the llm-module
+    # owner signs it off (AGREED_TERMS.status), and until then the sink is
+    # refused at startup — a deployment pushing against an unagreed contract
+    # is pushing against a guess, two of whose failures are silent (L4, B11).
+    # This flag lets a laptop drive the stub (L15) before that.
+    llm_module_allow_proposed_contract: bool = False
+    # L25. The contract promises an all-or-nothing metadata merge (§8, §13
+    # q3), but that promise is recorded on an assumption, and a far side that
+    # answered a lone `record` 200 without applying it would leave stale
+    # metadata the manifest then vouches for — never retried. So the merge
+    # stays off until the deployment confirms the far side implements it;
+    # off, a metadata change re-pushes the whole document, which is always
+    # correct and only costs a re-embed.
+    llm_module_enable_metadata_merge: bool = False
+    # B11 / §13 q1. The CHUNK_PROFILE value, typed again once it has been
+    # chosen from the llm-module embedder's token limit. CHUNK_PROFILE alone
+    # cannot show that: compose and the chart set it for every deployment.
+    llm_module_chunk_profile_confirmed: str = ""
+
+    # --- the stale sweep (L10) ---------------------------------------------
+    # Off by default: it is the first operation that deletes content no
+    # deletion signal named. When on, it runs after a committed run that saw
+    # the whole corpus and held nothing back (F20), on a sink that has one.
+    stale_sweep_enabled: bool = False
 
     # --- this service's own durable volume ---------------------------------
     # Holds the run lock (F2) and the deferred-deletion journal, which must
@@ -462,28 +627,36 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_llm_module_endpoint_and_credential(self) -> "Settings":
-        """Matrix row 3: `llm_module` needs a base URL and a credential path.
+        """Matrix row 3: `llm_module` needs a base URL, a collection and a
+        credential path.
 
         TLS is required and certificate verification is never disabled, so an
         `http://` base URL is refused here rather than discovered when the
         first document leaves the cluster — the push body IS Estonian
-        government document text (L14).
+        government document text (L14). The collection must be a new one,
+        never the llm-module's existing corpus (L19).
         """
         if self.content_sink != "llm_module":
             return self
         missing = []
         if not self.llm_module_base_url:
             missing.append("LLM_MODULE_BASE_URL")
+        if not self.llm_module_collection:
+            missing.append("LLM_MODULE_COLLECTION")
         if not self.llm_module_vault_secret_path:
             missing.append("LLM_MODULE_VAULT_SECRET_PATH")
         if missing:
             raise ValueError(
                 "CONTENT_SINK=llm_module requires "
                 f"{' and '.join(missing)} to be set. Without "
-                "a base URL there is nowhere to push; without a Vault secret "
-                "path there is no credential, and the run would report "
-                "`failed` every hour with the reason only in stdout."
+                "a base URL there is nowhere to push; without a collection "
+                "there is no telling the new corpus from the live one; without "
+                "a Vault secret path there is no credential, and the run would "
+                "report `failed` every hour with the reason only in stdout."
             )
+        validate_collection(
+            self.llm_module_collection, self.protected_llm_module_collections
+        )
         if not self.llm_module_base_url.startswith("https://"):
             raise ValueError(
                 "LLM_MODULE_BASE_URL must use https://, got "
@@ -496,7 +669,7 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _check_llm_module_chunk_profile_is_pinned(self) -> "Settings":
-        """B11: `llm_module` refuses the default chunk profile.
+        """B11: `llm_module` refuses a chunk profile nobody chose for it.
 
         On that sink the llm-module embeds our chunks and no longer chunks
         itself, so the profile is the geometry of the corpus the assistant
@@ -505,12 +678,17 @@ class Settings(BaseSettings):
         So the profile is pinned per deployment alongside the sink, never
         inherited from a default chosen for a different destination.
 
-        Last of the after-validators, so the matrix rows above report first.
+        Setting CHUNK_PROFILE is not enough to show that: compose and the
+        chart set it for every deployment, object-store ones included. So the
+        deployment also names the profile in
+        LLM_MODULE_CHUNK_PROFILE_CONFIRMED, which nothing sets by default and
+        which stops matching the moment CHUNK_PROFILE changes without it.
+
+        Last of the matrix rows, so a missing variable above reports first.
         """
-        if (
-            self.content_sink == "llm_module"
-            and "chunk_profile" not in self.model_fields_set
-        ):
+        if self.content_sink != "llm_module":
+            return self
+        if "chunk_profile" not in self.model_fields_set:
             raise ValueError(
                 "CONTENT_SINK=llm_module requires CHUNK_PROFILE to be set "
                 f"explicitly ({', '.join(sorted(CHUNK_PROFILES))}). On this "
@@ -520,6 +698,50 @@ class Settings(BaseSettings):
                 "line. Changing it later re-chunks and re-embeds the whole "
                 "corpus, so choose it deliberately."
             )
+        if self.llm_module_chunk_profile_confirmed != self.chunk_profile:
+            raise ValueError(
+                "CONTENT_SINK=llm_module requires "
+                f"LLM_MODULE_CHUNK_PROFILE_CONFIRMED={self.chunk_profile}, "
+                "naming the CHUNK_PROFILE in force, got "
+                f"{self.llm_module_chunk_profile_confirmed or '(unset)'!r}. Set "
+                "it once the profile has been checked against the llm-module "
+                "embedder's token limit (the contract's §13 question 1): a "
+                "chunk larger than that limit is silently truncated, with no "
+                "error and no log line. CHUNK_PROFILE on its own does not show "
+                "that, because compose and the chart set it for every "
+                "deployment."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_llm_module_merge_is_promised(self) -> "Settings":
+        """L25: the merge opt-in needs the contract's promise behind it."""
+        if (
+            self.content_sink == "llm_module"
+            and self.llm_module_enable_metadata_merge
+            and not AGREED_TERMS.supports_metadata_only_merge
+        ):
+            raise ValueError(
+                "LLM_MODULE_ENABLE_METADATA_MERGE=true, but the ingest contract "
+                "does not promise an all-or-nothing metadata merge (§8, §13 "
+                "question 3). Leave it unset: a metadata change then re-pushes "
+                "the whole document."
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_llm_module_contract_is_agreed(self) -> "Settings":
+        """`llm_module` is refused while the ingest contract is PROPOSED.
+
+        After the matrix rows, so a deployment missing a variable hears about
+        the variable first.
+        """
+        if self.content_sink == "llm_module":
+            refusal = llm_module_contract_refusal(
+                allow_proposed=self.llm_module_allow_proposed_contract
+            )
+            if refusal is not None:
+                raise ValueError(refusal)
         return self
 
     @property
@@ -541,6 +763,30 @@ class Settings(BaseSettings):
     # docstring says why; splitting it field-by-field would silently relocate
     # an object-store deployment's manifest and break verification 20.
     # ----------------------------------------------------------------------
+
+    @property
+    def protected_llm_module_collections(self) -> frozenset[str]:
+        """LLM_MODULE_PROTECTED_COLLECTIONS as names, blanks dropped."""
+        return frozenset(
+            name.strip()
+            for name in self.llm_module_protected_collections.split(",")
+            if name.strip()
+        )
+
+    @property
+    def sink_id(self) -> str:
+        """The destination's identity, as the manifest records it (F17).
+
+        The one place it is spelled, so the factory, the run line, the error
+        line and /health can never disagree. For `llm_module` it carries the
+        collection (L19): a different collection holds different content, so
+        a manifest written for one must never be diffed against another.
+        Bucket, endpoint and base URL stay out — moving the same content to a
+        new address is not a change of destination.
+        """
+        if self.content_sink == "llm_module":
+            return f"llm_module:{self.llm_module_collection}"
+        return self.content_sink
 
     @property
     def manifest_store_is_inherited(self) -> bool:

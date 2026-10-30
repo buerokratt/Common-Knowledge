@@ -352,7 +352,9 @@ class ObjectStoreSink(ContentSink):
             DeleteOutcome.combine(contents_outcome, record_outcome, held_back),
         )
 
-    def _sweep_stale(self, before: datetime) -> DeleteOutcome[str]:
+    def _sweep_stale(
+        self, before: datetime, keep: frozenset[str]
+    ) -> DeleteOutcome[str]:
         raise NotSupported(
             "the object-store sink sweeps orphans by the ordinal tail rule "
             "(read_document + delete_chunks, J5); the synced_at sweep is the "
