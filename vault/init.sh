@@ -70,34 +70,6 @@ do_unseal() {
     echo "Unsealed"
 }
 
-# Both branches call these, so a stack initialised before content-external
-# had a role gains one without re-initialising Vault. Policy and role writes
-# are upserts.
-write_content_role() {
-    vault_put_policy "content-policy" \
-'path "secret/data/blob/connections/azure_blob/content" { capabilities = ["read"] }
-path "secret/metadata/blob/connections/azure_blob/content" { capabilities = ["read"] }
-path "secret/data/encryption/*" { capabilities = ["deny"] }
-path "auth/token/renew-self" { capabilities = ["update"] }
-path "auth/token/lookup-self" { capabilities = ["read"] }'
-
-    vault_post "/v1/auth/approle/role/content-service" \
-        '{"token_policies":["content-policy"],"token_no_default_policy":true,"token_ttl":"1h","token_max_ttl":"4h","secret_id_ttl":"24h","secret_id_num_uses":0}' >/dev/null
-    echo "AppRole content-service written"
-}
-
-# cas=0 makes Vault refuse the write when the path already exists, so a real
-# credential is never replaced by the placeholder.
-write_content_placeholder() {
-    if vault_post "/v1/secret/data/blob/connections/azure_blob/content" \
-        '{"options":{"cas":0},"data":{"account_url":"https://REPLACE_ME.blob.core.windows.net","account_key":"REPLACE_ME"}}' \
-        | grep -q '"version"'; then
-        echo "Placeholder content secret created"
-    else
-        echo "Content secret not written: it already exists or Vault refused"
-    fi
-}
-
 # ═══════════════════════════════════════════════════════════════
 if [ ! -f "$INIT_FLAG" ]; then
 # ═══════════════════════════════════════════════════════════════
@@ -167,19 +139,17 @@ path "auth/token/lookup-self" { capabilities = ["read"] }'
         '{"token_policies":["llm-orchestration-policy"],"token_no_default_policy":true,"token_ttl":"1h","token_max_ttl":"24h","secret_id_ttl":"24h","secret_id_num_uses":0}' >/dev/null
     vault_post "/v1/auth/approle/role/cleaner-service" \
         '{"token_policies":["cleaner-policy"],"token_no_default_policy":true,"token_ttl":"1h","token_max_ttl":"4h","secret_id_ttl":"24h","secret_id_num_uses":0}' >/dev/null
-    write_content_role
     echo "AppRoles created"
 
     # ── Credentials ──────────────────────────────────────────────
 
     mkdir -p "$CREDS"
-    for ROLE in gui cron llm cleaner content; do
+    for ROLE in gui cron llm cleaner; do
         case "$ROLE" in
             gui)     RNAME="gui-service" ;;
             cron)    RNAME="cron-manager-service" ;;
             llm)     RNAME="llm-orchestration-service" ;;
             cleaner) RNAME="cleaner-service" ;;
-            content) RNAME="content-service" ;;
         esac
 
         ROLE_ID=$(vault_get "/v1/auth/approle/role/$RNAME/role-id" | jq -r '.data.role_id')
@@ -197,7 +167,6 @@ path "auth/token/lookup-self" { capabilities = ["read"] }'
     vault_post "/v1/secret/data/llm/connections/azure_openai/cleaner" \
         '{"data":{"api_key":"REPLACE_ME","endpoint":"https://REPLACE_ME.openai.azure.com/","deployment":"gpt-4o-mini","api_version":"2024-02-01"}}' >/dev/null
     echo "Placeholder cleaner secret created"
-    write_content_placeholder
 
     touch "$INIT_FLAG"
     echo "=== First time setup complete ==="
@@ -216,17 +185,13 @@ else
         echo "Already unsealed"
     fi
 
-    write_content_role
-    write_content_placeholder
-
     # Rotate secret_ids
-    for ROLE in gui cron llm cleaner content; do
+    for ROLE in gui cron llm cleaner; do
         case "$ROLE" in
             gui)     RNAME="gui-service" ;;
             cron)    RNAME="cron-manager-service" ;;
             llm)     RNAME="llm-orchestration-service" ;;
             cleaner) RNAME="cleaner-service" ;;
-            content) RNAME="content-service" ;;
         esac
 
         SECRET_ID=$(vault_post "/v1/auth/approle/role/$RNAME/secret-id" '{}' | jq -r '.data.secret_id')
@@ -243,5 +208,47 @@ else
 
 fi
 # ═══════════════════════════════════════════════════════════════
+
+# ── content-external (Stage L, L11) ─────────────────────────────
+# Outside the first-time block and idempotent, so a deployment initialised
+# before this existed gains the role on its next start. Its secret lives at
+# content-external/*, NOT under llm/connections/*: cleaner-policy and
+# llm-orchestration-policy can read everything there, and the llm-module
+# bearer credential is this service's alone. The token is read per task by
+# exporter/api/config.py:fetch_llm_module_token, never cached.
+
+vault_put_policy "content-external-policy" \
+'path "secret/data/content-external/*" { capabilities = ["read"] }
+path "secret/data/blob/connections/azure_blob/content" { capabilities = ["read"] }
+path "secret/metadata/blob/connections/azure_blob/content" { capabilities = ["read"] }
+path "secret/data/encryption/*" { capabilities = ["deny"] }
+path "secret/data/llm/*" { capabilities = ["deny"] }
+path "auth/token/renew-self" { capabilities = ["update"] }
+path "auth/token/lookup-self" { capabilities = ["read"] }'
+
+vault_post "/v1/auth/approle/role/content-external-service" \
+    '{"token_policies":["content-external-policy"],"token_no_default_policy":true,"token_ttl":"1h","token_max_ttl":"4h","secret_id_ttl":"24h","secret_id_num_uses":0}' >/dev/null
+
+mkdir -p "$CREDS"
+ROLE_ID=$(vault_get "/v1/auth/approle/role/content-external-service/role-id" | jq -r '.data.role_id')
+printf '%s' "$ROLE_ID" > "$CREDS/content_role_id"
+SECRET_ID=$(vault_post "/v1/auth/approle/role/content-external-service/secret-id" '{}' | jq -r '.data.secret_id')
+printf '%s' "$SECRET_ID" > "$CREDS/content_secret_id"
+chmod 640 "$CREDS/content_role_id" "$CREDS/content_secret_id"
+echo "Credentials written for content-external"
+
+# A placeholder only where nothing is stored yet: never overwrite a real
+# credential. The exporter refuses REPLACE_ME loudly rather than sending it.
+if ! vault_get "/v1/secret/data/content-external/llm_module" >/dev/null 2>&1; then
+    vault_post "/v1/secret/data/content-external/llm_module" \
+        '{"data":{"token":"REPLACE_ME"}}' >/dev/null
+    echo "Placeholder content-external llm-module secret created"
+fi
+
+if ! vault_get "/v1/secret/data/blob/connections/azure_blob/content" >/dev/null 2>&1; then
+    vault_post "/v1/secret/data/blob/connections/azure_blob/content" \
+        '{"data":{"account_url":"https://REPLACE_ME.blob.core.windows.net","account_key":"REPLACE_ME"}}' >/dev/null
+    echo "Placeholder content-external Azure Blob secret created"
+fi
 
 echo "=== Vault init complete ==="

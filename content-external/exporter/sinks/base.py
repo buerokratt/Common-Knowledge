@@ -32,7 +32,7 @@ this class, not a discipline each sink has to remember.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -48,6 +48,7 @@ from exporter.stores.base import (
 
 __all__ = [
     "ContentSink",
+    "CredentialUnavailableError",
     "DeleteOutcome",
     "DocumentProbe",
     "NotSupported",
@@ -56,6 +57,17 @@ __all__ = [
     "UpsertOutcome",
     "UpsertStatus",
 ]
+
+
+class CredentialUnavailableError(Exception):
+    """A sink's token provider could not produce a credential.
+
+    Its message is written to be logged — it says which check failed (a
+    placeholder secret, a refused read, an unreachable store) and never
+    carries the credential or the store's response — so a sink logs it rather
+    than reducing it to a type name, and an operator can tell "store the real
+    secret" from "Vault is down" without reading code.
+    """
 
 
 @dataclass(frozen=True)
@@ -83,6 +95,12 @@ class SinkCapabilities:
     # receives, so its ceiling is its owner's to state (Open item 9). The
     # coordinator runs min(EXPORT_CONCURRENCY, this).
     max_concurrency: int
+    # L18. True when re-chunking the corpus costs the destination more than a
+    # longer run — the llm-module embeds every chunk it receives, so a
+    # fingerprint change is a full re-embed on someone else's service. The
+    # coordinator then refuses a pending re-chunk unless the operator passed
+    # --accept-rechunk, which the cron path cannot.
+    rechunk_requires_ack: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.max_concurrency, bool) or self.max_concurrency < 1:
@@ -287,8 +305,17 @@ class ContentSink(ABC):
         )
         return self._delete_agency()
 
-    def sweep_stale(self, agency_id: str, before: datetime) -> DeleteOutcome[str]:
-        """Delete documents last synced before `before`.
+    def sweep_stale(
+        self, agency_id: str, before: datetime, keep: Collection[str]
+    ) -> DeleteOutcome[str]:
+        """Delete documents last synced before `before` and absent from
+        `keep`.
+
+        `keep` is every document the committed manifest lists. A run never
+        re-sends an unchanged document, or one whose row is not ready, so
+        those keep an old `synced_at` while being live: `before` alone would
+        delete them. An empty `keep` is refused — "keep nothing" is a purge,
+        and a lost keep list must never read as one.
 
         ONLY VALID AFTER A RUN THAT OBSERVED THE FULL CORPUS. After a
         `--limit` run, or one that ended early, everything it did not touch
@@ -315,7 +342,13 @@ class ContentSink(ABC):
                 "sweep_stale refuses a cutoff in the future; it would treat "
                 "every document as stale"
             )
-        return self._sweep_stale(before)
+        kept = frozenset(keep)
+        if not kept:
+            raise ValueError(
+                "sweep_stale refuses an empty keep list; deleting every "
+                "document is a purge, not a sweep"
+            )
+        return self._sweep_stale(before, kept)
 
     def read_document(self, document_id: str) -> DocumentProbe | None:
         """What the destination holds for one document, or None if nothing.
@@ -360,9 +393,12 @@ class ContentSink(ABC):
         """Delete everything for the bound agency. Capability already checked."""
 
     @abstractmethod
-    def _sweep_stale(self, before: datetime) -> DeleteOutcome[str]:
-        """Delete the bound agency's documents synced before `before`. A sink
-        with no way to do this raises NotSupported."""
+    def _sweep_stale(
+        self, before: datetime, keep: frozenset[str]
+    ) -> DeleteOutcome[str]:
+        """Delete the bound agency's documents synced before `before` and not
+        in the non-empty `keep`. A sink with no way to do this raises
+        NotSupported."""
 
     @abstractmethod
     def _read_document(self, document_id: str) -> DocumentProbe | None:

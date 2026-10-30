@@ -27,6 +27,13 @@ records its outcome where /health reads it.
                      it only when that content is known to be safe to
                      overwrite. A bootstrap of this service's own that died
                      before its first checkpoint resumes without it.
+  --accept-rechunk   let a pending re-chunk (a CHUNK_PROFILE, CHUNKER_VERSION
+                     or NORMALISER_VERSION change) run on a destination that
+                     re-embeds every chunk it receives — the llm-module (L18).
+                     Without it such a run fails having sent nothing, every
+                     tick, until an operator runs it by hand: announced,
+                     --limit first, at reduced EXPORT_CONCURRENCY. See the
+                     RUNBOOK.
   --output-json P    write the report as JSON to P, or `-` for stdout
 
 The report is JSON on stdout (or the file); logs go to stderr, so stdout
@@ -119,6 +126,14 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--accept-rechunk",
+        action="store_true",
+        help=(
+            "let a pending re-chunk run on a destination that re-embeds what "
+            "it receives (L18); refused without it"
+        ),
+    )
+    parser.add_argument(
         "--output-json",
         default="-",
         help="where to write the report: a path, or - for stdout (default)",
@@ -161,6 +176,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         force=args.force,
         limit=args.limit,
         accept_existing_content=args.accept_existing_content,
+        accept_rechunk=args.accept_rechunk,
     )
     try:
         report = export_agency_task(

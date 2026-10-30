@@ -20,11 +20,13 @@ from exporter_fakes import (
 )
 from pydantic import SecretStr
 
+from exporter.api import config as config_module
 from exporter.api.config import ConfigurationError, Settings
 from exporter.core.ids import make_chunk_id
 from exporter.core.schemas import Chunk, DocumentRecord, TextSpan
 from exporter.sinks.base import (
     ContentSink,
+    CredentialUnavailableError,
     DeleteOutcome,
     DocumentProbe,
     NotSupported,
@@ -33,7 +35,10 @@ from exporter.sinks.base import (
     UpsertOutcome,
     UpsertStatus,
 )
+from exporter.sinks import factory as sinks_factory_module
 from exporter.sinks.factory import build_sink
+from exporter.sinks.llm_module_contract import PROPOSED_TERMS
+from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import ObjectStoreSink
 from exporter.stores.base import UNREPORTED_DELETE_REASON, StoreCapabilities
 from exporter.stores.s3_store import S3Store
@@ -103,10 +108,12 @@ def _deleted_keys(store: InMemoryStore) -> list[str]:
 # --------------------------------------------------------------------------
 
 
-def test_sink_capabilities_declares_exactly_the_d0_fields_plus_f16s_ceiling() -> None:
+def test_sink_capabilities_declares_exactly_the_d0_fields_plus_two() -> None:
     """Widening the capability set is a parity-matrix change and must be a
     visible act, not a quiet field addition. F16 added max_concurrency: the
-    destination states how many documents it takes in parallel."""
+    destination states how many documents it takes in parallel. L18 added
+    rechunk_requires_ack: a destination that re-embeds what it receives says
+    so, and a re-chunk then needs an operator's --accept-rechunk."""
     assert [f.name for f in dataclasses.fields(SinkCapabilities)] == [
         "can_list",
         "can_read_back",
@@ -115,6 +122,7 @@ def test_sink_capabilities_declares_exactly_the_d0_fields_plus_f16s_ceiling() ->
         "atomic_per_document",
         "supports_agency_scoped_delete",
         "max_concurrency",
+        "rechunk_requires_ack",
     ]
 
 
@@ -474,15 +482,24 @@ def test_a_pseudo_directory_entry_is_not_read_as_a_chunk() -> None:
 # --------------------------------------------------------------------------
 
 
+_KEEP = ("d1",)
+
+
 def test_sweep_stale_refuses_another_agency() -> None:
     with pytest.raises(ValueError, match="bound to agency"):
-        _sink().sweep_stale("someone-else", datetime.now(UTC))
+        _sink().sweep_stale("someone-else", datetime.now(UTC), _KEEP)
 
 
 def test_sweep_stale_refuses_a_naive_timestamp() -> None:
     """A naive cutoff is ambiguous by hours, and a sweep deletes."""
     with pytest.raises(ValueError, match="timezone-aware"):
-        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12))
+        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12), _KEEP)
+
+
+def test_sweep_stale_refuses_an_empty_keep_list() -> None:
+    """Keep nothing is a purge; a lost keep list must never read as one."""
+    with pytest.raises(ValueError, match="empty keep list"):
+        _sink().sweep_stale(AGENCY, datetime.now(UTC), ())
 
 
 class _NoOffset(tzinfo):
@@ -494,18 +511,18 @@ class _NoOffset(tzinfo):
 
 def test_sweep_stale_refuses_a_timestamp_with_no_offset() -> None:
     with pytest.raises(ValueError, match="timezone-aware"):
-        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12, tzinfo=_NoOffset()))
+        _sink().sweep_stale(AGENCY, datetime(2026, 10, 12, tzinfo=_NoOffset()), _KEEP)
 
 
 def test_sweep_stale_refuses_a_cutoff_in_the_future() -> None:
     """`before` is the run's start; a later one makes every document stale."""
     with pytest.raises(ValueError, match="future"):
-        _sink().sweep_stale(AGENCY, datetime.now(UTC) + timedelta(hours=1))
+        _sink().sweep_stale(AGENCY, datetime.now(UTC) + timedelta(hours=1), _KEEP)
 
 
 def test_a_sink_without_a_sweep_raises_rather_than_no_ops() -> None:
     with pytest.raises(NotSupported):
-        _sink().sweep_stale(AGENCY, datetime.now(UTC))
+        _sink().sweep_stale(AGENCY, datetime.now(UTC), _KEEP)
 
 
 def test_read_back_is_refused_when_not_declared() -> None:
@@ -528,11 +545,112 @@ def test_read_document_reports_what_the_destination_holds() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_factory_names_the_task_that_builds_the_llm_module_sink() -> None:
-    """Until L1 lands, a request for that sink is a clear refusal."""
-    settings = Settings.model_construct(content_sink="llm_module")
-    with pytest.raises(ConfigurationError, match="task L1"):
-        build_sink(settings, agency_id=AGENCY)
+def _llm_module_settings(
+    *,
+    allow_proposed: bool,
+    collection: str = "ckb_chunks_v1",
+    protected: str = "",
+    merge: bool = False,
+) -> Settings:
+    return Settings.model_construct(
+        llm_module_enable_metadata_merge=merge,
+        content_sink="llm_module",
+        llm_module_base_url="https://llm-module.invalid",
+        llm_module_collection=collection,
+        llm_module_protected_collections=protected,
+        llm_module_ingest_schema_version=1,
+        llm_module_max_request_bytes=8_388_608,
+        llm_module_connect_timeout=5.0,
+        llm_module_read_timeout=120.0,
+        llm_module_vault_secret_path="llm/connections/llm_module/content",
+        llm_module_allow_proposed_contract=allow_proposed,
+        vault_addr="http://vault.invalid:8200",
+        vault_token_path="/nonexistent/agent/token",
+    )
+
+
+def test_the_factory_refuses_the_llm_module_sink_while_the_contract_is_proposed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Registered, but not selectable against a guess: the startup validator
+    refuses it first, and the factory says the same thing again. Run against
+    PROPOSED_TERMS, so the refusal stays proven now that the contract is
+    agreed — and still fires if the agreement is withdrawn."""
+    monkeypatch.setattr(config_module, "AGREED_TERMS", PROPOSED_TERMS)
+    with pytest.raises(ConfigurationError, match="PROPOSED"):
+        build_sink(
+            _llm_module_settings(allow_proposed=False), agency_id=AGENCY, run_id="r-1"
+        )
+
+
+def test_the_factory_builds_the_llm_module_sink_for_this_run() -> None:
+    # No development flag: the contract is agreed (AGREED_TERMS).
+    sink = build_sink(
+        _llm_module_settings(allow_proposed=False), agency_id=AGENCY, run_id="r-7"
+    )
+
+    assert isinstance(sink, LlmModuleSink)
+    # L19: the collection is part of the destination's identity (F17).
+    assert sink.sink_id == "llm_module:ckb_chunks_v1"
+    assert sink._collection == "ckb_chunks_v1"  # noqa: SLF001
+    assert sink.agency_id == AGENCY
+    assert sink._run_id == "r-7"  # noqa: SLF001
+    # The provider reads Vault when called, never at build time: building
+    # touched no token file, and calling it now fails on the missing one.
+    with pytest.raises(CredentialUnavailableError, match="Vault Agent token"):
+        sink._token_provider()  # noqa: SLF001
+
+
+def test_the_factory_leaves_the_metadata_merge_off_unless_the_deployment_opts_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """L25: a far side that answered a merge without applying it would leave
+    stale metadata the manifest vouches for, so the agreed term alone does
+    not switch it on; LLM_MODULE_ENABLE_METADATA_MERGE does, and only on top
+    of the agreed term."""
+    assert sinks_factory_module.AGREED_TERMS.supports_metadata_only_merge
+
+    def merges(*, merge: bool) -> bool:
+        settings = _llm_module_settings(allow_proposed=False, merge=merge)
+        sink = build_sink(settings, agency_id=AGENCY, run_id="r-1")
+        return sink.capabilities.supports_metadata_only_merge
+
+    assert merges(merge=False) is False
+    assert merges(merge=True) is True
+
+    # The flag cannot switch on what the contract does not promise.
+    monkeypatch.setattr(
+        sinks_factory_module,
+        "AGREED_TERMS",
+        dataclasses.replace(
+            sinks_factory_module.AGREED_TERMS, supports_metadata_only_merge=False
+        ),
+    )
+    assert merges(merge=True) is False
+
+
+@pytest.mark.parametrize(
+    ("collection", "protected", "match"),
+    [
+        ("contextual_chunks_azure", "", "never in place"),
+        ("CONTEXTUAL_CHUNKS_AWS", "", "never in place"),
+        ("ckb_retrieval", "ckb_retrieval", "LLM_MODULE_PROTECTED_COLLECTIONS"),
+        ("CKB_Retrieval", " other , ckb_retrieval ", "LLM_MODULE_PROTECTED"),
+        ("a/b", "", "LLM_MODULE_COLLECTION"),
+    ],
+)
+def test_the_factory_refuses_a_collection_it_must_not_write_to(
+    collection: str, protected: str, match: str
+) -> None:
+    """L19, on the path that skips the startup validator: a Settings built
+    with model_construct still cannot point the sink at a legacy collection
+    or the retrieval alias, and the refusal is a ConfigurationError like the
+    factory's others."""
+    settings = _llm_module_settings(
+        allow_proposed=True, collection=collection, protected=protected
+    )
+    with pytest.raises(ConfigurationError, match=match):
+        build_sink(settings, agency_id=AGENCY, run_id="r-1")
 
 
 def test_the_factory_builds_the_object_store_sink() -> None:
@@ -550,7 +668,7 @@ def test_the_factory_builds_the_object_store_sink() -> None:
         export_concurrency=4,
     )
 
-    sink = build_sink(settings, agency_id=AGENCY)
+    sink = build_sink(settings, agency_id=AGENCY, run_id="r-1")
 
     assert isinstance(sink, ObjectStoreSink)
     assert sink.sink_id == "object_store"
@@ -572,7 +690,7 @@ def test_the_object_store_sink_refuses_an_unconfigured_store() -> None:
         export_concurrency=4,
     )
     with pytest.raises(ConfigurationError, match="EXTERNAL_S3_ENDPOINT_URL"):
-        build_sink(settings, agency_id=AGENCY)
+        build_sink(settings, agency_id=AGENCY, run_id="r-1")
 
 
 def _imports(relative: str) -> set[str]:
@@ -594,11 +712,18 @@ def test_the_store_layer_does_not_import_the_sink_layer() -> None:
 
 
 @pytest.mark.parametrize(
-    "relative", ["sinks/base.py", "stores/base.py", "sinks/object_store_sink.py"]
+    "relative",
+    [
+        "sinks/base.py",
+        "stores/base.py",
+        "sinks/object_store_sink.py",
+        "sinks/llm_module_contract.py",
+    ],
 )
 def test_the_interfaces_import_no_transport(relative: str) -> None:
-    """The ABCs and the object-store sink are transport-free; boto3 lives in
-    the s3 backend only, requests arrives in L."""
+    """The ABCs, the object-store sink and the llm-module wire models are
+    transport-free; boto3 lives in the s3 backend only, and requests in the
+    llm-module sink."""
     roots = {name.split(".")[0] for name in _imports(relative)}
     assert not roots & {"boto3", "botocore", "azure", "requests", "httpx"}
 

@@ -27,6 +27,13 @@ destination. Object-store sinks are observed through the store's call log
 keys in that log are parsed by THIS file's regex, independently of the sink's
 own parser. The live variant needs CONFORMANCE_S3_* — see
 tests/test_store_conformance.py.
+
+The llm-module sink runs against the FastAPI stub (L15, L16), twice: under
+PROPOSED_TERMS (no merge, no read-back, no agency delete, no sweep) and under
+AGREED_TERMS, which promise every one of them, so each capability's
+declared-works and undeclared-raises paths both run. It is observed through the fake behind the
+stub, never through its own read-back. Tests that plant objects in a keyspace
+skip it: it has none.
 """
 
 import json
@@ -44,16 +51,24 @@ from exporter_fakes import (
     empty_prefix,
     live_s3_store_or_skip,
 )
+from llm_module_fake import TEST_COLLECTION, FakeLlmModule, session_for
 
 from exporter.core.ids import make_chunk_id, manifest_key
 from exporter.core.schemas import Chunk, DocumentRecord, TextSpan
 from exporter.sinks.base import (
     ContentSink,
     DeleteOutcome,
+    DocumentProbe,
     NotSupported,
     SinkCapabilities,
     UpsertStatus,
 )
+from exporter.sinks.llm_module_contract import (
+    AGREED_TERMS,
+    PROPOSED_TERMS,
+    ContractTerms,
+)
+from exporter.sinks.llm_module_sink import LlmModuleSink
 from exporter.sinks.object_store_sink import MAX_CONCURRENCY, ObjectStoreSink
 from exporter.stores.base import StoreCapabilities
 
@@ -70,15 +85,65 @@ _LAYOUT = re.compile(
 Event = tuple[str, str, int | None]
 
 
-@dataclass
 class Harness:
-    """One sink, and the means to observe and break its destination."""
+    """One sink, and the means to observe and break its destination.
+
+    Observation never goes through the sink under test: a sink that cannot
+    read back (the llm-module, until Open item 10) is still checked against
+    what its destination actually holds.
+    """
+
+    sink: ContentSink
+
+    def reset(self) -> None:
+        raise NotImplementedError
+
+    def events(self) -> list[Event]:
+        raise NotImplementedError
+
+    def probe(self, document_id: str) -> DocumentProbe | None:
+        raise NotImplementedError
+
+    def chunk_ids(self, document_id: str) -> dict[int, str]:
+        raise NotImplementedError
+
+    def fail_record_write(self, document_id: str) -> None:
+        raise NotImplementedError
+
+    def fail_chunk_write(self, document_id: str, ordinal: int) -> None:
+        raise NotImplementedError
+
+    def fail_chunk_delete(self, document_id: str, ordinal: int) -> None:
+        raise NotImplementedError
+
+    def heal(self) -> None:
+        raise NotImplementedError
+
+    def plant_stray(self, document_id: str, name: str) -> str:
+        raise NotImplementedError
+
+    def plant_manifest(self) -> str:
+        raise NotImplementedError
+
+    def holds(self, key: str) -> bool:
+        raise NotImplementedError
+
+
+@dataclass
+class StoreHarness(Harness):
+    """An object-store sink, observed through its store's call log."""
 
     sink: ContentSink
     store: InMemoryStore | ObservedStore
     prefix: str
     metadata_key: Callable[[str], str]
     chunk_key: Callable[[str, int], str]
+
+    def probe(self, document_id: str) -> DocumentProbe | None:
+        return self.sink.read_document(document_id)
+
+    def holds(self, key: str) -> bool:
+        return self.store.get_bytes(key) is not None
 
     def reset(self) -> None:
         self.store.calls.clear()
@@ -139,13 +204,116 @@ class Harness:
         return key
 
 
+@dataclass
+class LlmHarness(Harness):
+    """The llm-module sink against the stub (L15, L16), observed through the
+    fake behind it. Failures are item statuses the far side returns, so the
+    sink's own 207 handling is what each scenario exercises."""
+
+    sink: ContentSink
+    fake: FakeLlmModule
+
+    def reset(self) -> None:
+        self.fake.events.clear()
+
+    def events(self) -> list[Event]:
+        return list(self.fake.events)
+
+    def probe(self, document_id: str) -> DocumentProbe | None:
+        held = self.fake.probe(document_id)
+        if held is None:
+            return None
+        return DocumentProbe(
+            document_id=document_id,
+            record_present=held["record_present"],
+            chunk_count=held["chunk_count"],
+            chunk_ordinals=tuple(held["chunk_ordinals"]),
+        )
+
+    def chunk_ids(self, document_id: str) -> dict[int, str]:
+        return {
+            point["ordinal"]: chunk_id
+            for chunk_id, point in self.fake.points_of(document_id).items()
+        }
+
+    def fail_record_write(self, document_id: str) -> None:
+        self.fake.fail_always("record", 500)
+
+    def fail_chunk_write(self, document_id: str, ordinal: int) -> None:
+        self.fake.fail_always(make_chunk_id(AGENCY, document_id, ordinal), 500)
+
+    def fail_chunk_delete(self, document_id: str, ordinal: int) -> None:
+        # The llm-module deletes a document in one item: a chunk that will
+        # not go fails the document's item, and its record stays (F4).
+        self.fake.fail_always(document_id, 500)
+        self.fake.fail_always(make_chunk_id(AGENCY, document_id, ordinal), 500)
+
+    def heal(self) -> None:
+        self.fake.heal()
+
+    def plant_stray(self, document_id: str, name: str) -> str:
+        pytest.skip("the llm-module has points, not a keyspace to plant in")
+
+    def plant_manifest(self) -> str:
+        pytest.skip("the llm-module never holds the manifest (D.2)")
+
+    def holds(self, key: str) -> bool:
+        pytest.skip("the llm-module has points, not keys")
+
+
+# Every term the far side could agree, so each capability's promise runs.
+# The recorded agreement promises all of them; if it ever stops doing so,
+# this suite must keep running the full set, so it is spelled out here and
+# checked against AGREED_TERMS rather than aliased to it.
+_ALL_TERMS = ContractTerms(
+    supports_metadata_only_merge=True,
+    max_concurrency=2,
+    status="agreed",
+    agency_id_filterable=True,
+    supports_agency_scoped_delete=True,
+    supports_stale_sweep=True,
+    supports_read_back=True,
+    read_back_lists_ordinals=True,
+)
+
+
+def test_the_agreed_terms_are_the_full_set_this_suite_runs() -> None:
+    """The deployment runs AGREED_TERMS; the suite's 'all terms' harness is
+    what proves those capabilities work. Kept equal on purpose."""
+    assert AGREED_TERMS == _ALL_TERMS
+
+
+def _llm_module_sink(fake: FakeLlmModule, terms: ContractTerms) -> LlmModuleSink:
+    return LlmModuleSink(
+        base_url="https://llm-module.invalid",
+        collection=TEST_COLLECTION,
+        agency_id=AGENCY,
+        sink_id=f"llm_module:{TEST_COLLECTION}",
+        run_id="conformance",
+        token_provider=lambda: "conformance-token",
+        ingest_schema_version=1,
+        max_request_bytes=8_388_608,
+        connect_timeout=5.0,
+        read_timeout=120.0,
+        terms=terms,
+        session=session_for(fake, via_stub=True),
+        sleep=lambda _seconds: None,
+        rand=lambda: 0.5,
+    )
+
+
+def _llm_harness(terms: ContractTerms) -> LlmHarness:
+    fake = FakeLlmModule()
+    return LlmHarness(sink=_llm_module_sink(fake, terms), fake=fake)
+
+
 def _object_store_harness(
     store: InMemoryStore | ObservedStore, prefix: str = "content"
 ) -> Harness:
     sink = ObjectStoreSink(
         store=store, prefix=prefix, agency_id=AGENCY, sink_id="object_store"
     )
-    return Harness(
+    return StoreHarness(
         sink=sink,
         store=store,
         prefix=prefix,
@@ -156,7 +324,7 @@ def _object_store_harness(
 
 def _recording_harness() -> Harness:
     sink = RecordingSink(agency_id=AGENCY)
-    return Harness(
+    return StoreHarness(
         sink=sink,
         store=sink.store,
         prefix=RecordingSink.PREFIX,
@@ -166,13 +334,23 @@ def _recording_harness() -> Harness:
 
 
 @pytest.fixture(
-    params=["object_store[in-memory]", "recording-fake", "object_store[s3-live]"]
+    params=[
+        "object_store[in-memory]",
+        "recording-fake",
+        "llm_module[stub, proposed terms]",
+        "llm_module[stub, agreed terms]",
+        "object_store[s3-live]",
+    ]
 )
 def harness(request: pytest.FixtureRequest) -> Iterator[Harness]:
     if request.param == "object_store[in-memory]":
         yield _object_store_harness(InMemoryStore())
     elif request.param == "recording-fake":
         yield _recording_harness()
+    elif request.param == "llm_module[stub, proposed terms]":
+        yield _llm_harness(PROPOSED_TERMS)
+    elif request.param == "llm_module[stub, agreed terms]":
+        yield _llm_harness(_ALL_TERMS)
     else:
         live = live_s3_store_or_skip()
         prefix = f"conformance/{uuid.uuid4().hex}"
@@ -232,7 +410,7 @@ def test_an_upserted_document_reads_back_with_its_chunks(harness: Harness) -> No
 
     assert outcome.status is UpsertStatus.PUBLISHED
     assert outcome.chunks_written == 3
-    probe = harness.sink.read_document("d1")
+    probe = harness.probe("d1")
     assert probe is not None
     assert probe.record_present
     assert probe.chunk_count == 3
@@ -241,11 +419,11 @@ def test_an_upserted_document_reads_back_with_its_chunks(harness: Harness) -> No
 
 def test_re_upserting_identical_input_changes_nothing(harness: Harness) -> None:
     _publish(harness)
-    before = (harness.sink.read_document("d1"), harness.chunk_ids("d1"))
+    before = (harness.probe("d1"), harness.chunk_ids("d1"))
 
     _publish(harness)
 
-    assert (harness.sink.read_document("d1"), harness.chunk_ids("d1")) == before
+    assert (harness.probe("d1"), harness.chunk_ids("d1")) == before
     assert harness.chunk_ids("d1") == {
         ordinal: make_chunk_id(AGENCY, "d1", ordinal) for ordinal in range(3)
     }
@@ -262,7 +440,7 @@ def test_a_metadata_only_merge_touches_no_chunk(harness: Harness) -> None:
     assert outcome.published
     assert outcome.metadata_only
     assert [event for event in harness.events() if event[2] is not None] == []
-    probe = harness.sink.read_document("d1")
+    probe = harness.probe("d1")
     assert probe is not None
     assert probe.chunk_ordinals == (0, 1, 2)
 
@@ -292,7 +470,7 @@ def test_a_failed_record_write_leaves_no_chunk_retrievable(harness: Harness) -> 
     assert not outcome.published
     assert outcome.chunks_written == 0
     harness.heal()
-    assert harness.sink.read_document("d1") is None
+    assert harness.probe("d1") is None
 
 
 def test_a_failed_chunk_write_leaves_every_written_chunk_beside_its_record(
@@ -303,9 +481,13 @@ def test_a_failed_chunk_write_leaves_every_written_chunk_beside_its_record(
     outcome = harness.sink.upsert_document(_record(), _chunks())
 
     assert not outcome.published
-    assert outcome.chunks_written == 1
+    # Chunk 0 always lands. Chunk 2 lands too where one request carries the
+    # document (the llm-module reads every item); a sink writing in order
+    # stops at the failure.
+    assert 1 <= outcome.chunks_written <= 2
+    assert outcome.chunks_written == len(harness.chunk_ids("d1"))
     harness.heal()
-    probe = harness.sink.read_document("d1")
+    probe = harness.probe("d1")
     assert probe is not None
     assert probe.record_present
 
@@ -318,7 +500,7 @@ def test_a_failed_publish_is_completed_by_a_replay(harness: Harness) -> None:
 
     _publish(harness)
 
-    probe = harness.sink.read_document("d1")
+    probe = harness.probe("d1")
     assert probe is not None
     assert probe.chunk_ordinals == (0, 1, 2)
 
@@ -337,7 +519,7 @@ def test_a_tail_delete_keeps_every_surviving_chunk(harness: Harness) -> None:
     outcome = harness.sink.delete_chunks("d1", [3, 4])
 
     assert sorted(outcome.deleted) == [3, 4]
-    probe = harness.sink.read_document("d1")
+    probe = harness.probe("d1")
     assert probe is not None
     assert probe.chunk_ordinals == (0, 1, 2)
     assert harness.chunk_ids("d1") == {
@@ -369,7 +551,7 @@ def test_a_document_delete_removes_chunks_before_the_record(harness: Harness) ->
     record_at = deletes.index(("delete", "d1", None))
     assert all(ordinal is not None for _, _, ordinal in deletes[:record_at])
     assert {ordinal for _, _, ordinal in deletes[:record_at]} == {0, 1, 2}
-    assert harness.sink.read_document("d1") is None
+    assert harness.probe("d1") is None
 
 
 def test_a_failed_chunk_delete_keeps_the_record(harness: Harness) -> None:
@@ -380,7 +562,7 @@ def test_a_failed_chunk_delete_keeps_the_record(harness: Harness) -> None:
 
     assert set(outcome.failed) == {"d1"}
     harness.heal()
-    probe = harness.sink.read_document("d1")
+    probe = harness.probe("d1")
     assert probe is not None
     assert probe.record_present
 
@@ -398,7 +580,7 @@ def test_a_document_delete_leaves_nothing_behind(harness: Harness, stray: str) -
     outcome = harness.sink.delete_documents(["d1"])
 
     assert outcome == DeleteOutcome(deleted=("d1",))
-    assert harness.store.get_bytes(stray_key) is None
+    assert not harness.holds(stray_key)
     deletes = [event for event in harness.events() if event[0] == "delete"]
     assert deletes[-1] == ("delete", "d1", None)
 
@@ -412,7 +594,7 @@ def test_an_agency_delete_leaves_no_stray_behind(harness: Harness) -> None:
     outcome = harness.sink.delete_agency(AGENCY)
 
     assert outcome == DeleteOutcome(deleted=(AGENCY,))
-    assert harness.store.get_bytes(stray_key) is None
+    assert not harness.holds(stray_key)
 
 
 def test_an_agency_delete_removes_documents_and_not_the_manifest(
@@ -429,9 +611,9 @@ def test_an_agency_delete_removes_documents_and_not_the_manifest(
     outcome = harness.sink.delete_agency(AGENCY)
 
     assert outcome == DeleteOutcome(deleted=(AGENCY,))
-    assert harness.sink.read_document("d1") is None
-    assert harness.sink.read_document("d2") is None
-    assert harness.store.get_bytes(manifest) == b"{}"
+    assert harness.probe("d1") is None
+    assert harness.probe("d2") is None
+    assert harness.holds(manifest)
 
 
 # --------------------------------------------------------------------------
@@ -539,6 +721,7 @@ def _degraded_sinks() -> dict[str, ContentSink]:
                 max_concurrency=1,
             ),
         ),
+        "llm_module[proposed terms]": _llm_module_sink(FakeLlmModule(), PROPOSED_TERMS),
     }
 
 
@@ -589,10 +772,15 @@ def test_sweep_stale_sweeps_or_refuses_and_never_silently_no_ops(
     harness: Harness,
 ) -> None:
     """No capability gates the sweep (the llm-module sweeps by synced_at
-    without listing), so the contract is: do it, or say you cannot."""
-    _publish(harness)
+    without listing), so the contract is: do it, or say you cannot. A sweep
+    that runs removes what is stale and absent from the keep list, and
+    spares what the keep list names however old it is (L10)."""
+    _publish(harness, "d1")
+    _publish(harness, "d2")
     try:
-        outcome = harness.sink.sweep_stale(AGENCY, datetime.now(UTC))
+        outcome = harness.sink.sweep_stale(AGENCY, datetime.now(UTC), ["d2"])
     except NotSupported:
         return
-    assert "d1" in outcome.succeeded
+    assert outcome == DeleteOutcome(deleted=("d1",))
+    assert harness.probe("d1") is None
+    assert harness.probe("d2") is not None

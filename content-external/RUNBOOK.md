@@ -117,7 +117,7 @@ the `content-external run` log line:
 
 | `error_type` | Cause | What to do |
 |---|---|---|
-| `ConfigurationError` | The secret still holds a placeholder, `account_url` is missing or has a query string, it does not hold exactly one credential form, or Vault answered 403/404 | Fix the secret or the `content-policy` grant. The next tick fails the same way until then |
+| `ConfigurationError` | The secret still holds a placeholder, `account_url` is missing or has a query string, it does not hold exactly one credential form, or Vault answered 403/404 | Fix the secret or the `content-external-policy` grant. The next tick fails the same way until then |
 | `StoreError`, retryable | Vault unreachable, timed out, 429 or 5xx | Nothing; the next tick retries |
 | `StoreError`, permanent | Any other Vault 4xx, or a response that is not a KV v2 secret | Check `VAULT_ADDR` and `VAULT_SECRET_PATH` |
 
@@ -597,6 +597,149 @@ database took 8.5–9.9 s. At the default page size none of 9 did, but at
 20,000 one did, and its abandoned page slowed the next listing. After a
 timeout, wait for the next run, or cancel the running export queries first
 (step 2 above).
+
+## Changing chunk geometry on the llm-module sink
+
+**What triggers it.** A change to `CHUNK_PROFILE`, or a release that bumps
+`CHUNKER_VERSION` or `NORMALISER_VERSION`, changes the chunker fingerprint.
+Every document then re-chunks on its next run. On the object-store sink that
+is a longer run. On the llm-module sink it is a **full corpus re-embed**: a
+bill and a rate-limit event on the llm-module's side, and — because this
+pipeline is the only chunker in the retrieval path — a change to the passages
+the assistant answers from.
+
+**What stops it from happening by accident (L18).** The llm-module sink
+declares `rechunk_requires_ack`. While any committed document is on a
+geometry other than the configured one, an export without `--accept-rechunk`
+fails before it reads anything or sends anything:
+
+```
+content-external run ... outcome=failed error_type=RechunkNotAcknowledged rechunk=refused ...
+```
+
+It fails every tick until the re-chunk is done by hand. The HTTP endpoint
+cannot pass the flag, so the cron never can. A `--limit` slice re-chunks some
+documents and leaves the rest pending, so it does **not** unlock the cron.
+
+**Procedure.**
+
+1. **Announce it and agree a window** with the llm-module owner. State the
+   corpus size: every document is re-embedded.
+2. **Check the profile** against their embedder's token budget (Open item 1).
+   Retrieval quality is measured, not assumed: the cutover comparison (L20)
+   is the template.
+3. Deploy the configuration change, with `LLM_MODULE_CHUNK_PROFILE_CONFIRMED`
+   set to the new `CHUNK_PROFILE` (without it, startup refuses). Expect
+   `rechunk=refused` on the next tick — that is the guard working, not an
+   incident.
+4. **A slice first:**
+   `python -m exporter.run_sync --agency-id … --limit 25 --accept-rechunk`.
+   Check the report (`rechunk: accepted`, `publish_failed_count: 0`) and spot
+   check a few documents on the far side.
+5. **The full run, by hand, at reduced concurrency:** set
+   `EXPORT_CONCURRENCY` lower than usual for the run, then
+   `python -m exporter.run_sync --agency-id … --accept-rechunk`. Documents a
+   committed run (the step-4 slice) already re-chunked are not re-sent. A
+   run that fails part way commits nothing, so its retry re-sends what it had
+   pushed: harmless (the point ids are the same), but embedded again, so fix
+   the cause before retrying.
+6. The next cron tick should report `rechunk=-` and `success` or
+   `unchanged`. Restore `EXPORT_CONCURRENCY`.
+
+If a document cannot be re-chunked (it fails permanently), it keeps the old
+geometry and the cron keeps refusing. Fix or dead-letter it, then repeat
+step 5.
+
+## The stale sweep (L10)
+
+**What it is.** `STALE_SWEEP_ENABLED=true` adds one step after a committed
+run: the destination deletes this agency's documents that were synced
+before the run started **and** are not in the committed manifest. It catches
+content no deletion signal names any more — a delete a run made and then
+failed to record, or content an earlier deployment left behind.
+
+**Why the keep list.** The exporter never re-sends an unchanged document, so
+a live document can carry a `synced_at` from weeks ago. Without the keep list
+(every document the committed manifest lists) the sweep would delete it.
+
+**When it runs, and what `stale_sweep=` in the run line means:**
+
+| Value | Meaning | Action |
+|---|---|---|
+| `disabled` | `STALE_SWEEP_ENABLED` is off | none |
+| `not_run` | It is on, but the run ended `unchanged`, `failed` or `busy`, so it never reached the sweep step, which only follows a commit | none, unless `failed` repeats |
+| `refused` | The run cannot vouch for the whole corpus: `--limit`, an abort, a document held back, or an empty manifest | none — the next clean full run sweeps |
+| `not_supported` | The sink has no such sweep. Always so on the object-store sink, whose sweep is J5's tail rule. The llm-module sink has one under the agreed contract (§13 q12), so this appears there only if that agreement is withdrawn | none |
+| `failed` | The sweep call failed. **The run's commit stands** | look at the warning line; if it says the far side deleted a kept document, the manifest now claims content the destination lacks — escalate to the llm-module owner |
+| `done` | `stale_swept_count` documents were removed | none |
+
+`unchanged` runs never sweep: they classified nothing.
+
+The last run's value is also on `GET /health`, as `last_run.stale_sweep` and
+`last_run.stale_swept_count`, next to `last_run.rechunk` (L18:
+`refused` there means every tick is refusing until the re-chunk is run by
+hand, as described above). A `busy` tick or a failure before the run started
+keeps a `refused` value. Only a run that completes clears it.
+
+## llm-module cutover (L19–L25)
+
+The full plan, with commands and sign-off records, is
+[docs/llm-module-cutover.md](docs/llm-module-cutover.md). What an operator
+needs on the day:
+
+**The order is fixed (L21).**
+
+1. Bootstrap beside, into a new collection.
+2. Incremental runs keep it current.
+3. Retrieval comparison, recorded with a decision.
+4. Swap the alias.
+5. Settling period.
+6. **Only then** the llm-module removes its chunker.
+7. Drop the old collection, by its named owner.
+
+Removing the chunker earlier deletes the rollback and the comparison
+together.
+
+**The exporter writes to the physical collection; the swap moves the
+alias.** `LLM_MODULE_COLLECTION` is never the alias that retrieval reads
+through. Put the alias in `LLM_MODULE_PROTECTED_COLLECTIONS` so startup
+refuses it. Neither the swap nor the rollback needs any change to the
+exporter. It keeps writing to the new collection throughout, and that is
+harmless. `GET /health` shows which collection it is: `sink_id` is
+`llm_module:<collection>`, the same value as `sink=` on every run and error
+line.
+
+**A `failed` run with `error_type=SinkMismatch` after changing
+`LLM_MODULE_COLLECTION`** means the manifest was written for another
+collection. That is the guard working, not an incident: the collection is
+part of the manifest's sink_id, so the old manifest cannot claim documents
+are already published in the new collection. If the change was deliberate
+(a re-bootstrap), point `MANIFEST_STORE_PREFIX` at a fresh prefix and
+bootstrap as in the plan's §2 and §3. **Keep the old manifest. Do not delete
+it to make the error go away.** Before you re-point, check that the last run
+against the old collection ended `success` or `unchanged`. The work
+directory is shared, and the new collection's first commit would close any
+deletion journal the old collection left open. If the change was not
+deliberate, restore the previous value.
+
+**The old collection is never removed by this service.** Neither
+`run_purge` nor the stale sweep can see it, and startup refuses
+`contextual_chunks_*` as a target.
+
+**The hourly ZIP job stays (L24).** The llm-module stops pulling
+`zipped/{agency}.zip`, but the Global Classifier still consumes it. Do not
+disable, re-schedule or remove `trigger_zipping`. Without it,
+`agency.data_hash` freezes and the Classifier goes stale with no error.
+`tests/test_classifier_safety.py` fails if the job is removed. Re-run
+Verification 14–17 after the swap.
+
+**Metadata merges are off until you switch them on (L25).** Leave
+`LLM_MODULE_ENABLE_METADATA_MERGE` unset until the llm-module owner confirms
+that merges are implemented all-or-nothing. Before you set it, check on
+staging that a metadata-only edit, such as a page title, reaches the
+collection. A far side that acknowledged a merge without applying it would
+leave stale metadata that the exporter never retries. While the flag is off,
+every `metadata_changed` document is re-pushed in full.
 
 ## Index
 

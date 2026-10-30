@@ -110,6 +110,28 @@ def test_accept_existing_content_reaches_the_run(
     assert report["first_run_probe"] == "overridden"
 
 
+def test_accept_rechunk_reaches_the_run(
+    source: FakeDocumentSource,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """L18's override is the CLI's alone, and it arrives at the coordinator."""
+    patch_wiring(
+        monkeypatch,
+        source=source,
+        sink=RecordingSink(),
+        manifest_client=InMemoryStore(),
+    )
+
+    assert (
+        main(["--agency-id", AGENCY, "--run-id", "r-1", "--accept-rechunk"]) == EXIT_OK
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["accepted_rechunk"] is True
+    assert report["rechunk"] is None
+
+
 def test_the_report_can_go_to_a_file(
     source: FakeDocumentSource, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

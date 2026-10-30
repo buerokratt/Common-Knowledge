@@ -348,6 +348,7 @@ _DESTINATIONS: dict[str, dict[str, str]] = {
         "external_s3_access_key_id": "k",
         "external_s3_secret_access_key": "s",
         "llm_module_base_url": "https://llm.example/ingest",
+        "llm_module_collection": "ckb_chunks_v1",
         "llm_module_vault_secret_path": "llm/connections/ingest",
     },
     "llm_module-azure-manifest": {
@@ -356,6 +357,7 @@ _DESTINATIONS: dict[str, dict[str, str]] = {
         "manifest_store_bucket": "content-manifests",
         "vault_secret_path": "blob/connections/azure_blob/content",
         "llm_module_base_url": "https://llm.example/ingest",
+        "llm_module_collection": "ckb_chunks_v1",
         "llm_module_vault_secret_path": "llm/connections/ingest",
     },
 }
@@ -373,6 +375,8 @@ def test_fingerprint_is_identical_for_every_destination(
             Settings(
                 content_work_dir="/var/lib/content-external",
                 chunk_profile=name,
+                # Read only by llm_module, which requires it to name the profile.
+                llm_module_chunk_profile_confirmed=name,
                 **overrides,  # pyright: ignore[reportArgumentType]
             ).resolved_chunk_profile
         )

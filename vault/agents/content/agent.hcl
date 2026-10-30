@@ -17,8 +17,10 @@ auto_auth {
     }
   }
 
-  # Writes a valid, auto-renewed token to a file.
-  # content-external reads this file directly.
+  # Writes a valid, auto-renewed token to a file. content-external reads it
+  # on every llm-module operation (L11) and never caches it, so a rotated
+  # token is picked up without a restart. The Azure Blob credential (Stage H)
+  # is read through the same token, on every store build.
   sink "file" {
     config = {
       path = "/agent/out/token"
@@ -26,3 +28,9 @@ auto_auth {
     }
   }
 }
+
+# Deliberately no cache, listener or api_proxy block: the agent's only job is
+# to write and renew the token. Vault 1.21.3 (the image compose runs) REFUSES
+# a `cache` block with no listener or template — "enabling the cache requires
+# at least 1 template or 1 listener to be defined" — so the agent would exit
+# at startup and no token would ever be written. Checked against that image.

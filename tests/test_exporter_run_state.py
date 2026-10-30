@@ -30,6 +30,7 @@ from exporter.services.locking import try_exclusive_lock
 from exporter.services.run_state import (
     LAST_RUN_FILENAME,
     RECORD_LOCK_FILENAME,
+    RunOutcome,
     RunStateStore,
     utc_now_iso,
 )
@@ -567,6 +568,115 @@ def test_a_record_from_before_f20_reads_the_flag_as_unknown(tmp_path: Path) -> N
     last = RunStateStore(tmp_path).read()
     assert last is not None
     assert last.run_observed_full_corpus is None
+    # The L10 / L18 fields too: unknown, not a guessed default.
+    assert last.stale_sweep is None
+    assert last.stale_swept_count == 0
+    assert last.rechunk is None
+
+
+def test_the_sweep_and_rechunk_results_survive_a_round_trip(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.record(
+        outcome="failed",
+        run_id="r",
+        agency_id="a-1",
+        duration_seconds=0.1,
+        error_type="RechunkNotAcknowledged",
+        stale_sweep="not_run",
+        rechunk="refused",
+    )
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    assert (last.stale_sweep, last.stale_swept_count, last.rechunk) == (
+        "not_run",
+        0,
+        "refused",
+    )
+
+    store.record(
+        outcome="success",
+        run_id="r2",
+        agency_id="a-1",
+        duration_seconds=0.1,
+        stale_sweep="done",
+        stale_swept_count=3,
+    )
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    # One record, overwritten: the re-chunk is no longer pending.
+    assert (last.stale_sweep, last.stale_swept_count, last.rechunk) == (
+        "done",
+        3,
+        None,
+    )
+
+
+@pytest.mark.parametrize("outcome", ["busy", "failed"])
+def test_a_refused_rechunk_survives_a_tick_that_never_looked(
+    tmp_path: Path, outcome: RunOutcome
+) -> None:
+    """L18: `refused` is the one value worth alerting on, and it holds until
+    an operator acts. A busy tick never ran and an early failure never reached
+    the coordinator; neither may record null over it."""
+    store = _store(tmp_path)
+    store.record(
+        outcome="failed",
+        run_id="r",
+        agency_id="a-1",
+        duration_seconds=0.1,
+        error_type="RechunkNotAcknowledged",
+        rechunk="refused",
+    )
+
+    store.record(
+        outcome=outcome,
+        run_id="r2",
+        agency_id="a-1",
+        duration_seconds=0.0,
+        error_type="CredentialUnavailableError" if outcome == "failed" else None,
+    )
+
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    assert last.outcome == outcome
+    assert last.rechunk == "refused"
+
+
+def test_a_completed_run_clears_a_refused_rechunk(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    store.record(
+        outcome="failed",
+        run_id="r",
+        agency_id="a-1",
+        duration_seconds=0.1,
+        rechunk="refused",
+    )
+    store.record(outcome="unchanged", run_id="r2", agency_id="a-1", duration_seconds=1)
+
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    assert last.rechunk is None
+
+
+def test_a_non_string_sweep_or_rechunk_value_reads_as_unknown(tmp_path: Path) -> None:
+    (tmp_path / LAST_RUN_FILENAME).write_text(
+        json.dumps(
+            {
+                "outcome": "success",
+                "run_id": "r",
+                "agency_id": "a-1",
+                "finished_at": "2026-10-01T00:00:00Z",
+                "duration_seconds": 1.0,
+                "stale_sweep": True,
+                "rechunk": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    last = RunStateStore(tmp_path).read()
+    assert last is not None
+    assert last.stale_sweep is None
+    assert last.rechunk is None
 
 
 def test_fields_are_sorted_so_two_runs_diff_line_for_line() -> None:

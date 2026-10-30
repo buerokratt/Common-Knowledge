@@ -18,6 +18,7 @@ from exporter.services.run_state import LAST_RUN_FILENAME, RunStateStore
 HEALTH_KEYS = {
     "status",
     "sink",
+    "sink_id",
     "store_backend",
     "chunk_profile",
     "work_dir",
@@ -56,6 +57,7 @@ def test_health_returns_ok_and_the_configured_identity(work_dir_env: Path) -> No
     assert set(body) == HEALTH_KEYS
     assert body["status"] == "ok"
     assert body["sink"] == "object_store"
+    assert body["sink_id"] == "object_store"
     assert body["store_backend"] == "s3"
     assert body["chunk_profile"] == "azure_native"
     assert body["work_dir"] == work_dir_env.as_posix()
@@ -70,12 +72,14 @@ def test_health_reports_the_configured_sink(
     The extra variables are not noise: A12's matrix refuses
     CONTENT_SINK=llm_module without a manifest store and without a base URL
     and credential path, and B11 refuses it without an explicit
-    CHUNK_PROFILE, so this is the minimum viable llm_module deployment.
+    CHUNK_PROFILE confirmed by LLM_MODULE_CHUNK_PROFILE_CONFIRMED, so this is
+    the minimum viable llm_module deployment.
     Asserting the whole set here means a future relaxation of the matrix shows
     up as this test passing with fewer of them, rather than silently.
     """
     monkeypatch.setenv("CONTENT_SINK", "llm_module")
     monkeypatch.setenv("CHUNK_PROFILE", "compact")
+    monkeypatch.setenv("LLM_MODULE_CHUNK_PROFILE_CONFIRMED", "compact")
     monkeypatch.setenv("MANIFEST_STORE_BACKEND", "s3")
     monkeypatch.setenv("MANIFEST_STORE_ENDPOINT_URL", "https://store.example")
     monkeypatch.setenv("MANIFEST_STORE_BUCKET", "content-manifests")
@@ -83,11 +87,15 @@ def test_health_reports_the_configured_sink(
     monkeypatch.setenv("EXTERNAL_S3_ACCESS_KEY_ID", "manifest-key-id")
     monkeypatch.setenv("EXTERNAL_S3_SECRET_ACCESS_KEY", "manifest-secret")
     monkeypatch.setenv("LLM_MODULE_BASE_URL", "https://llm.example/ingest")
+    monkeypatch.setenv("LLM_MODULE_COLLECTION", "ckb_chunks_v1")
     monkeypatch.setenv("LLM_MODULE_VAULT_SECRET_PATH", "llm/connections/ingest")
+    # No LLM_MODULE_ALLOW_PROPOSED_CONTRACT: the contract is agreed.
 
     with TestClient(app) as client:
         body = client.get("/health").json()
     assert body["sink"] == "llm_module"
+    # L19: which collection, visible at a swap or rollback.
+    assert body["sink_id"] == "llm_module:ckb_chunks_v1"
     assert body["chunk_profile"] == "compact"
 
 
@@ -155,6 +163,29 @@ def test_health_reports_the_consecutive_counters(work_dir_env: Path) -> None:
 
     assert last_run["consecutive_failures"] == 3
     assert last_run["consecutive_busy"] == 0
+
+
+def test_health_reports_the_sweep_and_rechunk_results(work_dir_env: Path) -> None:
+    """L10 and L18 on /health, not only in the run line: a re-chunk refused
+    every tick, or a sweep that fails after its commit, is visible to a probe
+    without anyone grepping logs."""
+    RunStateStore(work_dir_env).record(
+        outcome="failed",
+        run_id="r-3",
+        agency_id="agency-1",
+        duration_seconds=0.5,
+        error_type="RechunkNotAcknowledged",
+        stale_sweep="not_run",
+        rechunk="refused",
+    )
+
+    with TestClient(app) as client:
+        last_run = client.get("/health").json()["last_run"]
+
+    assert last_run["rechunk"] == "refused"
+    assert last_run["stale_sweep"] == "not_run"
+    assert last_run["stale_swept_count"] == 0
+    assert last_run["error_type"] == "RechunkNotAcknowledged"
 
 
 def test_health_survives_a_corrupt_last_run_record(work_dir_env: Path) -> None:
