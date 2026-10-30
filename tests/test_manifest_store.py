@@ -15,7 +15,7 @@ import pytest
 from exporter_fakes import InMemoryStore
 from pydantic import SecretStr
 
-from exporter.api.config import ConfigurationError, Settings
+from exporter.api.config import AzureBlobSecrets, ConfigurationError, Settings
 from exporter.core.constants import (
     MANIFEST_DOCUMENT_SCHEMA_VERSION,
     MANIFEST_SCHEMA_VERSION,
@@ -29,6 +29,7 @@ from exporter.services.manifest_store import (
     build_manifest_store,
 )
 from exporter.stores import factory
+from exporter.stores.azure_blob_store import AzureBlobStore
 from exporter.stores.base import ExternalStoreClient, StoreError
 from exporter.stores.factory import StoreConnection, build_manifest_store_client
 from exporter.stores.local_store import LocalFileStore
@@ -715,14 +716,27 @@ def test_an_explicit_s3_store_is_a_real_s3_store() -> None:
     assert isinstance(client, S3Store)
 
 
-def test_an_explicit_azure_store_names_stage_h() -> None:
-    with pytest.raises(ConfigurationError, match="Stage H"):
-        build_manifest_store_client(
-            _settings(
-                manifest_store_backend="azure_blob",
-                manifest_store_bucket="content-manifests",
-            )
+def test_an_explicit_azure_store_is_a_real_azure_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        factory,
+        "get_vault_secrets",
+        lambda settings: AzureBlobSecrets(
+            account_url="https://account.blob.core.windows.net",
+            credential=SecretStr("sig=test"),
+            credential_kind="sas_token",
+        ),
+    )
+    client = build_manifest_store_client(
+        _settings(
+            manifest_store_backend="azure_blob",
+            manifest_store_bucket="content-manifests",
+            vault_secret_path="blob/connections/azure_blob/content",
         )
+    )
+    assert isinstance(client, AzureBlobStore)
+    assert client._client.container_name == "content-manifests"
 
 
 def test_an_explicit_local_store_lives_under_the_work_dir(tmp_path: Path) -> None:

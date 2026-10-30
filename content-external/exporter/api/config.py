@@ -41,6 +41,7 @@ import os
 import posixpath
 from collections.abc import Sequence
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
@@ -298,9 +299,9 @@ class Settings(BaseSettings):
 
     # --- Vault -------------------------------------------------------------
     # No default for vault_secret_path: the documented value names the Azure
-    # path, and Azure is Stage H. A default that is wrong for the s3 and
-    # llm_module deployments is worse than no default. The Stage-H example
-    # lives in content-external/README.md instead.
+    # path, which only an azure_blob store reads. A default that is wrong for
+    # the s3 and llm_module deployments is worse than no default. The Azure
+    # value is in content-external/README.md instead.
     vault_addr: str = "http://vault:8200"
     vault_token_path: str = "/agent/out/token"
     vault_secret_path: str = ""
@@ -403,6 +404,8 @@ class Settings(BaseSettings):
                 missing.append("EXTERNAL_S3_ACCESS_KEY_ID")
             if not self.external_s3_secret_access_key.get_secret_value():
                 missing.append("EXTERNAL_S3_SECRET_ACCESS_KEY")
+        if self.manifest_store_backend == "azure_blob" and not self.vault_secret_path:
+            missing.append("VAULT_SECRET_PATH")
         if missing:
             raise ValueError(
                 f"MANIFEST_STORE_BACKEND={self.manifest_store_backend} is set "
@@ -412,15 +415,6 @@ class Settings(BaseSettings):
                 "would publish documents and then fail to record that it had."
                 " (An s3 manifest store authenticates with the EXTERNAL_S3_* "
                 "keys, never CKB's own AWS_* keys.)"
-            )
-        if self.manifest_store_backend == "azure_blob":
-            # After the completeness check, so a missing container is still
-            # named. Remove when Stage H registers the backend: until then it
-            # would pass startup and fail at the first run, which is exactly
-            # what this matrix exists to prevent.
-            raise ValueError(
-                "MANIFEST_STORE_BACKEND=azure_blob has no implementation in this "
-                "build yet (Stage H). Use s3 for the manifest store until it lands."
             )
         if (
             self.manifest_store_backend == "s3"
@@ -610,8 +604,9 @@ def load_settings() -> Settings:
 # Bounded so an unresponsive Vault fails the run instead of holding its lock.
 _VAULT_TIMEOUT_SECONDS = 10
 _VAULT_PLACEHOLDER = "REPLACE_ME"
-AzureCredentialKind = Literal["account_key", "sas_token"]
+AzureCredentialKind = Literal["account_key", "sas_token", "service_principal"]
 _AZURE_CREDENTIAL_FIELDS: tuple[AzureCredentialKind, ...] = ("account_key", "sas_token")
+_AZURE_SERVICE_PRINCIPAL_FIELDS = ("tenant_id", "client_id", "client_secret")
 
 
 @dataclass(frozen=True)
@@ -619,6 +614,9 @@ class AzureBlobSecrets:
     account_url: str
     credential: SecretStr
     credential_kind: AzureCredentialKind
+    tenant_id: str = dataclass_field(default="", repr=False)
+    client_id: str = dataclass_field(default="", repr=False)
+    client_secret: SecretStr = dataclass_field(default=SecretStr(""), repr=False)
 
 
 def _read_vault_token(path: str) -> str:
@@ -642,9 +640,9 @@ def get_vault_secrets(settings: Settings) -> AzureBlobSecrets:
 
     The token file is re-read each time and nothing is cached, so a token the
     Vault Agent has rotated is always the one used. The secret holds
-    `account_url` plus exactly one of `account_key` or `sas_token`.
-    Connection strings and service principals are not supported: a service
-    principal needs azure-identity, which is not a dependency.
+    `account_url` plus exactly one of `account_key`, `sas_token`, or a
+    service principal (`tenant_id`, `client_id`, and `client_secret`).
+    Connection strings are not supported.
 
     ConfigurationError for what fails identically every run; StoreError
     otherwise, permanent unless retrying can help. No message carries the
@@ -700,11 +698,21 @@ def get_vault_secrets(settings: Settings) -> AzureBlobSecrets:
     kinds: list[AzureCredentialKind] = [
         name for name in _AZURE_CREDENTIAL_FIELDS if name in fields
     ]
+    missing_principal = [
+        name for name in _AZURE_SERVICE_PRINCIPAL_FIELDS if name not in fields
+    ]
+    if len(missing_principal) < len(_AZURE_SERVICE_PRINCIPAL_FIELDS):
+        kinds.append("service_principal")
     problem = None
     if "account_url" not in fields:
         problem = "account_url is missing or blank"
+    elif "service_principal" in kinds and missing_principal:
+        problem = f"a service principal is missing {', '.join(missing_principal)}"
     elif len(kinds) != 1:
-        problem = "it must hold exactly one of account_key or sas_token"
+        problem = (
+            "it must hold exactly one of account_key, sas_token, or "
+            "tenant_id + client_id + client_secret"
+        )
     elif any(_VAULT_PLACEHOLDER in value for value in fields.values()):
         problem = f"it still holds {_VAULT_PLACEHOLDER} placeholder values"
     elif "?" in fields["account_url"]:
@@ -715,8 +723,11 @@ def get_vault_secrets(settings: Settings) -> AzureBlobSecrets:
         )
     return AzureBlobSecrets(
         account_url=fields["account_url"],
-        credential=SecretStr(fields[kinds[0]]),
+        credential=SecretStr(fields.get(kinds[0], "")),
         credential_kind=kinds[0],
+        tenant_id=fields.get("tenant_id", ""),
+        client_id=fields.get("client_id", ""),
+        client_secret=SecretStr(fields.get("client_secret", "")),
     )
 
 

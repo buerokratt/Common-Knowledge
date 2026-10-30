@@ -17,7 +17,12 @@ VAULT_ADDR = "http://vault.test:8200"
 ACCOUNT_URL = "https://exampleaccount.blob.core.windows.net"
 ACCOUNT_KEY = "c2VjcmV0LWFjY291bnQta2V5"
 SAS_TOKEN = "sv=2024-11-04&ss=b&sig=c2VjcmV0LXNpZw"
-SECRET_VALUES = (TOKEN, ACCOUNT_KEY, SAS_TOKEN)
+PRINCIPAL = {
+    "tenant_id": "test-tenant-id",
+    "client_id": "test-client-id",
+    "client_secret": "never-print-client-secret",
+}
+SECRET_VALUES = (TOKEN, ACCOUNT_KEY, SAS_TOKEN, *PRINCIPAL.values())
 
 
 @pytest.fixture
@@ -95,6 +100,62 @@ def test_each_credential_kind_is_parsed_from_one_bounded_request(
     assert call["url"] == f"{VAULT_ADDR}/v1/secret/data/{SECRET_PATH}"
     assert call["headers"] == {"X-Vault-Token": TOKEN}
     assert 0 < call["timeout"] <= 30
+
+
+def test_a_complete_service_principal_is_parsed_without_exposing_its_secret(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, token_file: Path
+) -> None:
+    _fake_vault(monkeypatch, _kv(account_url=ACCOUNT_URL, **PRINCIPAL))
+    secrets = get_vault_secrets(_settings(tmp_path, token_file))
+
+    assert secrets.account_url == ACCOUNT_URL
+    assert secrets.credential_kind == "service_principal"
+    assert secrets.tenant_id == PRINCIPAL["tenant_id"]
+    assert secrets.client_id == PRINCIPAL["client_id"]
+    assert secrets.client_secret.get_secret_value() == PRINCIPAL["client_secret"]
+    assert secrets.credential.get_secret_value() == ""
+    _assert_no_secret_in(repr(secrets))
+
+
+@pytest.mark.parametrize("missing", list(PRINCIPAL))
+@pytest.mark.parametrize("invalid_value", [None, "", " ", 7])
+def test_a_partial_service_principal_names_fields_not_values(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    token_file: Path,
+    missing: str,
+    invalid_value: object,
+) -> None:
+    fields: dict[str, object] = {**PRINCIPAL}
+    if invalid_value is None:
+        del fields[missing]
+    else:
+        fields[missing] = invalid_value
+    _fake_vault(monkeypatch, _kv(account_url=ACCOUNT_URL, **fields))
+    with pytest.raises(ConfigurationError) as excinfo:
+        get_vault_secrets(_settings(tmp_path, token_file))
+    assert str(excinfo.value) == (
+        f"Vault secret {SECRET_PATH} is unusable: "
+        f"a service principal is missing {missing}"
+    )
+    _assert_no_secret_in(str(excinfo.value))
+    _assert_no_secret_in(repr(excinfo.value))
+
+
+@pytest.mark.parametrize(
+    "other", [{"account_key": ACCOUNT_KEY}, {"sas_token": SAS_TOKEN}]
+)
+def test_a_service_principal_cannot_be_combined_with_another_credential(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    token_file: Path,
+    other: dict[str, str],
+) -> None:
+    _fake_vault(monkeypatch, _kv(account_url=ACCOUNT_URL, **PRINCIPAL, **other))
+    with pytest.raises(ConfigurationError, match="exactly one") as excinfo:
+        get_vault_secrets(_settings(tmp_path, token_file))
+    _assert_no_secret_in(str(excinfo.value))
+    _assert_no_secret_in(repr(excinfo.value))
 
 
 @pytest.mark.parametrize(
