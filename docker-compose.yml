@@ -40,14 +40,15 @@ services:
       - vault-init-data:/vault/data
       - vault-agent-creds:/agent/credentials
       - vault-agent-token:/agent/out
+      - vault-agent-content-token:/agent/out-content
       - ./vault/init.sh:/vault/init.sh:ro
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
         apk add --no-cache curl jq >/dev/null 2>&1 &&
         chmod -R 755 /agent/credentials &&
-        chmod -R 770 /agent/out &&
-        chown -R vault:vault /agent/credentials /agent/out /vault/data &&
+        chmod -R 770 /agent/out /agent/out-content &&
+        chown -R vault:vault /agent/credentials /agent/out /agent/out-content /vault/data &&
         su vault -s /bin/sh /vault/init.sh
     environment:
       VAULT_ADDR: "http://vault:8200"
@@ -70,6 +71,34 @@ services:
       - vault-agent-token:/agent/out
       - ./vault/agents/cleaner/agent.hcl:/vault/agent-cleaner.hcl:ro
     command: ["vault", "agent", "-config=/vault/agent-cleaner.hcl", "-log-level=info"]
+    environment:
+      VAULT_ADDR: "http://vault:8200"
+    cap_add:
+      - IPC_LOCK
+    healthcheck:
+      test: ["CMD", "sh", "-c", "test -f /agent/out/token && test -s /agent/out/token"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+
+  # ─────────────────────────────────────────────
+  # VAULT AGENT — proxy for content-external
+  # ─────────────────────────────────────────────
+  vault-agent-content:
+    image: hashicorp/vault:1.21.3
+    container_name: vault-agent-content
+    restart: unless-stopped
+    networks:
+      - bykstack
+    volumes:
+      - vault-agent-creds:/agent/credentials:ro
+      - vault-agent-content-token:/agent/out
+      - ./vault/agents/content/agent.hcl:/vault/agent-content.hcl:ro
+    command: ["vault", "agent", "-config=/vault/agent-content.hcl", "-log-level=info"]
     environment:
       VAULT_ADDR: "http://vault:8200"
     cap_add:
@@ -446,6 +475,7 @@ services:
       - 8125:8125
     volumes:
       - content-external-work:/var/lib/content-external
+      - vault-agent-content-token:/agent/out:ro
     environment:
       # Required, with no default in the code: a fallback would let a
       # deployment that forgot this write the run lock and the deletion
@@ -505,6 +535,12 @@ services:
       # requires MANIFEST_STORE_ALLOW_LOCAL=true. Do not set it here: a
       # re-provisioned volume would read as a first run, republishing the
       # corpus and permanently orphaning everything CKB deleted meanwhile.
+      #
+      # The Azure Blob credential, read from Vault per run through this
+      # service's own agent token. Unused while the backend is s3.
+      - VAULT_TOKEN_PATH=/agent/out/token
+      - VAULT_SECRET_PATH=blob/connections/azure_blob/content
+    # s3 does not use Vault; an azure_blob run without a token fails with ConfigurationError.
     networks:
       - bykstack
 
@@ -551,6 +587,7 @@ volumes:
   vault-logs:
   vault-agent-creds:
   vault-agent-token:
+  vault-agent-content-token:
   # vault-agent-cleaner-token removed — was unused (agent writes to vault-agent-token)
 
 networks:

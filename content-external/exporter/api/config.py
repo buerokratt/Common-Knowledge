@@ -40,9 +40,11 @@ import logging
 import os
 import posixpath
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
+import requests
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -56,6 +58,7 @@ from exporter.core.constants import (
 from exporter.core.ids import chunker_fingerprint, validate_prefix
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
+from exporter.stores.base import StoreError
 
 logger = logging.getLogger(__name__)
 
@@ -602,6 +605,119 @@ def load_settings() -> Settings:
             "content-external configuration is invalid:\n"
             + sanitize_sensitive_text(str(exc))
         ) from None
+
+
+# Bounded so an unresponsive Vault fails the run instead of holding its lock.
+_VAULT_TIMEOUT_SECONDS = 10
+_VAULT_PLACEHOLDER = "REPLACE_ME"
+AzureCredentialKind = Literal["account_key", "sas_token"]
+_AZURE_CREDENTIAL_FIELDS: tuple[AzureCredentialKind, ...] = ("account_key", "sas_token")
+
+
+@dataclass(frozen=True)
+class AzureBlobSecrets:
+    account_url: str
+    credential: SecretStr
+    credential_kind: AzureCredentialKind
+
+
+def _read_vault_token(path: str) -> str:
+    try:
+        token = Path(path).read_text(encoding="utf-8").strip()
+    except OSError as exc:
+        raise ConfigurationError(
+            sanitize_sensitive_text(
+                f"Could not read the Vault token file {path}: {exc}"
+            )
+        ) from exc
+    if not token:
+        raise ConfigurationError(
+            sanitize_sensitive_text(f"Vault token file {path} is empty")
+        )
+    return token
+
+
+def get_vault_secrets(settings: Settings) -> AzureBlobSecrets:
+    """Fetch the Azure Blob credential from Vault, fresh on every call.
+
+    The token file is re-read each time and nothing is cached, so a token the
+    Vault Agent has rotated is always the one used. The secret holds
+    `account_url` plus exactly one of `account_key` or `sas_token`.
+    Connection strings and service principals are not supported: a service
+    principal needs azure-identity, which is not a dependency.
+
+    ConfigurationError for what fails identically every run; StoreError
+    otherwise, permanent unless retrying can help. No message carries the
+    token, a secret value or the Vault response body.
+    """
+    path = settings.vault_secret_path
+    if not path:
+        raise ConfigurationError(
+            "VAULT_SECRET_PATH is empty; the Azure Blob backend reads its "
+            "credential from Vault"
+        )
+    token = _read_vault_token(settings.vault_token_path)
+    try:
+        response = requests.get(
+            f"{settings.vault_addr}/v1/secret/data/{path}",
+            headers={"X-Vault-Token": token},
+            timeout=_VAULT_TIMEOUT_SECONDS,
+        )
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        raise StoreError(
+            sanitize_sensitive_text(f"Vault request for {path} failed: {exc}")
+        ) from exc
+
+    status = response.status_code
+    if status in (403, 404):
+        raise ConfigurationError(
+            sanitize_sensitive_text(
+                f"Vault returned HTTP {status} for {path}: the secret is missing "
+                "or the content policy does not grant read on it"
+            )
+        )
+    if status >= 400:
+        raise StoreError(
+            sanitize_sensitive_text(f"Vault returned HTTP {status} for {path}"),
+            permanent=status != 429 and status < 500,
+        )
+
+    try:
+        data = response.json()["data"]["data"]
+    except (ValueError, KeyError, TypeError):
+        data = None
+    if not isinstance(data, dict):
+        raise StoreError(
+            sanitize_sensitive_text(f"Vault response for {path} is not a KV v2 secret"),
+            permanent=True,
+        )
+
+    fields = {
+        name: value.strip()
+        for name, value in data.items()
+        if isinstance(value, str) and value.strip()
+    }
+    kinds: list[AzureCredentialKind] = [
+        name for name in _AZURE_CREDENTIAL_FIELDS if name in fields
+    ]
+    problem = None
+    if "account_url" not in fields:
+        problem = "account_url is missing or blank"
+    elif len(kinds) != 1:
+        problem = "it must hold exactly one of account_key or sas_token"
+    elif any(_VAULT_PLACEHOLDER in value for value in fields.values()):
+        problem = f"it still holds {_VAULT_PLACEHOLDER} placeholder values"
+    elif "?" in fields["account_url"]:
+        problem = "account_url has a query string; put a SAS in sas_token"
+    if problem:
+        raise ConfigurationError(
+            sanitize_sensitive_text(f"Vault secret {path} is unusable: {problem}")
+        )
+    return AzureBlobSecrets(
+        account_url=fields["account_url"],
+        credential=SecretStr(fields[kinds[0]]),
+        credential_kind=kinds[0],
+    )
 
 
 def assert_work_dir_usable(settings: Settings) -> Path:
