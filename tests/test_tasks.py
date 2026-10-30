@@ -210,7 +210,7 @@ class TestTrafilaturaFormatting:
         assert len(lines) == 2
         assert all(l.lstrip().startswith(("*", "-")) for l in lines)
 
-    def test_space_kept_after_link_and_formerly_bold_text(self) -> None:
+    def test_space_kept_around_bold_and_links(self) -> None:
         from worker.tasks import _trafilatura_extract
 
         html = f"""<html><body><article><h1>Admission</h1><p>{_LONG_PARA}</p>
@@ -218,8 +218,74 @@ class TestTrafilaturaFormatting:
           <a href="/form">application form</a> must include it.</p>
           <p>{_LONG_PARA}</p></article></body></html>"""
         result = _trafilatura_extract(html) or ""
-        assert "admission application based" in result
-        assert "[application form](/form) must" in result
+        assert "an **admission application** based" in result
+        assert "the [application form](/form) must" in result
+
+    def test_space_kept_around_bold_and_links_in_list_items(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Snow</h1><p>{_LONG_PARA}</p>
+          <ul>
+            <li><strong>Call:</strong> <a href="tel:14410">14410</a> around the clock,
+              the preferred channel when the pavement is icy or blocked.</li>
+            <li>Or <b>write</b> to the city at any time using the feedback form
+              on the website, answered within five working days.</li>
+          </ul><p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "**Call:** [14410](tel:14410) around" in result
+        assert "Or **write** to the city" in result
+        assert "\ue000" not in result
+
+    def test_space_inside_bold_moves_outside(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Rent</h1><p>{_LONG_PARA}</p>
+          <p>The committee settles <strong>housing&nbsp;</strong>lease disputes
+          and parking is<strong> free</strong> on public holidays.</p>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "settles **housing** lease" in result
+        assert "is **free** on" in result
+
+    def test_line_break_between_link_and_bold_kept(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Contacts</h1><p>{_LONG_PARA}</p>
+          <p>Architect: <a href="/people/karro">Martin Karro</a><br><br><strong>Communication</strong>:
+          development department of the city planning office</p>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "[Martin Karro](/people/karro)**" not in result
+        assert "**Communication**" in result
+        assert "\ue000" not in result
+
+    def test_bold_only_heading_stays_a_heading(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Plans</h1><p>{_LONG_PARA}</p>
+          <h4>Culture</h4><ul><li><p>Philharmonic development plan for the city</p></li></ul>
+          <h4><strong>Environment</strong></h4><ul><li><p>Environmental development plan</p></li></ul>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "#### Environment" in result
+
+    def test_heading_with_only_button_text_dropped(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Screening</h1><p>{_LONG_PARA}</p>
+          <h3><button type="button">What is it?</button></h3><p>{_LONG_PARA}</p>
+          </article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert not any(l.strip("# ") == "" and l.startswith("#") for l in result.splitlines())
+
+    def test_bold_section_headings_kept(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Events</h1><p>{_LONG_PARA}</p>
+          <p><strong>Northern prefecture</strong></p><p>{_LONG_PARA}</p>
+          </article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "**Northern prefecture**" in result
 
     def test_page_title_prepended_when_missing(self) -> None:
         from worker.tasks import _ensure_page_title

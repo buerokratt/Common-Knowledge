@@ -479,10 +479,19 @@ def _beautifulsoup_extract(html: str) -> str:
 # HTML pre-processing shared by the deterministic extractors
 # ---------------------------------------------------------------------------
 
-# Inline formatting tags unwrapped before trafilatura. Its writer trims the
-# whitespace around them, so "an <strong>x</strong> based" became "an **x**based",
-# and in list items it moved bold runs out of place. Their text is kept.
-_INLINE_FORMATTING_TAGS = ["strong", "b", "em", "i", "u", "span", "font"]
+# Inline formatting tags unwrapped before trafilatura; their text is kept.
+# Bold is not among them: sites such as politsei.ee and tervisekassa.ee use
+# bold paragraphs as section headings.
+_INLINE_FORMATTING_TAGS = ["em", "i", "u", "span", "font"]
+
+# Inline tags kept through trafilatura. Inside list items it trims the
+# whitespace around them ("<strong>Call:</strong> <a>14410</a> around" became
+# "**Call:**[14410](...)around"), so the spaces at their edges are swapped for
+# a private-use character it leaves alone, and turned back after markdownify.
+# The same character after each <br> and block keeps them apart.
+_KEPT_INLINE_TAGS = ["strong", "b", "a"]
+_SPACE_MARK = "\ue000"
+_BLOCK_TAGS = ["p", "li", "dt", "dd", "h1", "h2", "h3", "h4", "h5", "h6"]
 
 # Cloudflare "email protection" replaces addresses with /cdn-cgi/l/email-protection#<hex>
 # links and data-cfemail spans whose visible text is "[email protected]".
@@ -544,6 +553,12 @@ def _prepare_html(html: str) -> BeautifulSoup:
     soup = BeautifulSoup(html, "lxml")
     _decode_cf_emails(soup)
     _unwrap_layout_tables(soup)
+    _move_edge_spaces_out(soup)
+    # Bold adds nothing inside a heading, and trafilatura drops an <h4> whose
+    # only content is <strong>, gluing the text onto the list before it.
+    for tag in soup.select("h1 strong, h1 b, h2 strong, h2 b, h3 strong, h3 b, "
+                           "h4 strong, h4 b, h5 strong, h5 b, h6 strong, h6 b"):
+        tag.unwrap()
     return soup
 
 
@@ -572,10 +587,51 @@ def _normalize_for_match(text: str) -> str:
     return _WORD_RE.sub(" ", text).lower().strip()
 
 
+def _move_edge_spaces_out(soup: BeautifulSoup) -> None:
+    """Move whitespace just inside bold and links ("<strong>free&nbsp;</strong>x")
+    outside the tag; markdownify would otherwise glue "**free**x"."""
+    for tag in soup.find_all(_KEPT_INLINE_TAGS):
+        texts = [t for t in tag.find_all(string=True) if type(t) is NavigableString]
+        if texts and texts[0][:1].isspace():
+            texts[0].replace_with(NavigableString(texts[0].lstrip()))
+            tag.insert_before(NavigableString(" "))
+        texts = [t for t in tag.find_all(string=True) if type(t) is NavigableString]
+        if texts and texts[-1][-1:].isspace():
+            texts[-1].replace_with(NavigableString(texts[-1].rstrip()))
+            tag.insert_after(NavigableString(" "))
+
+
+def _protect_inline_spaces(soup: BeautifulSoup) -> None:
+    for tag in soup.find_all(_KEPT_INLINE_TAGS):
+        before, after = tag.previous_sibling, tag.next_sibling
+        if type(before) is NavigableString and before[-1:].isspace():
+            before.replace_with(NavigableString(before.rstrip() + _SPACE_MARK))
+        if type(after) is NavigableString and after[:1].isspace():
+            after.replace_with(NavigableString(_SPACE_MARK + after.lstrip()))
+    # trafilatura drops a <br> between two inline tags ("</a><br><strong>"),
+    # and flattens paragraphs inside accordion <dd>s and some lists, gluing
+    # "16.00</p><p>Reception" into "16.00Reception".
+    for br in soup.find_all("br"):
+        br.insert_after(NavigableString(_SPACE_MARK))
+    for block in soup.find_all(_BLOCK_TAGS):
+        block.append(NavigableString(_SPACE_MARK))
+
+
+def _restore_inline_spaces(md: str) -> str:
+    md = re.sub(rf"^(\s*){_SPACE_MARK}+[ \t]*", r"\1", md, flags=re.MULTILINE)
+    md = re.sub(rf"[ \t]*{_SPACE_MARK}+[ \t]*", " ", md)
+    md = re.sub(r"[ \t]+\n", "\n", md)
+    # A heading whose only text was a <button> (accordion titles) is empty.
+    md = re.sub(r"^#{1,6}[ \t]*$", "", md, flags=re.MULTILINE)
+    return normalize_newlines(md).strip()
+
+
 def _html_to_markdown(html: str) -> str:
     md = markdownify(html, heading_style="ATX")
     md = _LINK_GLUED_TO_WORD_RE.sub(r"\1 ", md)
     md = re.sub(r"[ \t]+\n", "\n", md)
+    # A heading whose only text was a <button> (accordion titles) is empty.
+    md = re.sub(r"^#{1,6}[ \t]*$", "", md, flags=re.MULTILINE)
     return normalize_newlines(md).strip()
 
 
@@ -600,6 +656,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     for tag in soup.find_all(_INLINE_FORMATTING_TAGS):
         tag.unwrap()
     tables, markers = _swap_tables_for_placeholders(soup)
+    _protect_inline_spaces(soup)
 
     result = trafilatura.extract(
         str(soup),
@@ -608,10 +665,11 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
         include_comments=False,
         include_tables=False,
         include_links=True,
+        include_formatting=True,
     )
     if not result:
         return None
-    result = _html_to_markdown(result)
+    result = _restore_inline_spaces(_html_to_markdown(result))
 
     result, missing = _restore_tables(result, tables, markers)
     if missing:
@@ -638,7 +696,7 @@ _MAIN_DROP_CLASS_RE = re.compile(
 _MAIN_MIN_BLOCK_CHARS = 60
 _MAIN_COVERAGE_MIN = 0.8
 _MAIN_OUTSIDE_MAX = 0.3
-_MAIN_SIZE_RATIO_MIN = 0.25
+_MAIN_SIZE_RATIO_MIN = 0.36
 
 
 def _main_region(soup: BeautifulSoup) -> Tag | None:
@@ -700,8 +758,8 @@ def _prefer_main_region(html: str, extracted: str) -> bool:
         blocks inside <main> -- it dropped real sections;
       - outside: over 30% of its lines are not in <main> -- it dumped the
         site menus/footer instead of the page;
-      - size: its text is under a quarter of <main>'s -- typically a link
-        hub reduced to one headline.
+      - size: its text is under 36% of <main>'s -- typically a link hub
+        reduced to its news teasers.
     """
     soup = _prepare_html(html)
     main = _main_region(soup)
