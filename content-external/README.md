@@ -27,6 +27,11 @@ is no error, no log line, just a Classifier that quietly goes stale.
 Any change to this service should be checked against these six rules before
 it is checked against anything else.
 
+The `scheduler-gate` workflow runs `tests/test_scheduler_yml.py` on every
+change to `DSL/CronManager/` or `DSL/CronManagerScripts/`, so a broken
+`scheduler.yml` or any edit to `trigger_zipping`, the Classifier's producer,
+fails the PR's `scheduler-gate` check.
+
 ## Setup
 
 ### Docker (matches how CKB runs it)
@@ -268,7 +273,7 @@ colliding with an export) becomes indistinguishable from normal operation.
 > as a configured destination.
 
 **The production surface is the HTTP endpoint**, which CronManager calls
-through Ruuter (Stage G):
+through Ruuter ([Schedule](#schedule)):
 
 ```bash
 curl -s -X POST localhost:8125/export_agency_async \
@@ -383,6 +388,52 @@ Retries: Resql calls back off with full jitter on connection errors and
 and the next tick is the retry. S3 calls use botocore's own standard-mode
 retries, deliberately not doubled.
 
+## Schedule
+
+The scheduled call path is
+[`DSL/CronManager/scheduler.yml`](../DSL/CronManager/scheduler.yml) →
+[`DSL/CronManagerScripts/trigger_content_export.sh`](../DSL/CronManagerScripts/trigger_content_export.sh) →
+[`DSL/Ruuter.internal/ckb/GET/pipeline/content-export.yml`](../DSL/Ruuter.internal/ckb/GET/pipeline/content-export.yml) →
+`POST /export_agency_async`. The script calls
+`GET $CKB_RUUTER_INTERNAL/pipeline/content-export`.
+
+`trigger_content_export` ships disabled with `trigger: "false"`: the job is
+registered but never scheduled. After [bootstrap](RUNBOOK.md#first-deployment-bootstrap),
+enable it by changing that line to `trigger: "0 17 */1 * * ?"`; revert the
+same line to `trigger: "false"` to stop scheduled invocations. Keep the value
+quoted. The enabled schedule polls hourly at :17. The top of the hour
+already carries `trigger_zipping`, and every multiple of five minutes
+carries `trigger_scheduler` and `trigger_pipeline_for_scheduled_entities`.
+:17 shares none of those start times.
+
+Polling avoids adding a dirty flag and a claim loop like `pipeline/zip.yml`:
+
+- A flag would require editing the six existing endpoints that call
+  `agency/update-zip-dirty`: `source/remove`, `source-file/exclude`,
+  `source-file/bulk-exclude`, `source-file/remove`, `source-file/bulk-remove`
+  and `source-file/edit-file`.
+- It would require a Liquibase migration on a live schema.
+- It would naturally reuse or parallel `zip_dirty` / `is_zipping`.
+  Claiming `is_zipping` silently stops the Classifier's ZIP from staying
+  current (Global Classifier safety rule 5).
+
+A quiet tick costs three Resql queries and one manifest GET: Ruuter's
+`list_agencies`, the exporter's single-agency check and the watermark. That
+is 72 Resql queries and 24 manifest GETs per day.
+The trade-off is up to one hour to detect a publish, edit or deletion, so
+the destination can run an hour behind CKB's GUI and OpenSearch. A document
+parked in `in_review` is not published until a curator starts cleaning it
+and it finishes; the hourly window is only the polling allowance, not an
+end-to-end ceiling. Nothing depends on the interval: if the lag is too long,
+shorten it rather than adding a change event.
+
+CKB holds no export state or "last exported" marker. The manifest records
+that marker and the published state together in one atomic PUT, after the
+corresponding writes have landed. A separate CKB marker could drift after a
+failed run, and Global Classifier safety rules 3 and 4 forbid it. There is
+no `content_dirty` column, no `update-zip-dirty` call, no claim on `is_zipping`
+and no write to any agency column.
+
 ## Deployment constraints — never scale this service
 
 The export takes **one whole-run lock** on `CONTENT_WORK_DIR`, and
@@ -421,12 +472,12 @@ existence-checked and returns `409 Conflict`. This service **asserts it
 anyway**, because it is the one place where "one agency is N=1, not a special
 case" is not true.
 
-The scheduled trigger fans out from `list_agencies` and POSTs one export per
-agency, and the export takes a **single whole-run lock**. With two agencies,
-the second POST finds the lock held, reports `busy` and **exits 0** — every
-hour, forever, with nothing logged as an error, because a concurrent run is by
-design not a failure. The second agency would simply never be exported, and
-nothing would say so.
+The scheduled trigger reads `list_agencies` with `page_size: 1` and
+`name asc` and POSTs only that first agency. With two agencies the second is
+**never posted**: the first agency's runs keep succeeding, every hour,
+forever, with nothing logged as an error. The second agency would simply never
+be exported, and nothing would say so. The check below makes every run fail
+instead.
 
 The check runs in two places, deliberately asymmetric:
 

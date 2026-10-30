@@ -13,6 +13,13 @@ trigger_zipping:
   type: exec
   command: "/bin/bash ../app/scripts/trigger_zipping.sh"
 
+# Disabled: CronManager registers a job whose trigger is "false" but never schedules it.
+# Enable by replacing "false" with "0 17 */1 * * ?".
+trigger_content_export:
+  trigger: "false"
+  type: exec
+  command: "/bin/bash ../app/scripts/trigger_content_export.sh"
+
 trigger_presigned_url_refresh:
   trigger: "0 30 */1 * * ?"
   type: exec
