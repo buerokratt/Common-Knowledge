@@ -301,11 +301,14 @@ class Settings(BaseSettings):
     # No default for vault_secret_path: the documented value names the Azure
     # path, which only an azure_blob store reads. A default that is wrong for
     # the s3 and llm_module deployments is worse than no default. The Azure
-    # value is in content-external/README.md instead.
+    # value is in content-external/README.md instead. azure_storage_container
+    # has none for the same reason: an Azure deployment that forgets it is
+    # refused by name at the first run instead of writing to a guessed
+    # container.
     vault_addr: str = "http://vault:8200"
     vault_token_path: str = "/agent/out/token"
     vault_secret_path: str = ""
-    azure_storage_container: str = "agency-content"
+    azure_storage_container: str = ""
 
     @field_validator("content_work_dir")
     @classmethod

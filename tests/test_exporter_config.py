@@ -86,7 +86,7 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.vault_addr == "http://vault:8200"
     assert settings.vault_token_path == "/agent/out/token"
     assert settings.vault_secret_path == ""
-    assert settings.azure_storage_container == "agency-content"
+    assert settings.azure_storage_container == ""
     assert settings.external_s3_region == "us-east-1"
     assert settings.external_s3_supports_batch_delete is True
 

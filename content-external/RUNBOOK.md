@@ -13,6 +13,10 @@ disabled, call `POST /execute/scheduler/trigger_content_export`:
 curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_export'
 ```
 
+On some CronManager versions a repeated `POST /execute` returns 500
+(`ClassCastException`) although the job ran. Check `/health`'s `last_run`
+rather than trusting curl's exit code, and do not retry on the 500 alone.
+
 CronManager names the job group after the job file, so `scheduler.yml` gives
 the group `scheduler`. In HTTP commands here, `<cron-manager>` and
 `<content-external>` stand for the configured base URLs.
@@ -91,6 +95,36 @@ semantics and first-run safeguards are in
 A large skipped count on a fresh CKB is expected: most documents may still
 be scraping or cleaning, or waiting in `in_review`. Later ticks pick them
 up once they are finished.
+
+## Azure Blob and Vault
+
+With `CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`, every run reads its
+credential from the Vault KV v2 secret `blob/connections/azure_blob/content`.
+`vault/init.sh` seeds it with `REPLACE_ME` placeholders, and a run refuses
+them. Replace the secret with `account_url`
+(`https://<account>.blob.core.windows.net`, no query string) plus exactly one
+of:
+
+- `account_key`
+- `sas_token`
+- `tenant_id`, `client_id` and `client_secret` (a service principal)
+
+The secret is read on every run, so a rotated value is used by the next run
+without a restart.
+
+A failed run names the cause in `error_type` in `/health`'s `last_run` and in
+the `content-external run` log line:
+
+| `error_type` | Cause | What to do |
+|---|---|---|
+| `ConfigurationError` | The secret still holds a placeholder, `account_url` is missing or has a query string, it does not hold exactly one credential form, or Vault answered 403/404 | Fix the secret or the `content-policy` grant. The next tick fails the same way until then |
+| `StoreError`, retryable | Vault unreachable, timed out, 429 or 5xx | Nothing; the next tick retries |
+| `StoreError`, permanent | Any other Vault 4xx, or a response that is not a KV v2 secret | Check `VAULT_ADDR` and `VAULT_SECRET_PATH` |
+
+The image runs as root, which is the only reason it can read the agent's
+token file (owned by `vault:vault`, mode 0640). Adding a `USER` to the
+Dockerfile needs the token file's mode or group set deliberately in the
+agent's sink, or every Azure run fails reading the token.
 
 ## Export query ceiling (#320)
 
@@ -576,6 +610,24 @@ timeout, wait for the next run, or cancel the running export queries first
   sets `runInTransaction="false"`.
 - **Rollback**: `20261020120000-rollback.sql` runs
   `DROP INDEX CONCURRENTLY IF EXISTS data_collection.idx_source_file_agency_base_updated`.
+- **Check after the migration**: a failed `CONCURRENTLY` build leaves an
+  INVALID index behind, and a rerun's `IF NOT EXISTS` skips it with only a
+  notice, so Liquibase reports success either way. Confirm it is valid:
+
+  ```sql
+  SELECT indexrelid::regclass, indisvalid
+  FROM pg_index
+  WHERE indexrelid = 'data_collection.idx_source_file_agency_base_updated'::regclass;
+  ```
+
+  If `indisvalid` is `f`, drop it, clear its changelog row and rerun the
+  migration:
+
+  ```sql
+  DROP INDEX CONCURRENTLY data_collection.idx_source_file_agency_base_updated;
+  DELETE FROM databasechangelog
+  WHERE id = '20261020120000' AND author = 'KoortHendrik';
+  ```
 
 The document query now matches this index with `agency_base_id = ...`,
 `base_id > ...`, `ORDER BY base_id, updated_at DESC` and `LIMIT`. At page
