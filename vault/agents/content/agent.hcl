@@ -19,8 +19,8 @@ auto_auth {
 
   # Writes a valid, auto-renewed token to a file. content-external reads it
   # on every llm-module operation (L11) and never caches it, so a rotated
-  # token is picked up without a restart. Stage H's Azure credential will be
-  # read through the same token.
+  # token is picked up without a restart. The Azure Blob credential (Stage H)
+  # is read through the same token, on every store build.
   sink "file" {
     config = {
       path = "/agent/out/token"

@@ -41,6 +41,8 @@ import os
 import posixpath
 import time
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Annotated, Literal
 
@@ -65,6 +67,7 @@ from exporter.services.backoff import (
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
 from exporter.sinks.base import CredentialUnavailableError
 from exporter.sinks.llm_module_contract import AGREED_TERMS, validate_collection
+from exporter.stores.base import StoreError
 
 logger = logging.getLogger(__name__)
 
@@ -460,13 +463,16 @@ class Settings(BaseSettings):
 
     # --- Vault -------------------------------------------------------------
     # No default for vault_secret_path: the documented value names the Azure
-    # path, and Azure is Stage H. A default that is wrong for the s3 and
-    # llm_module deployments is worse than no default. The Stage-H example
-    # lives in content-external/README.md instead.
+    # path, which only an azure_blob store reads. A default that is wrong for
+    # the s3 and llm_module deployments is worse than no default. The Azure
+    # value is in content-external/README.md instead. azure_storage_container
+    # has none for the same reason: an Azure deployment that forgets it is
+    # refused by name at the first run instead of writing to a guessed
+    # container.
     vault_addr: str = "http://vault:8200"
     vault_token_path: str = "/agent/out/token"
     vault_secret_path: str = ""
-    azure_storage_container: str = "agency-content"
+    azure_storage_container: str = ""
 
     @field_validator("content_work_dir")
     @classmethod
@@ -565,6 +571,8 @@ class Settings(BaseSettings):
                 missing.append("EXTERNAL_S3_ACCESS_KEY_ID")
             if not self.external_s3_secret_access_key.get_secret_value():
                 missing.append("EXTERNAL_S3_SECRET_ACCESS_KEY")
+        if self.manifest_store_backend == "azure_blob" and not self.vault_secret_path:
+            missing.append("VAULT_SECRET_PATH")
         if missing:
             raise ValueError(
                 f"MANIFEST_STORE_BACKEND={self.manifest_store_backend} is set "
@@ -574,15 +582,6 @@ class Settings(BaseSettings):
                 "would publish documents and then fail to record that it had."
                 " (An s3 manifest store authenticates with the EXTERNAL_S3_* "
                 "keys, never CKB's own AWS_* keys.)"
-            )
-        if self.manifest_store_backend == "azure_blob":
-            # After the completeness check, so a missing container is still
-            # named. Remove when Stage H registers the backend: until then it
-            # would pass startup and fail at the first run, which is exactly
-            # what this matrix exists to prevent.
-            raise ValueError(
-                "MANIFEST_STORE_BACKEND=azure_blob has no implementation in this "
-                "build yet (Stage H). Use s3 for the manifest store until it lands."
             )
         if (
             self.manifest_store_backend == "s3"
@@ -848,6 +847,124 @@ def load_settings() -> Settings:
             "content-external configuration is invalid:\n"
             + sanitize_sensitive_text(str(exc))
         ) from None
+
+
+# Bounded so an unresponsive Vault fails the run instead of holding its lock.
+_VAULT_TIMEOUT_SECONDS = 10
+AzureCredentialKind = Literal["account_key", "sas_token", "service_principal"]
+_AZURE_CREDENTIAL_FIELDS: tuple[AzureCredentialKind, ...] = ("account_key", "sas_token")
+_AZURE_SERVICE_PRINCIPAL_FIELDS = ("tenant_id", "client_id", "client_secret")
+
+
+@dataclass(frozen=True)
+class AzureBlobSecrets:
+    account_url: str
+    credential: SecretStr
+    credential_kind: AzureCredentialKind
+    tenant_id: str = dataclass_field(default="", repr=False)
+    client_id: str = dataclass_field(default="", repr=False)
+    client_secret: SecretStr = dataclass_field(default=SecretStr(""), repr=False)
+
+
+def get_vault_secrets(settings: Settings) -> AzureBlobSecrets:
+    """Fetch the Azure Blob credential from Vault, fresh on every call.
+
+    The token file is re-read each time and nothing is cached, so a token the
+    Vault Agent has rotated is always the one used. The secret holds
+    `account_url` plus exactly one of `account_key`, `sas_token`, or a
+    service principal (`tenant_id`, `client_id`, and `client_secret`).
+    Connection strings are not supported.
+
+    ConfigurationError for what fails identically every run; StoreError
+    otherwise, permanent unless retrying can help. No message carries the
+    token, a secret value or the Vault response body.
+    """
+    path = settings.vault_secret_path
+    if not path:
+        raise ConfigurationError(
+            "VAULT_SECRET_PATH is empty; the Azure Blob backend reads its "
+            "credential from Vault"
+        )
+    try:
+        token = _read_vault_agent_token(settings.vault_token_path)
+    except CredentialUnavailableError as exc:
+        # A missing or empty token file fails every run alike, so this
+        # contract reports it as configuration, not as a credential outage.
+        raise ConfigurationError(sanitize_sensitive_text(str(exc))) from None
+    try:
+        response = requests.get(
+            f"{settings.vault_addr}/v1/secret/data/{path}",
+            headers={"X-Vault-Token": token},
+            timeout=_VAULT_TIMEOUT_SECONDS,
+        )
+    except (requests.ConnectionError, requests.Timeout) as exc:
+        raise StoreError(
+            sanitize_sensitive_text(f"Vault request for {path} failed: {exc}")
+        ) from exc
+
+    status = response.status_code
+    if status in (403, 404):
+        raise ConfigurationError(
+            sanitize_sensitive_text(
+                f"Vault returned HTTP {status} for {path}: the secret is missing "
+                "or content-external-policy does not grant read on it"
+            )
+        )
+    if status >= 400:
+        raise StoreError(
+            sanitize_sensitive_text(f"Vault returned HTTP {status} for {path}"),
+            permanent=status != 429 and status < 500,
+        )
+
+    try:
+        data = response.json()["data"]["data"]
+    except (ValueError, KeyError, TypeError):
+        data = None
+    if not isinstance(data, dict):
+        raise StoreError(
+            sanitize_sensitive_text(f"Vault response for {path} is not a KV v2 secret"),
+            permanent=True,
+        )
+
+    fields = {
+        name: value.strip()
+        for name, value in data.items()
+        if isinstance(value, str) and value.strip()
+    }
+    kinds: list[AzureCredentialKind] = [
+        name for name in _AZURE_CREDENTIAL_FIELDS if name in fields
+    ]
+    missing_principal = [
+        name for name in _AZURE_SERVICE_PRINCIPAL_FIELDS if name not in fields
+    ]
+    if len(missing_principal) < len(_AZURE_SERVICE_PRINCIPAL_FIELDS):
+        kinds.append("service_principal")
+    problem = None
+    if "account_url" not in fields:
+        problem = "account_url is missing or blank"
+    elif "service_principal" in kinds and missing_principal:
+        problem = f"a service principal is missing {', '.join(missing_principal)}"
+    elif len(kinds) != 1:
+        problem = (
+            "it must hold exactly one of account_key, sas_token, or "
+            "tenant_id + client_id + client_secret"
+        )
+    elif any(_VAULT_PLACEHOLDER in value for value in fields.values()):
+        problem = f"it still holds {_VAULT_PLACEHOLDER} placeholder values"
+    elif "?" in fields["account_url"]:
+        problem = "account_url has a query string; put a SAS in sas_token"
+    if problem:
+        raise ConfigurationError(
+            sanitize_sensitive_text(f"Vault secret {path} is unusable: {problem}")
+        )
+    return AzureBlobSecrets(
+        account_url=fields["account_url"],
+        credential=SecretStr(fields.get(kinds[0], "")),
+        credential_kind=kinds[0],
+        tenant_id=fields.get("tenant_id", ""),
+        client_id=fields.get("client_id", ""),
+        client_secret=SecretStr(fields.get("client_secret", "")),
+    )
 
 
 def assert_work_dir_usable(settings: Settings) -> Path:

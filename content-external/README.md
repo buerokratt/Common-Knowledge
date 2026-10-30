@@ -60,18 +60,19 @@ it — see the note in the table below.
 | Variable | Required | Description |
 |---|---|---|
 | `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds the run lock, the deletion journal, the last-run record and the dead-letter record (`_dead_letter/`). Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
-| `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | no | Vault Agent sidecar, credentials fetched per task. `VAULT_SECRET_PATH` has no default — the Stage-H Azure value is `blob/connections/azure_blob/content` |
+| `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | `VAULT_SECRET_PATH` required for an Azure destination or explicit Azure manifest store | Vault Agent sidecar (`vault-agent-content`); one agent token serves both the llm-module credential (`LLM_MODULE_VAULT_SECRET_PATH`) and the Azure credential, each read afresh on every use. `VAULT_SECRET_PATH` has no default; the Azure secret path is `blob/connections/azure_blob/content` |
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
 | `EXPORT_PAGE_SIZE` | no (default `1000`, minimum `1`) | Documents per Resql keyset page. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
 | `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit). For the same reason a read timeout is never retried, while connection errors, 429 and 5xx are (F8) |
 | `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each attempt to read from CKB's own bucket. Throttles, 5xx, connection errors and timeouts are retried by botocore's standard mode, up to 3 attempts in all (F8); a read that still fails fails the run, and the next tick is the retry |
 | `CHUNK_PROFILE` | required for `llm_module`; optional for `object_store` (default `azure_native`) | Chunk geometry preset: `azure_native` (target 1200 / overlap 200 / min 200 / max 2000 chars) or `compact` (450 / 80 / 120 / 700). Overlap is capped at min − 1 so no chunk can fall wholly inside the one before it, which makes `azure_native`'s effective overlap 199. Pinned per deployment alongside the sink, because whoever embeds the chunks decides what fits: on `llm_module` a chunk over the embedder's token budget is silently truncated. An unknown name is refused at startup. Changing it re-chunks the whole corpus on the next run via the chunker fingerprint — and on `llm_module` re-embeds it, so do it as an announced, operator-driven run. A new preset is a reviewed row in `exporter/core/constants.py`, never four separate settings |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
+| `AZURE_STORAGE_CONTAINER` | **required** for a run on `object_store` + `azure_blob`, no default | Existing destination container. A run without it refuses, naming the variable. An explicit Azure manifest store instead uses `MANIFEST_STORE_BUCKET` |
 | `EXTERNAL_S3_ENDPOINT_URL` / `EXTERNAL_S3_BUCKET_NAME` | for a run on `object_store` + `s3` | The destination: any S3-compatible endpoint (SeaweedFS, MinIO, AWS), chosen by URL alone. Path-style addressing. Not checked at startup, so `/health` comes up before a destination exists. A run refuses and names every missing variable |
 | `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` | for a run on `object_store` + `s3` | The destination's **own** credentials. They are passed to boto3 explicitly and never come from its default chain, which would pick up `AWS_*`: those are CKB's read-only keys and are never used to write (rule 6). A blank value is refused rather than defaulted. They need `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and `s3:ListBucket` on the destination bucket: every delete first HEADs the key to tell `deleted` from `missing`, and HEAD is authorised as a GET. Without `ListBucket`, a missing key answers 403 and is reported as an error, never as absent. The bucket must not be CKB's own (`S3_BUCKET_NAME` on `S3_ENDPOINT_URL`), and no prefix may contain a `scrapped-data` segment (rule 1). In the chart the credentials come from a Secret (`contentExternal.externalStore.secret`) |
 | `EXTERNAL_S3_REGION` | no (default `us-east-1`) | Region to sign with. S3-compatible stores ignore the value |
 | `EXTERNAL_S3_SUPPORTS_BATCH_DELETE` | no (default `true`) | Set `false` for a store whose `DeleteObjects` is missing or partial. Deletes then go one key at a time, with the same per-key outcome |
-| `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. `azure_blob` is refused at startup until Stage H. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
+| `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. An explicit `azure_blob` manifest store requires `MANIFEST_STORE_BUCKET` and `VAULT_SECRET_PATH` at startup; its account URL and credentials come from Vault, ignoring `MANIFEST_STORE_ENDPOINT_URL` and `EXTERNAL_S3_*`. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. `LLM_MODULE_VAULT_SECRET_PATH` names the KV v2 secret holding `{"token": …}` (compose: `content-external/llm_module`), read through `VAULT_TOKEN_PATH` on every operation. Not used by the `object_store` sink |
 | `LLM_MODULE_COLLECTION` | required for `llm_module` | L19: the **physical** collection this deployment writes to, in every request path (`/ingest/v1/collections/{collection}/…`). A new one beside the live corpus, never the retrieval alias, and never `contextual_chunks_azure` / `contextual_chunks_aws` (refused at startup). 1–64 of `A-Z a-z 0-9 _ -`. Part of the manifest's sink_id (`llm_module:<collection>`), so changing it against an existing manifest fails the run; a re-bootstrap into another collection also takes a fresh `MANIFEST_STORE_PREFIX`. See [docs/llm-module-cutover.md](docs/llm-module-cutover.md) |
@@ -84,6 +85,30 @@ it — see the note in the table below.
 | `SINK_FAILURE_ABORT_THRESHOLD` | no (default `25`) | Consecutive **permanent** upsert failures (a refused credential, a missing bucket, a wrong base URL) after which the run aborts with nothing committed and reports `failed` / `SystemicSinkFailure`. A published document resets the count, and retryable failures never count. One permanent failure is a document's problem: it is held and retried. This many in a row is the destination's |
 | `DIFF_ON_MISSING_MANIFEST` | no (default `first_run`) | `first_run` treats a missing manifest as a bootstrap. `fail` refuses it. Flip to `fail` once the bootstrap is done. Even under `first_run`, a first run refuses a destination that already holds the agency's content (see *Running an export*) |
 | `BOOTSTRAP_CHECKPOINT_EVERY` | no (default `250`) | On a first run, commit the manifest every N published documents, with the watermark withheld, so a killed bootstrap resumes |
+
+### Azure Blob
+
+Set `CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`, `AZURE_STORAGE_CONTAINER`
+and `VAULT_SECRET_PATH`. The Vault KV v2 secret holds `account_url` plus
+exactly one credential form: `account_key`, `sas_token`, or all three of
+`tenant_id`, `client_id` and `client_secret` for a service principal. Partial
+or mixed forms are refused. Credentials are explicit; no default credential
+chain or environment credentials are used. A service principal signs in
+against the public-cloud authority (`login.microsoftonline.com`), set in code
+so `AZURE_AUTHORITY_HOST` is never consulted; azure-identity may still read
+`AZURE_REGIONAL_AUTHORITY_NAME`, which our deployments leave unset. The secret
+is read on every store build so rotation is picked up by the next run.
+
+The container must already exist; the exporter never creates it. Credentials
+need read, write, delete and list permissions on it: for example a SAS with
+`rwdl`, or the Storage Blob Data Contributor role for a service principal.
+An explicit Azure manifest store uses `MANIFEST_STORE_BUCKET` with the same
+Vault account and credentials. With no explicit manifest backend, it inherits
+the destination container and prefix.
+
+Local compose stays on `s3` (SeaweedFS/MinIO); an Azure run also needs the
+agent (`docker compose --profile azure-blob up -d`). The Azure backend has
+not yet run against a real Azure account.
 
 ### Reading CKB's bucket
 
@@ -118,7 +143,7 @@ so, which is indistinguishable from never having run.
 | `llm_module`, no `LLM_MODULE_BASE_URL`, no `LLM_MODULE_COLLECTION` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
 | `llm_module` with `LLM_MODULE_COLLECTION` set to `contextual_chunks_*`, or not one plain path segment | **refuses to start** — L19: bootstrap beside, never in place |
 | `MANIFEST_STORE_BACKEND=local` without `MANIFEST_STORE_ALLOW_LOCAL=true` | **refuses to start** |
-| `MANIFEST_STORE_BACKEND=azure_blob` | **refuses to start** — names Stage H, which builds that backend |
+| `MANIFEST_STORE_BACKEND=azure_blob` | **OK** with `MANIFEST_STORE_BUCKET` and `VAULT_SECRET_PATH`; refuses to start if either is missing |
 | `llm_module` with no explicit `CHUNK_PROFILE` | **refuses to start** — names `CHUNK_PROFILE`; the default was chosen for a destination that embeds its own chunks |
 | `llm_module` with `LLM_MODULE_CHUNK_PROFILE_CONFIRMED` unset or not equal to `CHUNK_PROFILE` | **refuses to start** — names the value it expects |
 | `LLM_MODULE_ENABLE_METADATA_MERGE=true` while the contract does not promise a merge | **refuses to start**. Not currently reachable: the agreed contract promises it |
@@ -127,7 +152,7 @@ so, which is indistinguishable from never having run.
 
 One more check is implied by the second row: an explicitly-set manifest store must
 be **complete** (`s3` needs a bucket, an endpoint URL and the `EXTERNAL_S3_*`
-keys, `azure_blob` needs a container), or `MANIFEST_STORE_BACKEND=s3` on its own would satisfy the matrix
+keys, `azure_blob` needs a container and `VAULT_SECRET_PATH`), or `MANIFEST_STORE_BACKEND=s3` on its own would satisfy the matrix
 while naming a store that cannot be addressed.
 
 ### Manifest-store inheritance is all-or-nothing
@@ -596,9 +621,10 @@ Two rules an operator reading a report should know:
 `exporter/sinks/factory.py` is the only place `CONTENT_SINK` is resolved, and
 `exporter/stores/factory.py` the only place a store backend is. Each run
 builds them; startup does not. `object_store` builds `ObjectStoreSink` over
-the `s3` backend (`exporter/stores/s3_store.py`). `azure_blob` (Stage H) and
-a `local` manifest store (D19) each refuse, naming the task that builds
-them. `llm_module` builds `LlmModuleSink` (`exporter/sinks/llm_module_sink.py`
+the selected `s3` or `azure_blob` backend (`exporter/stores/s3_store.py`,
+`exporter/stores/azure_blob_store.py`). An explicit manifest store can use
+either backend, or `local` for development with
+`MANIFEST_STORE_ALLOW_LOCAL=true`. `llm_module` builds `LlmModuleSink` (`exporter/sinks/llm_module_sink.py`
 — push, split parts, per-item partial failure, idempotency keys, deletes,
 the keep-list sweep, read-back), carrying the run id its Idempotency-Keys
 name and a credential read from Vault on every operation (L11). The sink is
@@ -629,13 +655,20 @@ terms: the embedder's token limit (an `llm_module` deployment must set
 `CHUNK_PROFILE` and confirm it in `LLM_MODULE_CHUNK_PROFILE_CONFIRMED`), any
 enrichment step, and who owns the cutover swap.
 
-**Credential (L11).** `LLM_MODULE_VAULT_SECRET_PATH` names a KV v2 secret
-holding `{"token": "..."}`, read with the token Vault Agent keeps at
-`VAULT_TOKEN_PATH`. In compose that agent is `vault-agent-content`, behind
-the `llm-module` profile (`docker compose --profile llm-module up -d`), and
-`vault/init.sh` creates its role and a `REPLACE_ME` placeholder at
+**Credential (L11; also Stage H).** One Vault Agent and one role serve both
+of content-external's credentials: the llm-module token and the Azure Blob
+credential are read with the same agent token at `VAULT_TOKEN_PATH`.
+`LLM_MODULE_VAULT_SECRET_PATH` names a KV v2 secret holding
+`{"token": "..."}`; `VAULT_SECRET_PATH` names the Azure secret (see
+[Azure Blob](#azure-blob)). In compose that agent is `vault-agent-content`,
+behind the `llm-module` and `azure-blob` profiles
+(`docker compose --profile llm-module up -d`, or `--profile azure-blob`).
+`vault/init.sh` creates its role, `content-external-service` with
+`content-external-policy`, and a `REPLACE_ME` placeholder at each secret
+path, written only where nothing is stored yet:
 `content-external/llm_module` — deliberately outside `llm/connections/*`,
-which other services' policies can read. A placeholder is refused, never
+which other services' policies can read — and
+`blob/connections/azure_blob/content`. A placeholder is refused, never
 sent. In a cluster, `contentExternal.vaultAgent.enabled: true` runs the same
 agent as a sidecar. It authenticates with the pod's service account
 (Kubernetes auth, the default, so there is nothing to rotate) or with

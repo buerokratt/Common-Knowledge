@@ -18,6 +18,8 @@ RUN mkdir /var/lib/content-external
 
 COPY pyproject.toml uv.lock /app/
 RUN uv sync --frozen --no-dev --no-install-project --extra content-external
+# Fail the build if the Azure SDK packages or their native cryptography binding cannot load.
+RUN python -c "import azure.storage.blob; import azure.identity; import cryptography.hazmat.bindings._rust"
 
 COPY content-external/ /app/
 
