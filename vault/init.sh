@@ -214,8 +214,9 @@ fi
 # before this existed gains the role on its next start. Its secret lives at
 # content-external/*, NOT under llm/connections/*: cleaner-policy and
 # llm-orchestration-policy can read everything there, and the llm-module
-# bearer credential is this service's alone. The token is read per task by
-# exporter/api/config.py:fetch_llm_module_token, never cached.
+# bearer credential is this service's alone. The agent token is read per use
+# by exporter/api/config.py:fetch_llm_module_token (llm-module) and
+# get_vault_secrets (Azure Blob), never cached.
 
 vault_put_policy "content-external-policy" \
 'path "secret/data/content-external/*" { capabilities = ["read"] }
@@ -238,17 +239,20 @@ chmod 640 "$CREDS/content_role_id" "$CREDS/content_secret_id"
 echo "Credentials written for content-external"
 
 # A placeholder only where nothing is stored yet: never overwrite a real
-# credential. The exporter refuses REPLACE_ME loudly rather than sending it.
-if ! vault_get "/v1/secret/data/content-external/llm_module" >/dev/null 2>&1; then
-    vault_post "/v1/secret/data/content-external/llm_module" \
-        '{"data":{"token":"REPLACE_ME"}}' >/dev/null
-    echo "Placeholder content-external llm-module secret created"
-fi
+# credential. cas=0 makes Vault itself refuse the write when the path exists,
+# so a failed or slow read can never turn into an overwrite. The exporter
+# refuses REPLACE_ME loudly rather than sending it.
+write_placeholder() {
+    if vault_post "/v1/secret/data/$1" "{\"options\":{\"cas\":0},\"data\":$2}" \
+        | grep -q '"version"'; then
+        echo "Placeholder $1 created"
+    else
+        echo "Placeholder $1 not written: it already exists or Vault refused"
+    fi
+}
 
-if ! vault_get "/v1/secret/data/blob/connections/azure_blob/content" >/dev/null 2>&1; then
-    vault_post "/v1/secret/data/blob/connections/azure_blob/content" \
-        '{"data":{"account_url":"https://REPLACE_ME.blob.core.windows.net","account_key":"REPLACE_ME"}}' >/dev/null
-    echo "Placeholder content-external Azure Blob secret created"
-fi
+write_placeholder "content-external/llm_module" '{"token":"REPLACE_ME"}'
+write_placeholder "blob/connections/azure_blob/content" \
+    '{"account_url":"https://REPLACE_ME.blob.core.windows.net","account_key":"REPLACE_ME"}'
 
 echo "=== Vault init complete ==="
