@@ -351,8 +351,15 @@ _DESTINATIONS: dict[str, dict[str, str]] = {
         "llm_module_collection": "ckb_chunks_v1",
         "llm_module_vault_secret_path": "llm/connections/ingest",
     },
-    # An azure_blob manifest store is refused at startup until Stage H, so it
-    # is not a shape a deployment can configure yet. Stage H adds it back.
+    "llm_module-azure-manifest": {
+        "content_sink": "llm_module",
+        "manifest_store_backend": "azure_blob",
+        "manifest_store_bucket": "content-manifests",
+        "vault_secret_path": "blob/connections/azure_blob/content",
+        "llm_module_base_url": "https://llm.example/ingest",
+        "llm_module_collection": "ckb_chunks_v1",
+        "llm_module_vault_secret_path": "llm/connections/ingest",
+    },
 }
 
 

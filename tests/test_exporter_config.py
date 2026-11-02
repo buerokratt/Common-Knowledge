@@ -88,7 +88,7 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.vault_addr == "http://vault:8200"
     assert settings.vault_token_path == "/agent/out/token"
     assert settings.vault_secret_path == ""
-    assert settings.azure_storage_container == "agency-content"
+    assert settings.azure_storage_container == ""
     assert settings.external_s3_region == "us-east-1"
     assert settings.external_s3_supports_batch_delete is True
 
@@ -353,20 +353,17 @@ def test_the_same_bucket_name_on_another_endpoint_is_not_ckbs_bucket() -> None:
     assert settings.resolved_manifest_store_bucket == "content-manifests"
 
 
-def test_an_azure_manifest_store_is_refused_at_startup_until_stage_h() -> None:
-    """Otherwise it passes startup and fails at the first run — the exact
-    failure A12's matrix exists to pull forward. It is refused for being
-    unbuilt, not for lacking an endpoint URL: Azure addresses its container
-    through the account, so Stage H must not start requiring one."""
-    with pytest.raises(ValidationError) as excinfo:
-        _llm_module_settings(
-            manifest_store_backend="azure_blob",
-            manifest_store_endpoint_url="",
-            manifest_store_bucket="content-manifests",
-        )
-    message = str(excinfo.value)
-    assert "Stage H" in message
-    assert "ENDPOINT_URL" not in message
+def test_an_azure_manifest_store_needs_no_endpoint_or_s3_keys_at_startup() -> None:
+    settings = _llm_module_settings(
+        manifest_store_backend="azure_blob",
+        manifest_store_endpoint_url="",
+        manifest_store_bucket="content-manifests",
+        vault_secret_path="blob/connections/azure_blob/content",
+        external_s3_access_key_id="",
+        external_s3_secret_access_key="",
+    )
+    assert settings.resolved_manifest_store_backend == "azure_blob"
+    assert settings.resolved_manifest_store_bucket == "content-manifests"
 
 
 def test_local_manifest_store_needs_no_bucket() -> None:
