@@ -89,15 +89,16 @@ services:
         condition: service_completed_successfully
 
   # ─────────────────────────────────────────────
-  # VAULT AGENT — for content-external's llm-module sink (L11; Stage H's
-  # Azure credential will share it). Behind a profile: an object-store
-  # deployment needs no credential from Vault, so it does not run this.
-  #   docker compose --profile llm-module up -d
+  # VAULT AGENT — for content-external: the llm-module sink's token (L11)
+  # and the Azure Blob credential (Stage H) share it. Behind a profile: an s3
+  # object-store deployment needs no credential from Vault, so it does not
+  # run this.
+  #   docker compose --profile llm-module up -d   (or --profile azure-blob)
   # ─────────────────────────────────────────────
   vault-agent-content:
     image: hashicorp/vault:1.21.3
     container_name: vault-agent-content
-    profiles: ["llm-module"]
+    profiles: ["llm-module", "azure-blob"]
     restart: unless-stopped
     networks:
       - bykstack
@@ -482,11 +483,12 @@ services:
       - 8125:8125
     volumes:
       - content-external-work:/var/lib/content-external
-      # vault-agent-content's token, read per llm-module operation (L11).
-      # Empty unless the llm-module profile runs; an object-store deployment
-      # never reads it. No depends_on, deliberately: a missing token fails
-      # each push as credential-unavailable, which F19 turns into an aborted
-      # run, rather than this service refusing to start.
+      # vault-agent-content's token, read per llm-module operation (L11) and
+      # per Azure Blob store build (Stage H). Empty unless the llm-module or
+      # azure-blob profile runs; an s3 deployment never reads it. No
+      # depends_on, deliberately: a missing token fails each push as
+      # credential-unavailable, which F19 turns into an aborted run, rather
+      # than this service refusing to start.
       - vault-agent-content-token:/agent/out:ro
     environment:
       # Required, with no default in the code: a fallback would let a
@@ -570,6 +572,12 @@ services:
       # requires MANIFEST_STORE_ALLOW_LOCAL=true. Do not set it here: a
       # re-provisioned volume would read as a first run, republishing the
       # corpus and permanently orphaning everything CKB deleted meanwhile.
+      #
+      # The Azure Blob credential, read from Vault per run through this
+      # service's own agent token. Unused while the backend is s3.
+      - VAULT_TOKEN_PATH=/agent/out/token
+      - VAULT_SECRET_PATH=blob/connections/azure_blob/content
+    # s3 does not use Vault; an azure_blob run without a token fails with ConfigurationError.
     networks:
       - bykstack
 

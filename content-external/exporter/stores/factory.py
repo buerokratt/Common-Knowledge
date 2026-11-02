@@ -17,15 +17,22 @@ one dispatch table for both roles and no second factory to drift from this one.
 `local` is the one backend outside the table. It addresses a directory, not a
 bucket, and it exists only for the manifest store (D19), so it is built only by
 `build_manifest_store_client` and `build_store` refuses it by name.
-
-Backends that do not exist yet refuse with the task that builds them, the
-same convention as sinks/factory.py: `azure_blob` is Stage H.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from urllib.parse import urlsplit
 
-from exporter.api.config import ConfigurationError, Settings
+from azure.core.credentials import AzureNamedKeyCredential, AzureSasCredential
+from azure.identity import AzureAuthorityHosts, ClientSecretCredential
+
+from exporter.api.config import (
+    AzureBlobSecrets,
+    ConfigurationError,
+    Settings,
+    get_vault_secrets,
+)
+from exporter.stores.azure_blob_store import AzureBlobStore
 from exporter.stores.base import ExternalStoreClient
 from exporter.stores.local_store import LocalFileStore
 from exporter.stores.s3_store import S3Store
@@ -46,6 +53,9 @@ LOCAL_MANIFEST_STORE_DIRNAME = "_manifest_store"
 # concurrency queue on connections instead of on the store.
 _MIN_POOL_CONNECTIONS = 10
 
+# Explicit, so AZURE_AUTHORITY_HOST can never redirect the client secret.
+_AZURE_AUTHORITY = AzureAuthorityHosts.AZURE_PUBLIC_CLOUD
+
 
 @dataclass(frozen=True)
 class StoreConnection:
@@ -64,6 +74,7 @@ class StoreConnection:
     region: str
     supports_batch_delete: bool = True
     max_pool_connections: int = _MIN_POOL_CONNECTIONS
+    credential: object | None = field(default=None, repr=False)
 
 
 def _build_s3(connection: StoreConnection) -> ExternalStoreClient:
@@ -78,14 +89,59 @@ def _build_s3(connection: StoreConnection) -> ExternalStoreClient:
     )
 
 
+def _build_azure_blob(connection: StoreConnection) -> ExternalStoreClient:
+    return AzureBlobStore(
+        account_url=connection.endpoint_url,
+        container=connection.bucket,
+        credential=connection.credential,
+        supports_batch_delete=connection.supports_batch_delete,
+    )
+
+
+def _azure_credential(
+    secrets: AzureBlobSecrets,
+) -> AzureNamedKeyCredential | AzureSasCredential | ClientSecretCredential:
+    if secrets.credential_kind == "service_principal":
+        try:
+            return ClientSecretCredential(
+                tenant_id=secrets.tenant_id,
+                client_id=secrets.client_id,
+                client_secret=secrets.client_secret.get_secret_value(),
+                authority=_AZURE_AUTHORITY,
+            )
+        except ValueError:
+            raise ConfigurationError("Azure tenant_id from Vault is invalid") from None
+    value = secrets.credential.get_secret_value()
+    if secrets.credential_kind == "sas_token":
+        return AzureSasCredential(value.removeprefix("?"))
+    try:
+        account_name = (urlsplit(secrets.account_url).hostname or "").split(".")[0]
+    except ValueError:
+        account_name = ""
+    if not account_name:
+        raise ConfigurationError("Azure account_url must have an account host")
+    return AzureNamedKeyCredential(account_name, value)
+
+
+def _build_azure_from_vault(settings: Settings, container: str) -> ExternalStoreClient:
+    secrets = get_vault_secrets(settings)
+    return build_store(
+        "azure_blob",
+        StoreConnection(
+            endpoint_url=secrets.account_url,
+            bucket=container,
+            access_key_id="",
+            secret_access_key="",
+            region="",
+            credential=_azure_credential(secrets),
+        ),
+    )
+
+
 # Backend name -> builder.
 _BACKENDS: dict[str, Callable[[StoreConnection], ExternalStoreClient]] = {
     "s3": _build_s3,
-}
-
-# Backend name -> the task that will register a builder.
-_NOT_YET_BUILT: dict[str, str] = {
-    "azure_blob": "Stage H",
+    "azure_blob": _build_azure_blob,
 }
 
 _LOCAL = "local"
@@ -101,25 +157,31 @@ def build_store(backend: str, connection: StoreConnection) -> ExternalStoreClien
             "store backend 'local' is manifest-store only (D19) and is built by "
             "build_manifest_store_client, never as a destination."
         )
-    task = _NOT_YET_BUILT.get(backend)
-    if task is not None:
-        raise ConfigurationError(
-            f"store backend {backend!r} has no implementation in this build yet "
-            f"({task})."
-        )
     raise ConfigurationError(f"store backend {backend!r} is not a known backend")
 
 
 def build_destination_store(settings: Settings) -> ExternalStoreClient:
     """The object-store sink's own store, from CONTENT_EXTERNAL_STORE_BACKEND
-    and EXTERNAL_S3_*.
+    and its backend's connection settings.
 
     Missing values are refused here, all of them in one message, rather than
     at startup: /health must come up before a destination is configured, and
     Stage F decides when a run first builds this.
     """
     backend = settings.content_external_store_backend
-    if backend in _BACKENDS:
+    if backend == "azure_blob":
+        required = {
+            "AZURE_STORAGE_CONTAINER": settings.azure_storage_container,
+            "VAULT_SECRET_PATH": settings.vault_secret_path,
+        }
+        missing = [name for name, value in required.items() if not value]
+        if missing:
+            raise ConfigurationError(
+                f"CONTENT_EXTERNAL_STORE_BACKEND={backend} needs "
+                f"{', '.join(missing)} to be set."
+            )
+        return _build_azure_from_vault(settings, settings.azure_storage_container)
+    if backend == "s3":
         required = {
             "EXTERNAL_S3_ENDPOINT_URL": settings.external_s3_endpoint_url,
             "EXTERNAL_S3_BUCKET_NAME": settings.external_s3_bucket_name,
@@ -195,6 +257,10 @@ def build_manifest_store_client(settings: Settings) -> ExternalStoreClient:
         return LocalFileStore(
             settings.work_dir_path / LOCAL_MANIFEST_STORE_DIRNAME,
             allow_local=settings.manifest_store_allow_local,
+        )
+    if backend == "azure_blob":
+        return _build_azure_from_vault(
+            settings, settings.resolved_manifest_store_bucket
         )
     return build_store(
         backend,
