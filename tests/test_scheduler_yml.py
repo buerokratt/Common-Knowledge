@@ -55,5 +55,9 @@ def test_trigger_zipping_is_byte_identical() -> None:
     assert zipping[0] == EXPECTED_ZIPPING_BLOCK
 
 
-def test_trigger_content_export_exists() -> None:
-    assert "trigger_content_export" in yaml.safe_load(TEXT)
+@pytest.mark.parametrize(
+    "name",
+    ["trigger_content_export", "trigger_content_drain", "trigger_content_reconcile"],
+)
+def test_content_external_trigger_exists(name: str) -> None:
+    assert name in yaml.safe_load(TEXT)

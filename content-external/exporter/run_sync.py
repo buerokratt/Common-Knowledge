@@ -43,18 +43,23 @@ a usage or configuration error that stopped the run before it started.
 """
 
 import argparse
-import json
 import logging
 import sys
-from collections.abc import Callable, Sequence
-from pathlib import Path
+from collections.abc import Sequence
 
 from exporter.api.config import (
     ConfigurationError,
     assert_work_dir_usable,
     load_settings,
 )
-from exporter.core.ids import validate_segment
+from exporter.cli import (
+    EXIT_FAILED,
+    EXIT_OK,
+    EXIT_USAGE,
+    positive_int,
+    segment,
+    write_json_report,
+)
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.core.schemas import RunReport, to_json_dict
 from exporter.services.run_state import RunStateStore
@@ -69,32 +74,6 @@ __all__ = ["EXIT_FAILED", "EXIT_OK", "EXIT_USAGE", "main"]
 
 logger = logging.getLogger(__name__)
 
-EXIT_OK = 0
-EXIT_FAILED = 1
-EXIT_USAGE = 2  # argparse's own code for a usage error, kept for config errors
-
-
-def _segment(name: str) -> Callable[[str], str]:
-    """An argparse type that refuses an id which would escape its folder."""
-
-    def parse(value: str) -> str:
-        try:
-            return validate_segment(name, value)
-        except ValueError as exc:
-            raise argparse.ArgumentTypeError(str(exc)) from None
-
-    return parse
-
-
-def _positive_int(value: str) -> int:
-    try:
-        number = int(value)
-    except ValueError:
-        raise argparse.ArgumentTypeError(f"not an integer: {value!r}") from None
-    if number < 1:
-        raise argparse.ArgumentTypeError(f"must be >= 1, got {number}")
-    return number
-
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -104,8 +83,8 @@ def _parser() -> argparse.ArgumentParser:
             "production runs come through POST /export_agency_async."
         ),
     )
-    parser.add_argument("--agency-id", required=True, type=_segment("agency_id"))
-    parser.add_argument("--run-id", type=_segment("run_id"), default=None)
+    parser.add_argument("--agency-id", required=True, type=segment("agency_id"))
+    parser.add_argument("--run-id", type=segment("run_id"), default=None)
     parser.add_argument(
         "--force",
         action="store_true",
@@ -113,7 +92,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--limit",
-        type=_positive_int,
+        type=positive_int,
         default=None,
         help="read at most N documents; the rest are held and the watermark withheld",
     )
@@ -142,15 +121,7 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _write_report(report: RunReport, destination: str) -> None:
-    text = (
-        json.dumps(to_json_dict(report), sort_keys=True, ensure_ascii=False, indent=2)
-        + "\n"
-    )
-    if destination == "-":
-        sys.stdout.write(text)
-        sys.stdout.flush()
-        return
-    Path(destination).write_text(text, encoding="utf-8")
+    write_json_report(to_json_dict(report), destination)
 
 
 def main(argv: Sequence[str] | None = None) -> int:

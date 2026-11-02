@@ -685,6 +685,32 @@ def test_an_empty_destination_holds_no_content_whatever_sits_beside_it(
     assert harness.sink.holds_agency_content() is True
 
 
+def test_a_listing_names_every_document_with_the_count_its_record_declares(
+    harness: Harness,
+) -> None:
+    """Reconcile's full-scope read (J4) and J5's ground: every document, its
+    chunk ordinals, and the chunk_count its own record states. A manifest
+    beside the documents and a stray that parses as neither are not
+    documents (D12). A sink that cannot list refuses rather than returning
+    an empty listing, which reconcile would read as an empty destination."""
+    if not harness.sink.capabilities.can_list:
+        with pytest.raises(NotSupported):
+            list(harness.sink.list_documents())
+        return
+    harness.plant_manifest()
+    _publish(harness, "d1", 3)
+    _publish(harness, "d2", 2)
+    harness.plant_stray("d1", "notes.txt")
+
+    listed = {probe.document_id: probe for probe in harness.sink.list_documents()}
+
+    assert sorted(listed) == ["d1", "d2"]
+    assert listed["d1"].record_present
+    assert listed["d1"].chunk_ordinals == (0, 1, 2)
+    assert listed["d1"].declared_chunk_count == 3
+    assert listed["d2"].declared_chunk_count == 2
+
+
 @pytest.mark.parametrize("capability", sorted(_PROMISES))
 def test_a_declared_capability_works(harness: Harness, capability: str) -> None:
     if not getattr(harness.sink.capabilities, capability):
@@ -735,6 +761,15 @@ def test_an_undeclared_capability_raises_not_supported(
         pytest.skip(f"{variant} still declares {capability}")
     with pytest.raises(NotSupported):
         _GATED[capability](sink)
+
+
+@pytest.mark.parametrize("variant", sorted(_degraded_sinks()))
+def test_a_sink_without_a_listing_refuses_to_list(variant: str) -> None:
+    sink = _degraded_sinks()[variant]
+    if sink.capabilities.can_list:
+        pytest.skip(f"{variant} still declares can_list")
+    with pytest.raises(NotSupported):
+        list(sink.list_documents())
 
 
 def test_an_object_store_sink_declares_only_what_its_store_can_do() -> None:

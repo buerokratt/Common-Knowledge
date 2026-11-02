@@ -87,6 +87,11 @@ class HealthResponse(BaseModel):
     chunk_profile: str
     work_dir: str
     last_run: LastRunSummary | None = None
+    # Stage J. The last drain's and reconcile's outcome and counts, as their
+    # `content-external drain|reconcile` line carries them; null until one
+    # has run. Kept apart from last_run, whose streaks A15's alert reads.
+    last_drain: dict[str, str | int | float | bool | None] | None = None
+    last_reconcile: dict[str, str | int | float | bool | None] | None = None
 
 
 class ExportRequest(BaseModel):
@@ -124,5 +129,40 @@ class ExportStarted(BaseModel):
     caller treats both the same way; the next tick is the retry."""
 
     status: Literal["started", "busy"]
+    agency_base_id: str
+    run_id: str
+
+
+class OperationRequest(BaseModel):
+    """POST /reconcile_async's body. Only the agency and, optionally, the run
+    id: whether to repair is the deployment's setting, never the caller's."""
+
+    agency_base_id: str
+    run_id: str | None = None
+
+    @field_validator("agency_base_id")
+    @classmethod
+    def _check_agency(cls, value: str) -> str:
+        return validate_segment("agency_base_id", value)
+
+    @field_validator("run_id")
+    @classmethod
+    def _check_run_id(cls, value: str | None) -> str | None:
+        return None if value is None else validate_segment("run_id", value)
+
+
+class DrainRequest(OperationRequest):
+    """POST /drain_deletions' body. `dry_run` can only make the drain less
+    destructive: with DRAIN_DELETES_ENABLED unset it is dry regardless (J2)."""
+
+    dry_run: bool = False
+
+
+class OperationStarted(BaseModel):
+    """As ExportStarted, for a drain or a reconcile. The outcome lands in
+    /health's last_drain / last_reconcile and the operation's log line."""
+
+    status: Literal["started", "busy"]
+    operation: Literal["drain", "reconcile"]
     agency_base_id: str
     run_id: str

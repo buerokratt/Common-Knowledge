@@ -32,7 +32,7 @@ this class, not a discipline each sink has to remember.
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -152,16 +152,27 @@ class DocumentProbe:
     `chunk_ordinals` is None when a sink can only count; when present it is
     what lets the conformance suite (D15) assert that a tail delete left every
     surviving chunk in place.
+
+    `declared_chunk_count` is the chunk_count the destination's own record
+    states, when a listing read it (`list_documents`); None otherwise. It is
+    what J5's tail rule measures against "without a manifest": the record is
+    written before its chunks (F3), so it is the newest count the destination
+    holds, even when the manifest is behind it.
     """
 
     document_id: str
     record_present: bool
     chunk_count: int
     chunk_ordinals: tuple[int, ...] | None = None
+    declared_chunk_count: int | None = None
 
     def __post_init__(self) -> None:
         if self.chunk_count < 0:
             raise ValueError(f"chunk_count must be >= 0, got {self.chunk_count}")
+        if self.declared_chunk_count is not None and self.declared_chunk_count < 0:
+            raise ValueError(
+                f"declared_chunk_count must be >= 0, got {self.declared_chunk_count}"
+            )
         if self.chunk_ordinals is not None:
             ordinals = tuple(sorted(self.chunk_ordinals))
             object.__setattr__(self, "chunk_ordinals", ordinals)
@@ -370,6 +381,16 @@ class ContentSink(ABC):
         self._require(self.capabilities.can_list, "can_list")
         return self._holds_agency_content()
 
+    def list_documents(self) -> Iterator[DocumentProbe]:
+        """Every document the destination holds for the bound agency, one
+        probe each, with its chunk ordinals and the chunk_count its record
+        declares. Reconcile's full-scope read (J4) and the ground J5's tail
+        rule stands on. Requires `can_list`; a sink without it raises
+        NotSupported and reconcile narrows to read-backs, or to
+        `unverifiable` (J9)."""
+        self._require(self.capabilities.can_list, "can_list")
+        return self._list_documents()
+
     # -- sink hooks --------------------------------------------------------
 
     @abstractmethod
@@ -409,6 +430,18 @@ class ContentSink(ABC):
         """Whether any of the bound agency's documents is present. Capability
         already checked. Stop at the first document found: this is a probe,
         not a count."""
+
+    def _list_documents(self) -> Iterator[DocumentProbe]:
+        """Every document of the bound agency. Capability already checked.
+
+        Concrete rather than abstract so a sink added before Stage J still
+        constructs; one that declares `can_list` must override it, and the
+        sink conformance suite (D15) asserts that every listable sink does —
+        a declared capability that raises would be a lie in the other
+        direction."""
+        raise NotSupported(
+            f"{self._reporter} declares can_list but does not list documents"
+        )
 
     # -- helpers -----------------------------------------------------------
 

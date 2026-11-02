@@ -687,6 +687,13 @@ contentExternal:
   # STALE_SWEEP_ENABLED (L10) is off by default; "true" lets a committed run
   # that saw the whole corpus ask the destination to drop what the manifest
   # no longer accounts for. The object-store sink reports not_supported.
+  #
+  # DRAIN_DELETES_ENABLED and RECONCILE_REPAIR_ENABLED (Stage J) are off by
+  # default. Off, POST /drain_deletions only reports what it would retry
+  # (J2: run one full cycle dry first) and POST /reconcile_async only reports
+  # drift. "true" lets the drain delete and reconcile remove orphaned tail
+  # chunks (J5). A purge has no endpoint and no setting: it is
+  # `python -m exporter.run_ops purge`, run by an operator in the pod.
   env:
     - name: CONTENT_SINK
       value: "object_store"

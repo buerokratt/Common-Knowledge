@@ -81,6 +81,8 @@ it — see the note in the table below.
 | `LLM_MODULE_ENABLE_METADATA_MERGE` | no (default `false`) | L25. `true` lets a metadata-only change send the record alone (contract §8). Off, every metadata change is a full re-push and a re-embed, which is always correct. Set it only once the llm-module is confirmed to apply a merge all-or-nothing: a far side that answered a merge without applying it would leave stale metadata that nothing retries |
 | `LLM_MODULE_ALLOW_PROPOSED_CONTRACT` | no (default `false`) | Development only, and **not needed now that the contract is agreed** (`AGREED_TERMS.status = "agreed"`, recorded 2026-10-28). It matters only if the agreement is withdrawn and `llm_module` is refused again |
 | `STALE_SWEEP_ENABLED` | no (default `false`) | L10. After a committed run that saw the whole corpus and held nothing back, ask the destination to delete what was synced before the run and is not in the committed manifest's keep list. Never changes a run's outcome; reported as `stale_sweep=` (`disabled`, `refused`, `not_supported`, `failed`, `done`) |
+| `DRAIN_DELETES_ENABLED` | no (default `false`) | J2. Off, `POST /drain_deletions` only reports what it would retry. Run it that way for one full cycle and read the reports before setting `true`. The CLI's `run_ops drain` deletes unless `--dry-run` |
+| `RECONCILE_REPAIR_ENABLED` | no (default `false`) | J5. Off, `POST /reconcile_async` only reports drift. `true` also removes orphaned tail chunks, on a sink that can list. The CLI's `run_ops reconcile` repairs only with `--repair` |
 | `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; the llm-module's is its owner's to state), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
 | `SINK_FAILURE_ABORT_THRESHOLD` | no (default `25`) | Consecutive **permanent** upsert failures (a refused credential, a missing bucket, a wrong base URL) after which the run aborts with nothing committed and reports `failed` / `SystemicSinkFailure`. A published document resets the count, and retryable failures never count. One permanent failure is a document's problem: it is held and retried. This many in a row is the destination's |
 | `DIFF_ON_MISSING_MANIFEST` | no (default `first_run`) | `first_run` treats a missing manifest as a bootstrap. `fail` refuses it. Flip to `fail` once the bootstrap is done. Even under `first_run`, a first run refuses a destination that already holds the agency's content (see *Running an export*) |
@@ -344,7 +346,8 @@ alive, the response itself says `{"status":"busy",…}` and no process starts,
 so a misfiring cron cannot pile up children; otherwise the run lock in the
 child decides, and the `busy` shows up in `/health`. Either way it is
 recorded and counted in `consecutive_busy`.
-`POST /drain_deletions` answers 501 until Stage J builds the drain.
+`POST /drain_deletions` and `POST /reconcile_async` start the Stage J
+operations the same way; see [Deletion operations](#deletion-operations-stage-j).
 
 **The CLI is an operations tool**: the first end-to-end run, a bootstrap
 checked on a slice, a re-export by hand.
@@ -369,13 +372,15 @@ configuration error. CLI runs take the same lock and show up in `/health`.
   The report says `run_observed_full_corpus: false`. The flag is false only
   when the cap actually held a row back: a `--limit` larger than the reads
   the run needed skipped nothing, so it counts as a full run.
-- **Sweeps need a clean full run.** Every sweep (Stage J's orphan sweep and
-  `run_purge`, the llm-module's `synced_at` sweep) must check the run through
+- **A sweep that concludes from absence needs a clean full run.** The
+  llm-module's `synced_at` sweep checks the run through
   `exporter/services/corpus_guard.py`. It refuses unless the run succeeded,
   `run_observed_full_corpus` is true, and `documents_held_back` is 0. A
   held-back document is one that was not published, had a tail delete left
   unconfirmed, or was skipped by a size guard. It keeps its old state and old
-  `synced_at`, so a sweep would delete it as stale.
+  `synced_at`, so a sweep would delete it as stale. Stage J's tail sweep and
+  the purge conclude nothing from absence, so they carry other guards; see
+  [Deletion operations](#deletion-operations-stage-j).
 - **Gate 1 makes a quiet tick cheap.** When the agency's watermark, live
   document count and chunker fingerprint all match the committed manifest,
   the run ends `unchanged` after one watermark query and one manifest read:
@@ -451,6 +456,103 @@ Retries: Resql calls back off with full jitter on connection errors and
 and the next tick is the retry. S3 calls use botocore's own standard-mode
 retries, deliberately not doubled.
 
+## Deletion operations (Stage J)
+
+Three operations act on deletions outside an export. Each takes **the same
+whole-run lock** as the export, so each reports `busy` and touches nothing
+while an export or another operation runs. Each records its outcome in
+`$CONTENT_WORK_DIR/last_<operation>.json`, never in the export's
+`last_run.json`, so A15's alert is unaffected. `/health` shows `last_drain`
+and `last_reconcile`. Each emits one greppable line,
+`content-external drain|reconcile|purge k=v …`, with counts and flags only.
+Document ids appear only in the JSON report.
+
+```bash
+python -m exporter.run_ops drain     --agency-id … [--dry-run]  [--run-id …] [--output-json PATH|-]
+python -m exporter.run_ops reconcile --agency-id … [--repair]   [--run-id …] [--output-json PATH|-]
+python -m exporter.run_ops purge     --agency-id … --confirm …  [--run-id …] [--output-json PATH|-]
+```
+
+Exit codes are as for `run_sync` — `1` for `failed`, `2` for a usage or
+configuration error — with one addition: a purge that did not finish
+(`busy`, `incomplete`) also exits `1`, so `purge && next_step` never carries
+on past it.
+
+**The drain (J1, J2)** retries whole-document deletes that earlier runs
+journalled and the destination did not confirm.
+
+- It reads only journals a committed run has closed. Unclosed ones are the
+  next export's (`awaiting_export`).
+- It never deletes a document the committed manifest lists again
+  (`skipped_republished`).
+- It leaves tail deletes to the next export, which retries them itself
+  (`tails_left_to_export`), and counts reconcile's refused orphan tails
+  apart (`tails_left_to_reconcile`): no export retries those, the next
+  `reconcile --repair` does.
+- It reads the manifest only when a pending delete needs re-checking, so a
+  deployment whose first export has not committed reports `nothing_pending`,
+  not `failed`. A pending delete with no manifest still fails, rather than
+  delete blind.
+- It writes its intents and outcomes into the journal it drains, then
+  mirrors every closed journal not mirrored at its current length.
+- `--dry-run` writes nothing. Its `candidate_ids` are in the CLI's JSON
+  report only; the HTTP path logs counts (F13).
+- `POST /drain_deletions` is always dry unless `DRAIN_DELETES_ENABLED=true`.
+  Its body may ask for `"dry_run": true`, never for a real drain.
+
+**Reconcile (J4, J5, J9)** compares the destination with the committed
+manifest. `scope` says how much of the destination it could see:
+
+| `scope` | When | What it can see |
+|---|---|---|
+| `full` | the sink can list (object store) | every document, including ones the manifest does not know |
+| `manifest_documents` | read-back, no listing (llm-module under the agreed contract) | the manifest's documents only; `unrecorded_documents` is not measured. No drift is **`clean_partial`, never `clean`** |
+| `none` | neither | nothing. The outcome is **`unverifiable`, never `clean`** |
+
+`clean` is only ever a full-scope result, so an alert keyed on it cannot be
+satisfied by a comparison that saw part of the destination.
+
+- Drift is counted per category: `missing_documents`, `record_missing`,
+  `chunk_gaps`, `orphan_tail_*`, `unrecorded_documents`.
+- `--repair`, or `RECONCILE_REPAIR_ENABLED=true` on `POST /reconcile_async`,
+  removes **orphaned tail chunks only**. It does so only at `full` scope, and
+  only for a document whose record states its count. A tail is every ordinal
+  at or past the *larger* of that count and the manifest's, so a live chunk
+  the manifest has not caught up with is never deleted. A tail the
+  destination refuses (`tails_unresolved`) is retried by the next repair,
+  from its own listing.
+- Every other category stays report-only.
+
+**The purge (J7, J8)** deletes everything the committed manifest records for
+the agency. It works by running the diff with no rows and dispatching the
+deletes through the sink like any other.
+
+- It has no HTTP route and no setting, and it refuses to start unless
+  `--confirm` repeats the agency id.
+- A sink with an agency-scoped delete is then asked to remove anything the
+  manifest never recorded (`residue`). A listing confirms the destination
+  empty (`residual: verified_empty`), and only then is the outcome
+  `purged`. Without a listing, `residual` is `unverifiable` and a purge whose
+  every delete was acknowledged is `purged_unverified` (J9).
+- It commits an empty manifest. Deletes the destination refused stay in the
+  journal for the drain.
+- **The next export republishes every finished document CKB still holds**,
+  so disable the export's schedule first. See
+  [RUNBOOK.md](RUNBOOK.md#purging-an-agency).
+
+The drain and reconcile have schedules of their own, shipped disabled like
+the export's; see [Schedule](#schedule). Until they are enabled, both
+endpoints are called by hand.
+
+**The HTTP endpoints are unauthenticated**, like `POST /export_agency_async`.
+Ruuter internal calls them over `bykstack`, and compose also publishes 8125
+on the host for development. Once `DRAIN_DELETES_ENABLED=true`, anything
+that reaches the port can trigger a real drain, and with
+`RECONCILE_REPAIR_ENABLED=true` a tail repair. Neither can delete beyond
+what the journal and the listing already justify, and no caller can loosen
+either setting, but in any shared environment keep 8125 off every network
+except the internal one.
+
 ## Schedule
 
 The scheduled call path is
@@ -468,6 +570,22 @@ quoted. The enabled schedule polls hourly at :17. The top of the hour
 already carries `trigger_zipping`, and every multiple of five minutes
 carries `trigger_scheduler` and `trigger_pipeline_for_scheduled_entities`.
 :17 shares none of those start times.
+
+The drain and reconcile follow the same path through their own script and
+Ruuter step, `pipeline/content-drain` and `pipeline/content-reconcile`, to
+`POST /drain_deletions` and `POST /reconcile_async`. Both ship disabled with
+`trigger: "false"` and are enabled the same way:
+
+| Job | Enabled trigger | Why then |
+|---|---|---|
+| `trigger_content_drain` | `"0 47 */1 * * ?"` — hourly at :47 | Half an hour from the export, so it rarely meets the export's lock and reports `busy`. No faster: the journal only has work after an export failed a delete (J3) |
+| `trigger_content_reconcile` | `"0 35 3 * * ?"` — daily at 03:35 | Off-peak, clear of the export (:17) and the drain (:47), since it takes the same lock (J6) |
+
+Enable them after the export, and the drain only after one full cycle of
+dry reports ([Draining deferred deletes](RUNBOOK.md#draining-deferred-deletes-j1-j2)).
+Enabling a schedule never makes either operation destructive: the drain
+deletes only with `DRAIN_DELETES_ENABLED=true`, and reconcile repairs only
+with `RECONCILE_REPAIR_ENABLED=true`. The purge is never scheduled (J8).
 
 Polling avoids adding a dirty flag and a claim loop like `pipeline/zip.yml`:
 
@@ -582,12 +700,12 @@ not a fault in this run.
 | `list` | yes | no | Reconcile degrades to manifest-trusted reporting; the orphan sweep uses `synced_at` instead of a listing |
 | Batch delete | yes, or per-key fallback | batches of up to 500 document ids, one item each; tails by point id | `DeleteOutcome` is identical either way — a missing batch API stays a performance note |
 | Stale sweep (`STALE_SWEEP_ENABLED`) | not supported — the ordinal tail rule (Stage J) | `synced_at < run start` **and not in the manifest's keep list** (agreed: §13 q4, q12) | Reported as `stale_sweep=not_supported`; never improvised |
-| Agency delete (purge) | prefix delete | by the filterable `agency_id` (agreed: §13 q4, q11). Nothing calls it yet | `NotSupported` |
+| Agency delete (purge) | prefix delete | by the filterable `agency_id` (agreed: §13 q4, q11) | The purge's residue step reports `not_supported` |
 | Re-chunk (a fingerprint change) | a longer run | a full corpus **re-embed** | On the llm-module sink the run is refused until an operator passes `--accept-rechunk` (RUNBOOK) |
 | Metadata-only merge | 1 small blob write, 0 chunk writes | the record alone, merged onto every point all-or-nothing (agreed: §13 q3), **only with `LLM_MODULE_ENABLE_METADATA_MERGE=true`** | If unsupported or not enabled, `metadata_changed` degrades to a full re-push and a re-embed. Always reported, never hidden |
 | Atomic per document | no — publish write order provides it | when the document fits one request; a larger one is split into ordered parts, **each carrying the full record** | No chunk is ever retrievable before its document's metadata, regardless of sink |
 | Holds the manifest | yes | no | Manifest store is configured separately for `llm_module` |
-| Read-back for reconcile | via `list` | `GET` per document, listing ordinals (agreed: §13 q13). A `404` counts as "nothing held" only when its body says so | Reconcile reports **"unverifiable"** rather than "clean" |
+| Read-back for reconcile | via `list` | `GET` per document, listing ordinals (agreed: §13 q13). A `404` counts as "nothing held" only when its body says so | Without it, reconcile reports **"unverifiable"**. With it but no listing, the best result is **"clean_partial"**: `clean` needs a listing |
 
 So: on the `llm_module` sink, `list`-dependent operations (reconcile,
 orphan sweep) are expected to report degraded results. That is the sink's

@@ -198,6 +198,11 @@ from exporter.services.corpus_guard import (
     require_observed_full_corpus,
 )
 from exporter.services.dead_letter import DeadLetterStore
+from exporter.services.deletion_dispatch import (
+    close_and_mirror_journals,
+    delete_chunks_journalled,
+    delete_documents_journalled,
+)
 from exporter.services.deletion_journal import DeletionJournal, agency_journals
 from exporter.services.document_source import DocumentSource
 from exporter.services.locking import run_lock
@@ -275,8 +280,9 @@ class EmptyEnumerationError(RuntimeError):
     The rows include deleted and excluded ones (E3), so a real agency never
     enumerates empty: this is a broken query, a wrong agency or a restored
     database, and acting on it would delete the whole published corpus as
-    "absent from the rows". Deleting everything is run_purge's job (J7), on an
-    operator's explicit request, never an export's side effect.
+    "absent from the rows". Deleting everything is the purge's job (J7,
+    services/purge_service.py), on an operator's explicit request, never an
+    export's side effect.
     """
 
 
@@ -690,7 +696,8 @@ class PublishCoordinator:
             raise EmptyEnumerationError(
                 f"agency {agency_id}: the enumeration returned no rows, but "
                 f"{len(entries)} document(s) are published; refusing to delete "
-                "them all as absent. Use run_purge to delete an agency."
+                "them all as absent. To delete an agency, purge it: "
+                "python -m exporter.run_ops purge."
             )
         if previous is None:
             self._check_first_run(
@@ -736,7 +743,9 @@ class PublishCoordinator:
             advance_watermark=progress.observed_full_corpus and not progress.held_back,
         )
         self._commit(manifest, marker)  # F6: the commit point.
-        self._reconcile_journals(run_id, [*unreconciled, journal], [*on_disk, journal])
+        close_and_mirror_journals(
+            run_id, [*unreconciled, journal], [*on_disk, journal], self._manifests
+        )
         dead_lettered = self._record_dead_letters(run_id, diff, progress)
 
         report = replace(
@@ -1274,9 +1283,7 @@ class PublishCoordinator:
         if not tail:
             return
         ordinals = [coordinate.ordinal for coordinate in tail]
-        journal.intend_chunk_delete(document_id, ordinals)
-        outcome = self._sink.delete_chunks(document_id, ordinals)
-        journal.chunk_delete_done(document_id, outcome)
+        outcome = delete_chunks_journalled(self._sink, journal, document_id, ordinals)
         if outcome.is_complete:
             progress.tails_deleted.add(document_id)
         else:
@@ -1291,20 +1298,8 @@ class PublishCoordinator:
             for change in progress.changes
             if change is not None and change.bucket is Bucket.DELETED
         }
-        if not reasons:
-            return
-        # Journalled before the sink is asked. The manifest is about to forget
-        # these documents, so from here on the journal is their only record.
-        journal.intend_document_deletes(reasons)
-        outcome = self._sink.delete_documents(list(reasons))
-        journal.document_deletes_done(outcome)
+        outcome = delete_documents_journalled(self._sink, journal, reasons)
         progress.deletions_unresolved += len(outcome.unresolved)
-        if outcome.unresolved:
-            logger.warning(
-                "%d of %d document deletes unresolved; journalled for the drain",
-                len(outcome.unresolved),
-                len(reasons),
-            )
 
     # -- the manifest ------------------------------------------------------
 
@@ -1420,34 +1415,6 @@ class PublishCoordinator:
         # loop deleted by, so the two cannot disagree; record() checks it.
         return diff.with_chunk_tails(progress.chunk_counts)
 
-    def _reconcile_journals(
-        self,
-        run_id: str,
-        to_close: Sequence[DeletionJournal],
-        candidates: Sequence[DeletionJournal],
-    ) -> None:
-        """After the commit, so nothing here may fail the run. Close the
-        journals this commit reconciled, then mirror every closed journal not
-        yet mirrored at its current length — including one an earlier run
-        failed to mirror. The local files are the journals of record; the
-        mirror is a copy."""
-        for journal in _unique(to_close):
-            try:
-                journal.close(closed_by=run_id)
-            except OSError as exc:
-                # Left open, the next run distrusts its documents again: a
-                # needless republish, never a lost one.
-                logger.warning(
-                    "run %s: could not close the journal of run %s (%s: %s)",
-                    run_id,
-                    journal.run_id,
-                    type(exc).__name__,
-                    sanitize_sensitive_text(str(exc)),
-                )
-        for journal in _unique(candidates):
-            if journal.needs_mirror():
-                self._mirror_journal(run_id, journal)
-
     def _dead_letter_size(self) -> int:
         """The dead-letter record's current size, for a run that does not
         update it. Observability only, so never raises."""
@@ -1500,27 +1467,6 @@ class PublishCoordinator:
             )
             return len(dead)
         return len(record)
-
-    def _mirror_journal(self, run_id: str, journal: DeletionJournal) -> None:
-        payload = journal.payload()
-        if payload is None:
-            return
-        try:
-            self._manifests.mirror_deletion_journal(journal.run_id, payload)
-        except Exception as exc:
-            # A copy must not fail a run that has already committed; the next
-            # commit tries again.
-            logger.warning(
-                "run %s: the deletion journal of run %s was not mirrored "
-                "(%s: %s); the local copy at %s is the record",
-                run_id,
-                journal.run_id,
-                type(exc).__name__,
-                sanitize_sensitive_text(str(exc)),
-                journal.path,
-            )
-            return
-        journal.mark_mirrored(payload)
 
     # -- reporting (A15) ---------------------------------------------------
 
@@ -1627,14 +1573,6 @@ def _distrust(
         )
         for document_id, entry in entries.items()
     }
-
-
-def _unique(journals: Sequence[DeletionJournal]) -> list[DeletionJournal]:
-    """One journal per file, first wins."""
-    seen: dict[Path, DeletionJournal] = {}
-    for journal in journals:
-        seen.setdefault(journal.path, journal)
-    return list(seen.values())
 
 
 def _check_read(row: DocumentRef, read: ReadDocument) -> None:
