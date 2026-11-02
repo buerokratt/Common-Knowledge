@@ -1677,7 +1677,8 @@ class TestCleaningReportPersistence:
 
     def test_llm_extract_size_gate_skips_api_call(self, monkeypatch) -> None:
         """When even the pre-stripped HTML would exceed the ceiling, skip
-        the API call entirely and return "" so the caller falls back to BS."""
+        the API call entirely and return an "error" extraction so the caller
+        falls back to BS."""
         import worker.tasks as tasks_mod
 
         # Lower the ceiling so the test doesn't need a truly huge fixture.
@@ -1688,7 +1689,8 @@ class TestCleaningReportPersistence:
         big = "<html><body><p>" + ("word " * 1000) + "</p></body></html>"
         result = tasks_mod._llm_extract(client, "dep", big)
 
-        assert result == ""
+        assert result.status == "error"
+        assert result.content == ""
         client.chat.completions.create.assert_not_called()
 
     # -----------------------------------------------------------------
@@ -1736,7 +1738,8 @@ class TestCleaningReportPersistence:
     ) -> None:
         """After retries are exhausted the RateLimitError propagates up and
         _llm_extract's APIError handler catches it (RateLimitError is an
-        APIError subclass), returning "" so the caller falls back to BS."""
+        APIError subclass), returning an "error" extraction so the caller
+        falls back to BS."""
         from openai import RateLimitError
         import worker.tasks as tasks_mod
 
@@ -1749,7 +1752,8 @@ class TestCleaningReportPersistence:
         result = tasks_mod._llm_extract(
             client, "dep", "<html><body><p>x</p></body></html>"
         )
-        assert result == ""
+        assert result.status == "error"
+        assert result.content == ""
         # Retried exactly _LLM_MAX_ATTEMPTS times before giving up
         assert (
             client.chat.completions.create.call_count
@@ -1768,9 +1772,9 @@ class TestCleaningReportPersistence:
         client.chat.completions.create.side_effect = RateLimitError(
             "429", response=MagicMock(), body=None
         )
-        passed, reason = tasks_mod._llm_evaluate(client, "dep", "markdown")
-        assert passed is False
-        assert "429" in reason or "rate" in reason.lower() or "API error" in reason
+        evaluation = tasks_mod._llm_evaluate(client, "dep", "markdown")
+        assert evaluation.verdict == "error"
+        assert "LLM API error" in evaluation.reason
 
     def test_llm_extract_rejects_truncated_response(self) -> None:
         """finish_reason == "length" means the answer was cut off, usually
@@ -1782,7 +1786,8 @@ class TestCleaningReportPersistence:
         choice.finish_reason = "length"
         choice.message.content = "<table><tr><td>half a tab"
         result = _llm_extract(client, "dep", "<html></html>")
-        assert result == ""
+        assert result.status == "error"
+        assert result.content == ""
 
 
 # ---------------------------------------------------------------------------
