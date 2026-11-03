@@ -1,0 +1,2173 @@
+"""Stage F, F1–F7 — the publish coordinator, end to end against fakes.
+
+No network, no Docker, no database: a RecordingSink over an InMemoryStore for
+the destination, a second InMemoryStore for the manifest store, and a
+FakeDocumentSource for CKB. Ordering *within* a document (F3/F4) is the sink's
+and is asserted by tests/test_sink_conformance.py; these tests assert what the
+coordinator orders — which verb each bucket gets, what is journalled before
+it, and that nothing commits unless the whole run got that far.
+"""
+
+import itertools
+import json
+import logging
+import threading
+import time
+import unicodedata
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
+from datetime import datetime
+from pathlib import Path
+
+import pytest
+
+from exporter.core.chunking import Chunker
+from exporter.core.constants import CHUNK_PROFILES
+from exporter.core.ids import chunker_fingerprint
+from exporter.core.schemas import (
+    Chunk,
+    DocumentRecord,
+    DocumentRef,
+    Manifest,
+    ReadDocument,
+    RunReport,
+)
+from exporter.services.bootstrap_marker import BOOTSTRAP_DIRNAME, BootstrapMarker
+from exporter.services.corpus_guard import (
+    IncompleteCorpusError,
+    require_observed_full_corpus,
+)
+from exporter.services.deletion_journal import JOURNAL_DIRNAME, DeletionJournal
+from exporter.services.dead_letter import DeadLetterEntry, DeadLetterStore
+from exporter.services.document_source import UPLOADED_FILE_UNCITABLE
+from exporter.services.locking import run_lock
+from exporter.services.manifest_service import ManifestService
+from exporter.services.manifest_store import ManifestStore
+from exporter.services import publish_service
+from exporter.services.publish_service import (
+    TOO_MANY_CHUNKS,
+    UNCONFIRMED_FINGERPRINT,
+    PublishCoordinator,
+)
+from exporter.services.run_state import RunStateStore
+from exporter.sinks.base import ContentSink, UpsertOutcome
+from exporter.sinks.object_store_sink import ObjectStoreSink
+from exporter.stores.base import DeleteOutcome, StoreError
+from exporter_fakes import (
+    FULL_SINK_CAPABILITIES,
+    FakeDocumentSource,
+    InMemoryStore,
+    RecordingSink,
+    make_row,
+)
+
+AGENCY = "agency-1"
+PROFILE = CHUNK_PROFILES["compact"]  # small chunks, so a few sentences make several
+FP = chunker_fingerprint(PROFILE)
+EARLY = "2026-10-01T09:00:00Z"
+LATER = "2026-10-08T09:00:00Z"
+
+
+def text(sentences: int, *, word: str = "taotlus") -> str:
+    """Estonian-ish prose long enough to chunk: ~45 characters a sentence."""
+    return " ".join(
+        f"Lause {i} räägib sellest, kuidas {word} esitada." for i in range(sentences)
+    )
+
+
+class LoggingSink(RecordingSink):
+    """A RecordingSink that also logs each D0 verb as the coordinator called
+    it, so dispatch is asserted in sink vocabulary rather than in keys."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)  # pyright: ignore[reportArgumentType]
+        self.verbs: list[tuple[str, str, object]] = []
+        self.before_delete_documents: list[Callable[[], object]] = []
+        self.before_delete_chunks: list[Callable[[], object]] = []
+
+    def _upsert_document(
+        self, record: DocumentRecord, chunks: tuple[Chunk, ...] | None
+    ) -> UpsertOutcome:
+        shape = None if chunks is None else len(chunks)
+        self.verbs.append(("upsert", record.document_id, shape))
+        return super()._upsert_document(record, chunks)
+
+    def _delete_documents(self, document_ids: tuple[str, ...]) -> DeleteOutcome[str]:
+        for hook in self.before_delete_documents:
+            hook()
+        self.verbs.extend(("delete_document", d, None) for d in document_ids)
+        return super()._delete_documents(document_ids)
+
+    def _delete_chunks(
+        self, document_id: str, ordinals: tuple[int, ...]
+    ) -> DeleteOutcome[int]:
+        for hook in self.before_delete_chunks:
+            hook()
+        self.verbs.append(("delete_chunks", document_id, ordinals))
+        return super()._delete_chunks(document_id, ordinals)
+
+
+@dataclass
+class World:
+    tmp_path: Path
+    sink: ContentSink
+    source: FakeDocumentSource = field(default_factory=FakeDocumentSource)
+    manifest_client: InMemoryStore = field(default_factory=InMemoryStore)
+    on_missing: str = "first_run"
+    max_chunks: int = 5000
+    checkpoint_every: int = 250
+    concurrency: int = 1
+    abort_threshold: int = 25
+    ticks: Iterator[int] = field(default_factory=itertools.count)
+
+    @property
+    def work_dir(self) -> Path:
+        return self.tmp_path / "work"
+
+    @property
+    def manifest_store(self) -> ManifestStore:
+        return ManifestStore(self.manifest_client, prefix="manifests")
+
+    @property
+    def run_state(self) -> RunStateStore:
+        return RunStateStore(self.work_dir)
+
+    def clock(self) -> str:
+        n = next(self.ticks)
+        return f"2026-10-19T10:{n // 60:02d}:{n % 60:02d}Z"
+
+    def manifests(self) -> ManifestService:
+        return ManifestService(
+            self.manifest_store,
+            sink_id=self.sink.sink_id,
+            on_missing=self.on_missing,  # pyright: ignore[reportArgumentType]
+        )
+
+    def coordinator(self) -> PublishCoordinator:
+        return PublishCoordinator(
+            sink=self.sink,
+            manifests=self.manifests(),
+            source=self.source,
+            chunker=Chunker.from_profile(PROFILE),
+            chunker_fingerprint=FP,
+            work_dir=self.work_dir,
+            max_chunks_per_document=self.max_chunks,
+            bootstrap_checkpoint_every=self.checkpoint_every,
+            concurrency=self.concurrency,
+            sink_failure_abort_threshold=self.abort_threshold,
+            run_state=self.run_state,
+            clock=self.clock,
+        )
+
+    def export(
+        self,
+        run_id: str = "run-1",
+        *,
+        force: bool = False,
+        limit: int | None = None,
+        accept_existing_content: bool = False,
+    ) -> RunReport:
+        return self.coordinator().export(
+            run_id,
+            force=force,
+            limit=limit,
+            accept_existing_content=accept_existing_content,
+        )
+
+    def manifest(self) -> Manifest | None:
+        return self.manifest_store.load(AGENCY)
+
+    @property
+    def verbs(self) -> list[tuple[str, str, object]]:
+        assert isinstance(self.sink, LoggingSink)
+        return self.sink.verbs
+
+
+@pytest.fixture
+def world(tmp_path: Path) -> World:
+    return World(tmp_path=tmp_path, sink=LoggingSink())
+
+
+def _published(world: World, *documents: tuple[str, str]) -> Manifest:
+    """Publish `documents` (id, text) in a first run and reset the verb log."""
+    for document_id, body in documents:
+        world.source.put(make_row(document_id, updated_at=EARLY), body)
+    report = world.export("run-0")
+    assert report.outcome == "success"
+    world.verbs.clear()
+    world.source.reads.clear()
+    manifest = world.manifest()
+    assert manifest is not None
+    return manifest
+
+
+def _moved(
+    world: World,
+    document_id: str,
+    body: str | None = None,
+    *,
+    at: str = LATER,
+    **row: object,
+) -> None:
+    """Move a row's updated_at (and optionally its text or row fields)."""
+    current = world.source.documents[document_id]
+    world.source.put(
+        replace(current.row, updated_at=at, **row),  # type: ignore[arg-type]
+        current.text if body is None else body,
+        sidecar=dict(current.sidecar) if current.sidecar is not None else None,
+    )
+
+
+def _chunk_keys(world: World, document_id: str) -> list[str]:
+    assert isinstance(world.sink, LoggingSink)
+    prefix = f"content/agencies/{AGENCY}/documents/{document_id}/chunks/"
+    return sorted(k for k in world.sink.store.objects if k.startswith(prefix))
+
+
+class _CommitSwitch:
+    """Patches ManifestService.commit to fail until `fail` is cleared. With
+    `land`, the manifest is written before the failure is raised: the PUT
+    landed but its response was lost."""
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, *, land: bool = False) -> None:
+        self.fail = True
+        real = ManifestService.commit
+
+        def commit(service: ManifestService, manifest: Manifest) -> object:
+            if not self.fail:
+                return real(service, manifest)
+            if land:
+                real(service, manifest)
+            raise StoreError("InjectedFailure on commit")
+
+        monkeypatch.setattr(ManifestService, "commit", commit)
+
+
+# --- first run and Gate 2 --------------------------------------------------
+
+
+def test_a_first_run_publishes_every_ready_document_and_commits(world: World) -> None:
+    world.source.put(make_row("d1"), text(30))
+    world.source.put(make_row("d2"), text(3))
+
+    report = world.export()
+
+    assert report.outcome == "success"
+    assert report.new_count == 2
+    assert [verb for verb, _, _ in world.verbs] == ["upsert", "upsert"]
+    assert all(shape is not None and shape > 0 for _, _, shape in world.verbs)
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.sink_id == "recording"
+    assert manifest.corpus_watermark == EARLY
+    assert set(manifest.documents) == {"d1", "d2"}
+    assert manifest.documents["d1"].chunk_count > 1
+    assert manifest.documents["d1"].chunker_fingerprint == FP
+
+
+def test_an_unchanged_second_run_reads_nothing_and_publishes_nothing(
+    world: World,
+) -> None:
+    """Gate 2 is load-bearing: an unmoved row costs zero object reads. Forced
+    past Gate 1, which would otherwise end the run before the rows."""
+    first = _published(world, ("d1", text(30)), ("d2", text(3)))
+
+    report = world.export("run-2", force=True)
+
+    assert report.outcome == "success"
+    assert report.forced is True
+    assert report.unchanged_count == 2
+    assert world.source.reads == []
+    assert world.verbs == []
+    second = world.manifest()
+    assert second is not None
+    assert second.documents == first.documents
+    assert replace(second, committed_at="x") == replace(first, committed_at="x")
+
+
+# --- Gate 1 (E4) -----------------------------------------------------------
+
+
+def test_gate_1_ends_a_quiet_run_before_the_enumeration(world: World) -> None:
+    """One watermark query and one manifest read: no listing, no object
+    read, no destination call and no commit."""
+    first = _published(world, ("d1", text(30)), ("d2", text(3)))
+    listed = world.source.listed
+
+    report = world.export("run-2")
+
+    assert report.outcome == "unchanged"
+    assert report.forced is False
+    assert world.source.listed == listed
+    assert world.source.reads == []
+    assert world.verbs == []
+    assert world.manifest() == first
+    # It classified nothing, so it can vouch for nothing a sweep needs.
+    assert report.run_observed_full_corpus is False
+    with pytest.raises(IncompleteCorpusError):
+        require_observed_full_corpus(report, operation="a sweep")
+    last = world.run_state.read()
+    assert last is not None
+    assert last.outcome == "unchanged"
+
+
+def test_an_uploaded_file_does_not_cost_reads_or_disable_gate_1(world: World) -> None:
+    """Skipped at enumeration (document_source.UPLOADED_FILE_UNCITABLE), so
+    it is never read and, unlike a read-time skip, never withholds the
+    watermark: the next quiet run is still `unchanged`."""
+    world.source.put(make_row("d1", updated_at=EARLY), text(3))
+    world.source.put(
+        replace(make_row("u1", updated_at=EARLY), skip_reason=UPLOADED_FILE_UNCITABLE)
+    )
+
+    first = world.export("run-1")
+
+    assert first.outcome == "success"
+    assert first.skipped_reasons == {"u1": UPLOADED_FILE_UNCITABLE}
+    assert first.documents_held_back == 0
+    assert world.source.reads == ["d1"]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == EARLY
+    assert set(manifest.documents) == {"d1"}
+
+    world.source.reads.clear()
+    assert world.export("run-2").outcome == "unchanged"
+    assert world.source.reads == []
+
+
+def test_a_read_time_skip_still_withholds_the_watermark(world: World) -> None:
+    """The contrast: a rejected sidecar is a verdict on configuration and
+    content, so it keeps the next run walking."""
+    world.source.put(make_row("d1", updated_at=EARLY), text(3))
+    world.source.put(
+        make_row("d2", updated_at=EARLY), text(3), skip_reason="sidecar_missing"
+    )
+
+    assert world.export("run-1").documents_held_back == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark is None
+    assert world.export("run-2").outcome == "success"
+
+
+def _dead_letters(world: World) -> dict[str, DeadLetterEntry]:
+    return DeadLetterStore(world.work_dir, agency_id=AGENCY).load()
+
+
+def test_document_faults_are_dead_lettered_and_nothing_else(tmp_path: Path) -> None:
+    """E9: a read-time guard and MAX_CHUNKS_PER_DOCUMENT dead-letter; a row
+    not ready, an uploaded file and a --limit skip are expected, not faults."""
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), max_chunks=3)
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.source.put(make_row("long", updated_at=EARLY), text(60))
+    world.source.put(make_row("busy", updated_at=EARLY, status="in_review"), text(3))
+    world.source.put(
+        replace(make_row("up", updated_at=EARLY), skip_reason=UPLOADED_FILE_UNCITABLE)
+    )
+    world.source.put(make_row("ok", updated_at=EARLY), text(3))
+
+    report = world.export("run-1")
+
+    assert report.outcome == "success"
+    dead = _dead_letters(world)
+    assert {d: e.reason for d, e in dead.items()} == {
+        "big": "content_too_large",
+        "long": TOO_MANY_CHUNKS,
+    }
+    assert report.dead_lettered_count == 2
+    assert all(e.runs == 1 and e.last_run_id == "run-1" for e in dead.values())
+
+
+def test_a_stuck_document_keeps_its_first_seen_and_counts_runs(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    first = _dead_letters(world)["big"]
+
+    # Still stuck: its watermark was withheld, so the next run reads it again.
+    report = world.export("run-2")
+
+    entry = _dead_letters(world)["big"]
+    assert report.dead_lettered_count == 1
+    assert (entry.first_seen_at, entry.runs, entry.last_run_id) == (
+        first.first_seen_at,
+        2,
+        "run-2",
+    )
+    assert entry.last_seen_at != first.last_seen_at
+
+
+def test_a_fixed_document_leaves_the_record(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    assert set(_dead_letters(world)) == {"big"}
+
+    world.source.put(make_row("big", updated_at=LATER), text(3))
+    report = world.export("run-2")
+
+    assert report.new_count == 1
+    assert report.dead_lettered_count == 0
+    assert _dead_letters(world) == {}
+
+
+def test_a_limited_run_keeps_entries_it_did_not_read(world: World) -> None:
+    for name in ("a", "b"):
+        world.source.put(
+            make_row(name, updated_at=EARLY), text(3), skip_reason="content_too_large"
+        )
+    world.export("run-1")
+    assert set(_dead_letters(world)) == {"a", "b"}
+
+    report = world.export("run-2", limit=1)
+
+    assert report.run_observed_full_corpus is False
+    assert set(_dead_letters(world)) == {"a", "b"}
+    assert report.dead_lettered_count == 2
+
+
+def test_a_failed_run_does_not_touch_the_record(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    before = _dead_letters(world)
+    world.source.put(make_row("d2", updated_at=LATER), text(3))
+    world.source.fail_reads.add("d2")
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    # Untouched, and still reported: an alert on the count must not see it
+    # drop to 0 on a failed tick.
+    assert report.dead_lettered_count == 1
+    assert _dead_letters(world) == before
+
+
+def test_a_busy_run_reports_the_record_as_it_stands(world: World) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+
+    with run_lock(world.work_dir) as acquired:
+        assert acquired
+        report = world.export("run-2")
+
+    assert report.outcome == "busy"
+    assert report.dead_lettered_count == 1
+
+
+def test_a_limited_run_resolves_a_never_published_document_now_deleted(
+    world: World,
+) -> None:
+    """A deletion signal on a row never published lands in no diff bucket,
+    but the document is no longer stuck, even on a run that saw a slice."""
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    world.export("run-1")
+    assert set(_dead_letters(world)) == {"big"}
+
+    world.source.put(make_row("big", updated_at=LATER, is_excluded=True), text(3))
+    for name in ("x1", "x2"):
+        world.source.put(make_row(name, updated_at=LATER), text(3))
+    report = world.export("run-2", limit=1)
+
+    assert report.run_observed_full_corpus is False
+    assert _dead_letters(world) == {}
+    assert report.dead_lettered_count == 0
+
+
+def test_the_run_line_carries_the_dead_letter_count(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    world.source.put(
+        make_row("big", updated_at=EARLY), text(3), skip_reason="content_too_large"
+    )
+    with caplog.at_level(logging.INFO):
+        world.export("run-1")
+    line = next(m for m in caplog.messages if m.startswith("content-external run "))
+    assert "dead_lettered=1" in line
+
+
+def test_force_bypasses_gate_1(world: World) -> None:
+    _published(world, ("d1", text(3)))
+    listed = world.source.listed
+
+    report = world.export("run-2", force=True)
+
+    assert report.outcome == "success"
+    assert report.unchanged_count == 1
+    assert world.source.listed == listed + 1
+
+
+def test_a_moved_watermark_passes_gate_1(world: World) -> None:
+    _published(world, ("d1", text(3)), ("d2", text(3)))
+    _moved(world, "d1", text(4, word="toetus"))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.content_changed_count == 1
+
+
+def test_a_changed_live_count_passes_gate_1(world: World) -> None:
+    """A row added at the existing watermark moves only the count."""
+    _published(world, ("d1", text(3)))
+    world.source.put(make_row("d2", updated_at=EARLY), text(3))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.new_count == 1
+
+
+def test_a_withheld_watermark_passes_gate_1(world: World) -> None:
+    """A limited bootstrap commits a null watermark, so the next run walks
+    the rows and publishes what the cap held back."""
+    for n in (1, 2, 3):
+        world.source.put(make_row(f"d{n}", updated_at=EARLY), text(3))
+    assert world.export("run-1", limit=1).outcome == "success"
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark is None
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.new_count == 2
+
+
+def test_an_unclosed_journal_keeps_gate_1_from_skipping(world: World) -> None:
+    """Only a walking run reconciles it; skipping would keep its entries
+    distrusted for as long as CKB stays quiet."""
+    before = _published(world, ("d1", text(30)), ("d2", text(3)))
+    DeletionJournal(
+        world.work_dir, run_id="run-orphan", agency_id=AGENCY
+    ).intend_document_deletes({"d1": "absent_from_rows"})
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert world.verbs == [("upsert", "d1", before.documents["d1"].chunk_count)]
+    world.verbs.clear()
+    assert world.export("run-3").outcome == "unchanged"
+    assert world.verbs == []
+
+
+def test_a_closed_journal_awaiting_its_mirror_keeps_gate_1_from_skipping(
+    world: World,
+) -> None:
+    """The mirror is retried after a commit, so a skipping run would never
+    retry it."""
+    _published(world, ("d1", text(3)))
+    journal = DeletionJournal(world.work_dir, run_id="run-unmirrored", agency_id=AGENCY)
+    journal.intend_document_deletes({"d9": "absent_from_rows"})
+    journal.close(closed_by="run-0")
+    assert journal.needs_mirror()
+
+    assert world.export("run-2").outcome == "success"
+    assert not journal.needs_mirror()
+    assert world.export("run-3").outcome == "unchanged"
+
+
+# --- per-bucket dispatch (F5) ----------------------------------------------
+
+
+def test_content_changed_upserts_then_deletes_only_the_lost_tail(world: World) -> None:
+    before = _published(world, ("d1", text(40)))
+    old_count = before.documents["d1"].chunk_count
+    _moved(world, "d1", text(8, word="toetus"))
+
+    report = world.export("run-2")
+
+    assert report.content_changed_count == 1
+    (upsert, tail) = world.verbs
+    assert upsert[0] == "upsert"
+    new_count = upsert[2]
+    assert isinstance(new_count, int) and new_count < old_count
+    assert tail == ("delete_chunks", "d1", tuple(range(new_count, old_count)))
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"].chunk_count == new_count
+    assert manifest.documents["d1"].source_updated_at == LATER
+    journal = (world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl").read_text("utf-8")
+    assert '"kind": "chunks"' in journal
+
+
+def test_a_grown_document_deletes_no_tail(world: World) -> None:
+    _published(world, ("d1", text(8)))
+    _moved(world, "d1", text(40, word="toetus"))
+    world.export("run-2")
+    assert [verb for verb, _, _ in world.verbs] == ["upsert"]
+
+
+def test_metadata_changed_is_a_record_only_upsert(world: World) -> None:
+    before = _published(world, ("d1", text(30)))
+    current = world.source.documents["d1"]
+    world.source.put(
+        replace(current.row, updated_at=LATER),
+        current.text,
+        sidecar={"source_url": current.row.url, "page_title": "Uus pealkiri"},
+    )
+
+    report = world.export("run-2")
+
+    assert report.metadata_changed_count == 1
+    assert world.verbs == [("upsert", "d1", None)]
+    manifest = world.manifest()
+    assert manifest is not None
+    entry = manifest.documents["d1"]
+    assert entry.chunk_count == before.documents["d1"].chunk_count
+    assert entry.metadata_sha256 != before.documents["d1"].metadata_sha256
+
+
+def test_metadata_changed_without_merge_is_a_counted_full_repush(
+    tmp_path: Path,
+) -> None:
+    """L8: the cheap path became the expensive one, and the report says so."""
+    sink = LoggingSink(
+        capabilities=replace(FULL_SINK_CAPABILITIES, supports_metadata_only_merge=False)
+    )
+    world = World(tmp_path=tmp_path, sink=sink)
+    before = _published(world, ("d1", text(30)))
+    current = world.source.documents["d1"]
+    world.source.put(
+        replace(current.row, updated_at=LATER),
+        current.text,
+        sidecar={"source_url": current.row.url, "page_title": "Uus pealkiri"},
+    )
+
+    report = world.export("run-2")
+
+    assert report.metadata_full_repush_count == 1
+    assert world.verbs == [("upsert", "d1", before.documents["d1"].chunk_count)]
+
+
+@pytest.mark.parametrize(
+    "row_change",
+    [{"is_deleted": True}, {"is_excluded": True}, {"status": "not_found"}],
+    ids=["is_deleted", "is_excluded", "not_found"],
+)
+def test_each_deletion_signal_deletes_the_document(
+    world: World, row_change: dict[str, object]
+) -> None:
+    _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", **row_change)
+
+    report = world.export("run-2")
+
+    assert report.deleted_count == 1
+    assert world.verbs == [("delete_document", "d1", None)]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d2"}
+
+
+def test_absence_from_the_rows_deletes_the_document(world: World) -> None:
+    _published(world, ("d1", text(10)), ("d2", text(10)))
+    world.source.remove("d1")
+
+    report = world.export("run-2")
+
+    assert report.deleted_count == 1
+    assert world.verbs == [("delete_document", "d1", None)]
+
+
+def test_a_never_published_deleted_row_costs_nothing(world: World) -> None:
+    world.source.put(make_row("d1", is_deleted=True), text(10))
+    report = world.export()
+    assert report.outcome == "success"
+    assert report.deleted_count == 0
+    assert world.verbs == []
+
+
+def test_document_deletes_are_journalled_before_the_sink_is_asked(
+    world: World,
+) -> None:
+    _published(world, ("d1", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    journal_path = world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl"
+    seen: list[str] = []
+    assert isinstance(world.sink, LoggingSink)
+    world.sink.before_delete_documents.append(
+        lambda: seen.append(journal_path.read_text("utf-8"))
+    )
+
+    world.export("run-2")
+
+    assert len(seen) == 1
+    assert '"event": "intent"' in seen[0]
+    assert '"event": "outcome"' not in seen[0]
+
+
+def test_a_document_not_ready_is_held_untouched(world: World) -> None:
+    """C15/E12: mid-refresh, with a stale content URL still populated."""
+    before = _published(world, ("d1", text(10)))
+    _moved(world, "d1", status="scraping")
+
+    report = world.export("run-2")
+
+    assert report.skipped_count == 1
+    assert world.verbs == []
+    assert world.source.reads == []
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"] == before.documents["d1"]
+
+
+# --- failures that are outcomes, not exceptions ----------------------------
+
+
+def test_a_failed_upsert_keeps_the_previous_entry_and_withholds_the_watermark(
+    world: World,
+) -> None:
+    before = _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", text(12, word="toetus"))
+    _moved(world, "d2", text(12, word="toetus"))
+    assert isinstance(world.sink, LoggingSink)
+    world.sink.store.fail_keys.add(
+        "content/agencies/agency-1/documents/d1/metadata.json"
+    )
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.publish_failed_count == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"] == before.documents["d1"]
+    assert manifest.documents["d2"].source_updated_at == LATER
+    assert manifest.corpus_watermark is None
+
+
+def test_a_failed_new_document_stays_out_of_the_manifest(world: World) -> None:
+    world.source.put(make_row("d1"), text(10))
+    assert isinstance(world.sink, LoggingSink)
+    world.sink.store.fail_keys.add(
+        "content/agencies/agency-1/documents/d1/metadata.json"
+    )
+
+    report = world.export()
+
+    assert report.publish_failed_count == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert "d1" not in manifest.documents
+
+
+def test_a_failed_tail_delete_keeps_the_old_count_and_is_journalled(
+    world: World,
+) -> None:
+    before = _published(world, ("d1", text(40)))
+    old_count = before.documents["d1"].chunk_count
+    _moved(world, "d1", text(8, word="toetus"))
+    assert isinstance(world.sink, LoggingSink)
+    world.sink.store.fail_delete_keys.add(
+        f"content/agencies/agency-1/documents/d1/chunks/{old_count - 1:05d}.json"
+    )
+
+    report = world.export("run-2")
+
+    assert report.deletions_unresolved == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    # Carried, so the next run recomputes the tail from what is live.
+    assert manifest.documents["d1"] == before.documents["d1"]
+    assert manifest.corpus_watermark is None
+    journal = (world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl").read_text("utf-8")
+    assert '"unresolved": [{"item": ' in journal
+
+
+def test_a_failed_document_delete_is_journalled_and_the_entry_leaves(
+    world: World,
+) -> None:
+    _published(world, ("d1", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    assert isinstance(world.sink, LoggingSink)
+    world.sink.store.fail_delete_keys.add(
+        "content/agencies/agency-1/documents/d1/chunks/00000.json"
+    )
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.deletions_unresolved == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert "d1" not in manifest.documents  # the journal owns it now
+
+
+def test_too_many_chunks_skips_and_holds(tmp_path: Path) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink())
+    before = _published(world, ("d1", text(3)))
+    world.max_chunks = 2
+    _moved(world, "d1", text(40, word="toetus"))
+
+    report = world.export("run-2")
+
+    assert report.skipped_count == 1
+    assert report.skipped_reasons == {"d1": TOO_MANY_CHUNKS}
+    assert world.verbs == []
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"] == before.documents["d1"]
+    # A raised limit must not meet a Gate 1 that skips the unmoved corpus.
+    assert manifest.corpus_watermark is None
+
+
+def test_a_read_time_skip_is_reported_with_its_reason(world: World) -> None:
+    world.source.put(make_row("d1"), text(10), skip_reason="oversize")
+    report = world.export()
+    assert report.skipped_reasons == {"d1": "oversize"}
+    assert world.verbs == []
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark is None
+
+
+def test_a_rechunk_that_disagrees_with_the_published_count_holds_one_document(
+    tmp_path: Path,
+) -> None:
+    """One document must not wedge the agency: it is held and marked, the rest
+    publish, and the next run republishes it in full."""
+    sink = LoggingSink(
+        capabilities=replace(FULL_SINK_CAPABILITIES, supports_metadata_only_merge=False)
+    )
+    world = World(tmp_path=tmp_path, sink=sink)
+    before = _published(world, ("d1", text(30)), ("d2", text(10)))
+    real_count = before.documents["d1"].chunk_count
+    skewed = replace(before.documents["d1"], chunk_count=real_count + 1)
+    world.manifest_store.commit(
+        replace(before, documents={**before.documents, "d1": skewed})
+    )
+    current = world.source.documents["d1"]
+    world.source.put(
+        replace(current.row, updated_at=LATER),
+        current.text,
+        sidecar={"source_url": current.row.url, "page_title": "Uus pealkiri"},
+    )
+    _moved(world, "d2", text(12, word="toetus"))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.publish_failed_count == 1
+    assert dict(report.publish_failures) == {
+        "d1": publish_service.RECHUNK_COUNT_MISMATCH
+    }
+    assert [d for v, d, _ in world.verbs if v == "upsert"] == ["d2"]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"].chunker_fingerprint == UNCONFIRMED_FINGERPRINT
+    assert manifest.documents["d1"].chunk_count == real_count + 1
+    assert manifest.documents["d2"].source_updated_at == LATER
+    assert manifest.corpus_watermark is None
+
+    world.verbs.clear()
+    report = world.export("run-3")
+
+    assert report.content_changed_count == 1
+    assert world.verbs == [
+        ("upsert", "d1", real_count),
+        ("delete_chunks", "d1", (real_count,)),
+    ]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"].chunker_fingerprint == FP
+    assert manifest.documents["d1"].chunk_count == real_count
+    assert manifest.corpus_watermark == LATER
+
+
+# --- failures that abort: nothing commits (F6) -----------------------------
+
+
+def test_a_mid_run_exception_commits_nothing(world: World) -> None:
+    before = _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", text(12, word="toetus"))
+    _moved(world, "d2", text(12, word="toetus"))
+    world.source.fail_reads.add("d2")
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert world.manifest() == before
+    assert world.run_state.read() is not None
+    assert world.run_state.read().outcome == "failed"  # type: ignore[union-attr]
+
+
+class _BrokenReadSource(FakeDocumentSource):
+    """A source whose reads break schemas.ReadDocument's contract, which the
+    coordinator checks because the type does not."""
+
+    def __init__(self, breakage: Callable[[ReadDocument], ReadDocument]) -> None:
+        super().__init__()
+        self._breakage = breakage
+
+    def read(self, ref: DocumentRef) -> ReadDocument:
+        return self._breakage(super().read(ref))
+
+
+@pytest.mark.parametrize(
+    "breakage",
+    [
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, skip_reason="too_large")),
+            id="skipped-with-text",
+        ),
+        pytest.param(lambda r: replace(r, text=None), id="unskipped-without-text"),
+        pytest.param(
+            lambda r: replace(r, sidecar=None), id="unskipped-without-sidecar"
+        ),
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, content_sha256=None)),
+            id="unhashed",
+        ),
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, metadata_sha256="0" * 64)),
+            id="metadata-hash-not-the-sidecars",
+        ),
+        pytest.param(
+            lambda r: replace(r, text=unicodedata.normalize("NFD", r.text)),
+            id="not-nfc",
+        ),
+        pytest.param(
+            lambda r: replace(r, ref=replace(r.ref, url="https://elsewhere.ee/x")),
+            id="row-fields-changed",
+        ),
+    ],
+)
+def test_a_read_that_breaks_the_contract_fails_the_run(
+    tmp_path: Path, breakage: Callable[[ReadDocument], ReadDocument]
+) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink())
+    world.source = _BrokenReadSource(breakage)
+    world.source.put(make_row("d1"), "Õun ja äädikas. " * 10)
+
+    report = world.export()
+
+    assert report.outcome == "failed"
+    assert report.error_type == "ValueError"
+    assert world.verbs == []
+    assert world.manifest() is None
+
+
+def test_a_failed_commit_leaves_the_journal_on_disk(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = _published(world, ("d1", text(10)))
+    _moved(world, "d1", is_deleted=True)
+
+    def refuse(self: ManifestService, manifest: Manifest) -> None:
+        raise StoreError("InjectedFailure on commit")
+
+    monkeypatch.setattr(ManifestService, "commit", refuse)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert world.manifest() == before
+    journal = world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl"
+    assert journal.exists()
+    # Not mirrored: the mirror follows a commit that never happened.
+    assert not any("_control" in key for key in world.manifest_client.objects)
+
+
+def test_a_sink_exception_mid_delete_commits_nothing_and_the_next_run_deletes(
+    world: World,
+) -> None:
+    before = _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    assert isinstance(world.sink, LoggingSink)
+
+    def explode() -> None:
+        raise StoreError("InjectedFailure mid-delete")
+
+    world.sink.before_delete_documents.append(explode)
+
+    assert world.export("run-2").outcome == "failed"
+    assert world.manifest() == before
+
+    world.sink.before_delete_documents.clear()
+    assert world.export("run-3").outcome == "success"
+    assert world.verbs == [("delete_document", "d1", None)]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d2"}
+
+
+def test_the_commit_follows_every_destination_write(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _published(world, ("d1", text(40)), ("d2", text(10)))
+    _moved(world, "d1", text(8, word="toetus"))
+    _moved(world, "d2", is_deleted=True)
+    verbs_at_commit: list[int] = []
+    real = ManifestService.commit
+
+    def commit(service: ManifestService, manifest: Manifest) -> object:
+        verbs_at_commit.append(len(world.verbs))
+        return real(service, manifest)
+
+    monkeypatch.setattr(ManifestService, "commit", commit)
+
+    assert world.export("run-2").outcome == "success"
+
+    assert [verb for verb, _, _ in world.verbs] == [
+        "upsert",
+        "delete_chunks",
+        "delete_document",
+    ]
+    assert verbs_at_commit == [3]
+
+
+# --- replay after a run that died before its commit (F6, F7) ---------------
+
+RESTORED = "2026-10-15T09:00:00Z"
+
+
+def test_a_document_deleted_by_an_uncommitted_run_is_republished_when_restored(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The manifest still lists the document the destination lost; restored
+    with the same content, it must not be called unchanged."""
+    before = _published(world, ("d1", text(30)), ("d2", text(10)))
+    count = before.documents["d1"].chunk_count
+    _moved(world, "d1", is_deleted=True)
+    switch = _CommitSwitch(monkeypatch)
+
+    assert world.export("run-2").outcome == "failed"
+    assert _chunk_keys(world, "d1") == []
+    assert world.manifest() == before
+
+    switch.fail = False
+    _moved(world, "d1", at=RESTORED, is_deleted=False)
+    world.verbs.clear()
+    report = world.export("run-3")
+
+    assert report.outcome == "success"
+    assert report.content_changed_count == 1
+    assert world.verbs == [("upsert", "d1", count)]
+    assert len(_chunk_keys(world, "d1")) == count
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"].chunker_fingerprint == FP
+    assert manifest.documents["d2"] == before.documents["d2"]
+
+    # Reconciled and closed: the next run trusts the manifest again, and the
+    # closed journal no longer keeps Gate 1 from skipping.
+    world.verbs.clear()
+    world.source.reads.clear()
+    assert world.export("run-4").outcome == "unchanged"
+    assert world.verbs == []
+    assert world.source.reads == []
+
+
+def test_a_document_still_deleted_after_an_uncommitted_run_is_deleted_again(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    switch = _CommitSwitch(monkeypatch)
+    assert world.export("run-2").outcome == "failed"
+
+    switch.fail = False
+    world.verbs.clear()
+    report = world.export("run-3")
+
+    assert report.deleted_count == 1
+    assert world.verbs == [("delete_document", "d1", None)]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d2"}
+
+
+def test_content_reverted_after_an_uncommitted_tail_delete_is_republished(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    before = _published(world, ("d1", text(40)))
+    old_count = before.documents["d1"].chunk_count
+    _moved(world, "d1", text(8, word="toetus"))
+    switch = _CommitSwitch(monkeypatch)
+    assert world.export("run-2").outcome == "failed"
+    assert len(_chunk_keys(world, "d1")) < old_count
+
+    switch.fail = False
+    _moved(world, "d1", text(40), at=RESTORED)
+    world.export("run-3")
+
+    assert len(_chunk_keys(world, "d1")) == old_count
+    manifest = world.manifest()
+    assert manifest is not None
+    entry = manifest.documents["d1"]
+    assert entry.content_sha256 == before.documents["d1"].content_sha256
+    assert entry.chunker_fingerprint == FP
+
+
+def test_a_commit_that_landed_but_reported_failure_costs_nothing_next_run(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The next run reads the manifest that landed, so nothing is distrusted,
+    and it mirrors the journal the failed run never got to."""
+    _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    switch = _CommitSwitch(monkeypatch, land=True)
+    assert world.export("run-2").outcome == "failed"
+    key = "manifests/_control/deletions/pending-run-2.jsonl"
+    assert key not in world.manifest_client.objects
+
+    switch.fail = False
+    world.verbs.clear()
+    assert world.export("run-3").outcome == "success"
+
+    assert world.verbs == []
+    local = (world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl").read_bytes()
+    assert b'"closed_by": "run-3"' in local
+    assert world.manifest_client.objects[key].payload == local
+
+
+def test_a_committed_run_id_is_not_reused(world: World) -> None:
+    _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    assert world.export("run-2").outcome == "success"
+    _moved(world, "d2", is_deleted=True)
+    world.verbs.clear()
+
+    assert world.export("run-2").outcome == "failed"
+    assert world.verbs == []
+
+
+def test_a_manifest_for_another_sink_fails_with_no_sink_call(tmp_path: Path) -> None:
+    """F17: the new destination is not silently treated as published."""
+    first = World(tmp_path=tmp_path, sink=LoggingSink(sink_id="llm_module"))
+    _published(first, ("d1", text(10)))
+
+    second = World(
+        tmp_path=tmp_path,
+        sink=LoggingSink(sink_id="recording"),
+        source=first.source,
+        manifest_client=first.manifest_client,
+    )
+    report = second.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "SinkMismatch"
+    assert second.verbs == []
+    assert first.source.reads == []
+    last = second.run_state.read()
+    assert last is not None
+    assert last.outcome == "failed"
+    assert last.error_type == "SinkMismatch"
+
+
+def test_a_missing_manifest_under_fail_publishes_nothing(tmp_path: Path) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), on_missing="fail")
+    world.source.put(make_row("d1"), text(10))
+
+    report = world.export()
+
+    assert report.outcome == "failed"
+    assert world.verbs == []
+    assert world.manifest() is None
+
+
+def test_an_empty_enumeration_never_deletes_the_corpus(world: World) -> None:
+    before = _published(world, ("d1", text(10)), ("d2", text(10)))
+    world.source.remove("d1")
+    world.source.remove("d2")
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert world.verbs == []
+    assert world.manifest() == before
+
+
+# --- the lock (F2) ---------------------------------------------------------
+
+
+def test_a_held_lock_reports_busy_and_writes_nothing(world: World) -> None:
+    world.source.put(make_row("d1"), text(10))
+
+    with run_lock(world.work_dir) as held:
+        assert held is True
+        report = world.export()
+
+    assert report.outcome == "busy"
+    assert world.verbs == []
+    assert world.source.listed == 0
+    assert world.manifest() is None
+    last = world.run_state.read()
+    assert last is not None and last.outcome == "busy"
+
+    # Busy left nothing behind: the next run proceeds.
+    assert world.export("run-2").outcome == "success"
+
+
+def test_the_lock_is_released_after_a_failed_run(world: World) -> None:
+    world.source.put(make_row("d1"), text(10))
+    world.source.fail_reads.add("d1")
+    assert world.export().outcome == "failed"
+
+    with run_lock(world.work_dir) as held:
+        assert held is True
+    world.source.fail_reads.clear()
+    assert world.export("run-2").outcome == "success"
+
+
+def test_a_lock_that_cannot_be_opened_is_a_failed_run_not_a_raise(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    @contextmanager
+    def unopenable(work_dir: Path) -> Iterator[bool]:
+        raise PermissionError(f"cannot open the lock under {work_dir}")
+        yield False  # pragma: no cover - makes this a generator
+
+    monkeypatch.setattr(publish_service, "run_lock", unopenable)
+    world.source.put(make_row("d1"), text(10))
+
+    report = world.export()
+
+    assert report.outcome == "failed"
+    assert world.verbs == []
+    last = world.run_state.read()
+    assert last is not None and last.outcome == "failed"
+
+
+@pytest.mark.parametrize("error", [RuntimeError, PermissionError])
+def test_a_run_that_cannot_be_recorded_still_returns_its_report(
+    world: World, monkeypatch: pytest.MonkeyPatch, error: type[Exception]
+) -> None:
+    """The run committed; losing its log line or last-run record must neither
+    raise out of export() nor strip the duration from the report. OSError is
+    parametrised because export() once returned the unstamped report on it."""
+
+    def unrecordable(*_args: object, **_kwargs: object) -> None:
+        raise error("the record could not be written")
+
+    monkeypatch.setattr(RunStateStore, "record", unrecordable)
+    world.source.put(make_row("d1"), text(10))
+
+    report = world.export(force=True)
+
+    assert report.outcome == "success"
+    # Stamped by _finish, which the old OSError path skipped.
+    assert report.forced is True
+    assert report.duration_seconds > 0
+    assert world.manifest() is not None
+
+
+# --- the journal mirror (F7) -----------------------------------------------
+
+
+def test_the_journal_is_mirrored_after_a_commit(world: World) -> None:
+    _published(world, ("d1", text(10)))
+    _moved(world, "d1", is_deleted=True)
+
+    world.export("run-2")
+
+    key = "manifests/_control/deletions/pending-run-2.jsonl"
+    assert key in world.manifest_client.objects
+    local = (world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl").read_bytes()
+    assert world.manifest_client.objects[key].payload == local
+
+
+def test_a_failed_mirror_does_not_fail_a_committed_run(world: World) -> None:
+    _published(world, ("d1", text(10)))
+    _moved(world, "d1", is_deleted=True)
+    world.manifest_client.fail_keys.add(
+        "manifests/_control/deletions/pending-run-2.jsonl"
+    )
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    manifest = world.manifest()
+    assert manifest is not None
+    assert "d1" not in manifest.documents
+
+    # Retried by the next commit, not forgotten.
+    world.manifest_client.fail_keys.clear()
+    world.export("run-3")
+    assert "manifests/_control/deletions/pending-run-2.jsonl" in (
+        world.manifest_client.objects
+    )
+
+
+def test_tail_deletes_are_journalled_before_the_sink_is_asked(world: World) -> None:
+    _published(world, ("d1", text(40)))
+    _moved(world, "d1", text(8, word="toetus"))
+    journal_path = world.work_dir / JOURNAL_DIRNAME / "run-2.jsonl"
+    seen: list[str] = []
+    assert isinstance(world.sink, LoggingSink)
+    world.sink.before_delete_chunks.append(
+        lambda: seen.append(journal_path.read_text("utf-8"))
+    )
+
+    world.export("run-2")
+
+    assert len(seen) == 1
+    assert '"kind": "chunks"' in seen[0]
+    assert '"event": "outcome"' not in seen[0]
+
+
+def test_a_run_with_no_deletions_mirrors_nothing(world: World) -> None:
+    world.source.put(make_row("d1"), text(10))
+    world.export()
+    assert not any("_control" in key for key in world.manifest_client.objects)
+
+
+# --- sink-blindness --------------------------------------------------------
+
+
+def test_two_sinks_get_the_same_decisions_and_chunk_ids(tmp_path: Path) -> None:
+    """Same rows, same manifest documents, whichever destination: the diff and
+    the ids do not know which sink they feed."""
+    store = InMemoryStore()
+    sinks: list[ContentSink] = [
+        LoggingSink(sink_id="one"),
+        ObjectStoreSink(store=store, prefix="content", agency_id=AGENCY, sink_id="two"),
+    ]
+    manifests = []
+    for index, sink in enumerate(sinks):
+        world = World(tmp_path=tmp_path / str(index), sink=sink)
+        world.source.put(make_row("d1"), text(30))
+        world.source.put(make_row("d2", is_excluded=True), text(3))
+        world.source.put(make_row("d3", status="in_review"), text(3))
+        assert world.export().outcome == "success"
+        manifests.append(world.manifest())
+    assert manifests[0] is not None and manifests[1] is not None
+    assert manifests[0].documents == manifests[1].documents
+    recorded = sinks[0]
+    assert isinstance(recorded, LoggingSink)
+    ids_one = sorted(k for k in recorded.store.objects if "/chunks/" in k)
+    ids_two = sorted(k for k in store.objects if "/chunks/" in k)
+    assert ids_one == ids_two
+
+
+def test_the_coordinator_refuses_a_manifest_service_for_another_sink(
+    tmp_path: Path,
+) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(sink_id="one"))
+    manifests = ManifestService(
+        world.manifest_store, sink_id="two", on_missing="first_run"
+    )
+    with pytest.raises(ValueError, match="different destinations"):
+        PublishCoordinator(
+            sink=world.sink,
+            manifests=manifests,
+            source=world.source,
+            chunker=Chunker.from_profile(PROFILE),
+            chunker_fingerprint=FP,
+            work_dir=world.work_dir,
+            max_chunks_per_document=10,
+            bootstrap_checkpoint_every=250,
+            concurrency=1,
+            sink_failure_abort_threshold=25,
+        )
+
+
+class _CrashingSink(LoggingSink):
+    """A LoggingSink whose upsert of a named document raises, as a dying
+    process would: the run fails rather than recording an outcome."""
+
+    def __init__(self, **kwargs: object) -> None:
+        super().__init__(**kwargs)
+        self.crash_on: set[str] = set()
+
+    def _upsert_document(
+        self, record: DocumentRecord, chunks: tuple[Chunk, ...] | None
+    ) -> UpsertOutcome:
+        if record.document_id in self.crash_on:
+            raise StoreError("InjectedFailure on upsert")
+        return super()._upsert_document(record, chunks)
+
+
+def _commits(monkeypatch: pytest.MonkeyPatch) -> list[Manifest]:
+    """Record every manifest committed, checkpoints included."""
+    committed: list[Manifest] = []
+    real = ManifestService.commit
+
+    def commit(service: ManifestService, manifest: Manifest) -> object:
+        committed.append(manifest)
+        return real(service, manifest)
+
+    monkeypatch.setattr(ManifestService, "commit", commit)
+    return committed
+
+
+# --- F15: first-run checkpoints ------------------------------------------------
+
+
+def test_a_first_run_checkpoints_with_the_watermark_withheld(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), checkpoint_every=2)
+    for n in range(1, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    committed = _commits(monkeypatch)
+
+    report = world.export()
+
+    assert report.outcome == "success"
+    assert report.checkpoints_committed == 2
+    checkpoints, final = committed[:-1], committed[-1]
+    assert [len(m.documents) for m in checkpoints] == [2, 4]
+    assert all(m.corpus_watermark is None for m in checkpoints)
+    assert len(final.documents) == 5
+    assert final.corpus_watermark == EARLY
+
+
+def test_a_killed_bootstrap_resumes_from_its_last_checkpoint(tmp_path: Path) -> None:
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink, checkpoint_every=2)
+    for n in range(1, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    sink.crash_on.add("d5")
+
+    report = world.export("run-1")
+
+    assert report.outcome == "failed"
+    assert report.checkpoints_committed == 2
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d1", "d2", "d3", "d4"}
+    assert manifest.corpus_watermark is None
+
+    sink.crash_on.clear()
+    world.source.reads.clear()
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    # Gate 2 spares everything the checkpoint recorded, at zero reads.
+    assert world.source.reads == ["d5"]
+    assert report.new_count == 1
+    assert report.unchanged_count == 4
+    assert report.checkpoints_committed == 0
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == EARLY
+
+
+def test_an_incremental_run_never_checkpoints(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _published(world, ("d1", text(3)))
+    for n in range(2, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    world.checkpoint_every = 1
+    committed = _commits(monkeypatch)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.new_count == 4
+    assert report.checkpoints_committed == 0
+    assert len(committed) == 1
+
+
+# --- F10: --limit and --force -----------------------------------------------
+
+
+def test_a_limited_first_run_publishes_the_slice_and_withholds_the_watermark(
+    world: World,
+) -> None:
+    for n in range(1, 4):
+        world.source.put(make_row(f"d{n}"), text(3))
+
+    report = world.export(limit=1)
+
+    assert report.outcome == "success"
+    assert report.limit == 1
+    assert report.new_count == 1
+    assert dict(report.skipped_reasons) == {
+        "d2": publish_service.LIMIT_REACHED,
+        "d3": publish_service.LIMIT_REACHED,
+    }
+    assert world.source.reads == ["d1"]
+    manifest = world.manifest()
+    assert manifest is not None
+    assert set(manifest.documents) == {"d1"}
+    assert manifest.corpus_watermark is None
+
+
+def test_a_limited_incremental_run_holds_the_rest_and_never_deletes_them(
+    world: World,
+) -> None:
+    before = _published(world, ("d1", text(3)), ("d2", text(3)), ("d3", text(3)))
+    _moved(world, "d1", text(5))
+    _moved(world, "d2", text(5))
+    _moved(world, "d3", is_deleted=True)
+
+    report = world.export("run-2", limit=1)
+
+    assert report.outcome == "success"
+    assert report.content_changed_count == 1
+    assert report.deleted_count == 1  # an explicit signal needs no read
+    assert dict(report.skipped_reasons) == {"d2": publish_service.LIMIT_REACHED}
+    assert world.source.reads == ["d1"]
+    assert ("delete_document", "d2", None) not in world.verbs
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d2"] == before.documents["d2"]
+    assert "d3" not in manifest.documents
+    # The other changed rows have not been read, so Gate 1 must not skip them.
+    assert manifest.corpus_watermark is None
+
+    report = world.export("run-3")
+
+    assert report.content_changed_count == 1
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == LATER
+
+
+def test_a_limit_below_one_is_refused(world: World) -> None:
+    with pytest.raises(ValueError, match="limit"):
+        world.export(limit=0)
+
+
+def test_force_is_echoed_in_the_report(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+    assert world.export(force=True).forced is True
+
+
+# --- F11: the report ----------------------------------------------------------
+
+
+def test_the_report_carries_the_run_duration(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+    report = world.export()
+    assert report.duration_seconds > 0
+    assert report.error_type is None
+
+
+def test_a_failed_run_reports_and_records_its_error_type(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+    world.source.fail_reads.add("d1")
+
+    report = world.export()
+
+    assert report.outcome == "failed"
+    assert report.error_type == "StoreError"
+    last = world.run_state.read()
+    assert last is not None
+    assert last.error_type == "StoreError"
+
+
+def test_the_sync_timestamp_is_the_run_start(world: World) -> None:
+    world.source.put(make_row("d1"), text(10))
+    report = world.export()
+    record = world.sink.store.get_bytes(  # type: ignore[attr-defined]
+        "content/agencies/agency-1/documents/d1/metadata.json"
+    )
+    assert record is not None
+    assert report.started_at.encode() in record
+    datetime.fromisoformat(report.started_at.replace("Z", "+00:00"))
+
+
+def _metadata(document_id: str) -> str:
+    return f"content/agencies/{AGENCY}/documents/{document_id}/metadata.json"
+
+
+def _store(world: World) -> InMemoryStore:
+    assert isinstance(world.sink, RecordingSink)
+    return world.sink.store
+
+
+def _upserted(world: World) -> list[str]:
+    return [document_id for verb, document_id, _ in world.verbs if verb == "upsert"]
+
+
+# --- F18: per-document outcomes ------------------------------------------------
+
+
+def test_each_unpublished_document_is_named_with_its_status(world: World) -> None:
+    """A partial failure is never one count: the report names every document
+    that did not publish and why, and only published ones move in the
+    manifest, so the two tell the same story."""
+    before = _published(world, ("d1", text(10)), ("d2", text(10)), ("d3", text(10)))
+    for document_id in ("d1", "d2", "d3"):
+        _moved(world, document_id, text(12, word="toetus"))
+    _store(world).fail_keys.add(_metadata("d1"))
+    _store(world).permanent_fail_keys.add(_metadata("d2"))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.publish_failed_count == 2
+    assert dict(report.publish_failures) == {
+        "d1": "failed_retryable",
+        "d2": "failed_permanent",
+    }
+    assert dict(report.upsert_outcomes) == {
+        "published": 1,
+        "failed_permanent": 1,
+        "failed_retryable": 1,
+        "deferred": 0,
+    }
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.documents["d1"] == before.documents["d1"]
+    assert manifest.documents["d2"] == before.documents["d2"]
+    assert manifest.documents["d3"].source_updated_at == LATER
+
+
+def test_a_run_that_held_documents_back_is_no_ground_for_a_sweep(
+    world: World,
+) -> None:
+    """The run saw every row, but d1 kept its old record and its old
+    synced_at: a sweep trusting the run would delete it as stale."""
+    _published(world, ("d1", text(10)), ("d2", text(10)))
+    _moved(world, "d1", text(12, word="toetus"))
+    _moved(world, "d2", text(12, word="toetus"))
+    _store(world).fail_keys.add(_metadata("d1"))
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.run_observed_full_corpus is True
+    assert report.documents_held_back == 1
+    with pytest.raises(IncompleteCorpusError, match="held 1 document"):
+        require_observed_full_corpus(report, operation="sweep_stale")
+
+    _store(world).fail_keys.clear()
+    report = world.export("run-3")
+
+    assert report.documents_held_back == 0
+    require_observed_full_corpus(report, operation="sweep_stale")
+
+
+def test_the_outcome_counts_reach_the_run_line(
+    world: World, caplog: pytest.LogCaptureFixture
+) -> None:
+    world.source.put(make_row("d1"), text(3))
+    world.source.put(make_row("d2"), text(3))
+    _store(world).permanent_fail_keys.add(_metadata("d2"))
+
+    with caplog.at_level("INFO", logger="exporter.services.run_log"):
+        world.export()
+
+    line = next(
+        r.message for r in caplog.records if "content-external run" in r.message
+    )
+    assert "upsert_published=1" in line
+    assert "upsert_failed_permanent=1" in line
+    assert "upsert_failed_retryable=0" in line
+    assert "full_corpus=true" in line
+
+
+# --- F19: the systemic-failure abort -------------------------------------------
+
+
+def _all_failing(world: World, count: int, *, permanent: bool) -> Manifest:
+    before = _published(world, *((f"d{n}", text(3)) for n in range(1, count + 1)))
+    for n in range(1, count + 1):
+        _moved(world, f"d{n}", text(4))
+        keys = (
+            _store(world).permanent_fail_keys if permanent else _store(world).fail_keys
+        )
+        keys.add(_metadata(f"d{n}"))
+    world.verbs.clear()
+    return before
+
+
+def test_consecutive_permanent_failures_abort_with_nothing_committed(
+    tmp_path: Path,
+) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), abort_threshold=3)
+    before = _all_failing(world, 20, permanent=True)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "SystemicSinkFailure"
+    # The worker may run up to one window ahead of the count, never further.
+    attempted = _upserted(world)
+    window = world.concurrency * publish_service._WINDOW_PER_WORKER
+    assert attempted[:3] == ["d1", "d2", "d3"]
+    assert len(attempted) <= 3 + window - 1
+    assert report.upsert_outcomes["failed_permanent"] == 3
+    assert set(report.publish_failures) == {"d1", "d2", "d3"}
+    assert report.run_observed_full_corpus is False
+    assert world.manifest() == before
+
+
+def test_permanent_failures_broken_by_a_success_do_not_abort(tmp_path: Path) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), abort_threshold=2)
+    _all_failing(world, 4, permanent=True)
+    _store(world).permanent_fail_keys -= {_metadata("d2"), _metadata("d4")}
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert dict(report.publish_failures) == {
+        "d1": "failed_permanent",
+        "d3": "failed_permanent",
+    }
+
+
+def test_retryable_failures_never_abort(tmp_path: Path) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), abort_threshold=2)
+    _all_failing(world, 4, permanent=False)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.upsert_outcomes["failed_retryable"] == 4
+
+
+def test_the_abort_threshold_must_be_positive(world: World) -> None:
+    world.abort_threshold = 0
+    with pytest.raises(ValueError, match="sink_failure_abort_threshold"):
+        world.coordinator()
+
+
+# --- F20: run_observed_full_corpus ---------------------------------------------
+
+
+def test_a_full_run_observed_the_corpus(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+
+    report = world.export()
+
+    assert report.run_observed_full_corpus is True
+    require_observed_full_corpus(report, operation="sweep_stale")
+    last = world.run_state.read()
+    assert last is not None
+    assert last.run_observed_full_corpus is True
+
+
+def test_a_limited_incremental_run_withholds_the_watermark_and_refuses_sweeps(
+    world: World,
+) -> None:
+    """Production-readiness finding 1: --limit on a run with a manifest must
+    not record the current watermark, or the next tick reports `unchanged`
+    while every other changed document stays unpublished."""
+    _published(world, ("d1", text(3)), ("d2", text(3)), ("d3", text(3)))
+    for document_id in ("d1", "d2", "d3"):
+        _moved(world, document_id, text(5))
+
+    report = world.export("run-2", limit=1)
+
+    assert report.outcome == "success"
+    assert report.run_observed_full_corpus is False
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark is None
+    for operation in ("sweep_stale", "the orphan tail sweep", "run_purge"):
+        with pytest.raises(IncompleteCorpusError, match="limited to 1"):
+            require_observed_full_corpus(report, operation=operation)
+
+    world.source.reads.clear()
+    report = world.export("run-3")
+
+    # The next full run still walks every row and publishes the rest.
+    assert report.content_changed_count == 2
+    assert sorted(world.source.reads) == ["d2", "d3"]
+    assert report.run_observed_full_corpus is True
+    manifest = world.manifest()
+    assert manifest is not None
+    assert manifest.corpus_watermark == LATER
+
+
+@pytest.mark.parametrize("outcome", ["busy", "failed"])
+def test_a_run_that_did_not_finish_never_claims_the_corpus(
+    world: World, outcome: str
+) -> None:
+    world.source.put(make_row("d1"), text(3))
+    if outcome == "failed":
+        world.source.fail_reads.add("d1")
+        report = world.export()
+    else:
+        with run_lock(world.work_dir):
+            report = world.export()
+
+    assert report.outcome == outcome
+    assert report.run_observed_full_corpus is False
+    with pytest.raises(IncompleteCorpusError):
+        require_observed_full_corpus(report, operation="sweep_stale")
+
+
+# --- F21: a first run refuses a populated destination --------------------------
+
+
+def _manifest_lost(world: World) -> None:
+    """The manifest is gone; the destination's content is not."""
+    world.manifest_client.objects.clear()
+    world.verbs.clear()
+
+
+def _marker_path(world: World) -> Path:
+    return world.work_dir / BOOTSTRAP_DIRNAME / f"{AGENCY}.inprogress"
+
+
+def test_a_fresh_first_run_probes_an_empty_destination(world: World) -> None:
+    world.source.put(make_row("d1"), text(3))
+
+    report = world.export()
+
+    assert report.outcome == "success"
+    assert report.first_run_probe == "empty"
+    assert not _marker_path(world).exists()
+    world.verbs.clear()
+    assert world.export("run-2").first_run_probe is None
+
+
+def test_a_first_run_against_a_populated_destination_fails(world: World) -> None:
+    _published(world, ("d1", text(3)), ("d2", text(3)))
+    _manifest_lost(world)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "NonEmptyDestination"
+    assert report.first_run_probe == "populated"
+    assert world.verbs == []
+    assert world.manifest() is None
+
+
+def test_a_stale_marker_never_outlives_the_manifest(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The marker's clear after the first commit fails, so the marker is
+    left behind. The next run that finds a manifest must remove it, or a
+    manifest lost later would meet a marker vouching for content it never
+    saw, and a cold start would pass the probe."""
+    real_clear = BootstrapMarker.clear
+    failing = {"on": True}
+
+    def clear(marker: BootstrapMarker) -> None:
+        if failing["on"]:
+            raise PermissionError("InjectedFailure")
+        real_clear(marker)
+
+    monkeypatch.setattr(BootstrapMarker, "clear", clear)
+    world.source.put(make_row("d1"), text(3))
+    assert world.export("run-1").outcome == "success"  # the commit stands
+    assert _marker_path(world).exists()
+
+    failing["on"] = False
+    # Nothing moved, so Gate 1 skips — but only after the marker is cleared.
+    assert world.export("run-2").outcome == "unchanged"
+    assert not _marker_path(world).exists()
+
+    _manifest_lost(world)
+    report = world.export("run-3")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "NonEmptyDestination"
+
+
+def test_a_marker_that_cannot_be_removed_fails_an_incremental_run(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Fail-closed: surviving silently is the one thing a marker beside a
+    manifest must not do."""
+    _published(world, ("d1", text(3)))
+
+    def clear(_marker: BootstrapMarker) -> None:
+        raise PermissionError("InjectedFailure")
+
+    monkeypatch.setattr(BootstrapMarker, "clear", clear)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "PermissionError"
+    assert world.verbs == []
+
+
+def test_a_first_run_checkpoint_retires_the_marker(tmp_path: Path) -> None:
+    """Once a checkpoint records the published documents, the content is a
+    manifest's to vouch for, not the marker's."""
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink, checkpoint_every=2)
+    for n in range(1, 6):
+        world.source.put(make_row(f"d{n}"), text(3))
+    sink.crash_on.add("d5")
+
+    report = world.export("run-1")
+
+    assert report.outcome == "failed"
+    assert report.checkpoints_committed == 2
+    assert world.manifest() is not None
+    assert not _marker_path(world).exists()
+
+
+def test_a_bootstrap_killed_before_its_first_checkpoint_resumes(tmp_path: Path) -> None:
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink)
+    for n in range(1, 4):
+        world.source.put(make_row(f"d{n}"), text(3))
+    sink.crash_on.add("d3")
+
+    assert world.export("run-1").outcome == "failed"
+    assert world.manifest() is None
+    assert _marker_path(world).exists()
+
+    sink.crash_on.clear()
+    report = world.export("run-2")
+
+    assert report.outcome == "success"
+    assert report.first_run_probe == "resumed"
+    assert report.new_count == 3
+    assert not _marker_path(world).exists()
+
+
+def test_a_lost_marker_does_not_vouch_for_the_content(tmp_path: Path) -> None:
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink)
+    for n in range(1, 4):
+        world.source.put(make_row(f"d{n}"), text(3))
+    sink.crash_on.add("d3")
+    assert world.export("run-1").outcome == "failed"
+    _marker_path(world).unlink()
+    sink.crash_on.clear()
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "NonEmptyDestination"
+
+
+def test_the_override_publishes_into_a_populated_destination(world: World) -> None:
+    _published(world, ("d1", text(3)), ("d2", text(3)))
+    _manifest_lost(world)
+
+    report = world.export("run-2", accept_existing_content=True)
+
+    assert report.outcome == "success"
+    assert report.first_run_probe == "overridden"
+    assert report.accepted_existing_content is True
+    assert report.new_count == 2
+
+
+def test_a_failed_override_leaves_no_marker_to_vouch_for_foreign_content(
+    tmp_path: Path,
+) -> None:
+    """After --accept-existing-content the destination holds content that is
+    not all this service's own. A marker left by a run that then failed
+    would let every later first run skip the probe without the override."""
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink)
+    _published(world, ("d1", text(3)), ("d2", text(3)))
+    _manifest_lost(world)
+    sink.crash_on.add("d2")
+
+    report = world.export("run-2", accept_existing_content=True)
+
+    assert report.outcome == "failed"
+    assert not _marker_path(world).exists()
+    sink.crash_on.clear()
+    report = world.export("run-3")
+    assert report.error_type == "NonEmptyDestination"
+
+
+def test_a_read_back_sink_is_probed_through_its_rows(tmp_path: Path) -> None:
+    sink = LoggingSink(capabilities=replace(FULL_SINK_CAPABILITIES, can_list=False))
+    world = World(tmp_path=tmp_path, sink=sink)
+    _published(world, ("d1", text(3)))
+    _manifest_lost(world)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "NonEmptyDestination"
+
+
+def test_a_sink_that_cannot_look_reports_the_probe_unverifiable(
+    tmp_path: Path,
+) -> None:
+    sink = LoggingSink(
+        capabilities=replace(
+            FULL_SINK_CAPABILITIES, can_list=False, can_read_back=False
+        )
+    )
+    world = World(tmp_path=tmp_path, sink=sink)
+    world.source.put(make_row("d1"), text(3))
+
+    report = world.export()
+
+    assert report.outcome == "success"
+    assert report.first_run_probe == "unverifiable"
+
+
+# --- F16: bounded concurrency ----------------------------------------------------
+
+
+class _SlowSink(LoggingSink):
+    """Earlier documents take longer, so concurrent workers finish out of
+    row order — which the coordinator must not let show in the result."""
+
+    def _upsert_document(
+        self, record: DocumentRecord, chunks: tuple[Chunk, ...] | None
+    ) -> UpsertOutcome:
+        time.sleep(0.02 / int(record.document_id.removeprefix("d")))
+        return super()._upsert_document(record, chunks)
+
+
+def _corpus_run(tmp_path: Path, concurrency: int) -> tuple[World, list[RunReport]]:
+    world = World(
+        tmp_path=tmp_path, sink=_SlowSink(), concurrency=concurrency, checkpoint_every=3
+    )
+    for n in range(1, 9):
+        world.source.put(make_row(f"d{n}"), text(4 + 3 * n))
+    reports = [world.export("run-1")]
+    _moved(world, "d1", text(3))  # shrinks: a tail delete
+    _moved(world, "d2", text(30))  # grows
+    _moved(world, "d3", is_deleted=True)
+    _store(world).permanent_fail_keys.add(_metadata("d4"))
+    _moved(world, "d4", text(9))
+    reports.append(world.export("run-2"))
+    return world, reports
+
+
+def _without_wall_clock(store: InMemoryStore) -> dict[str, bytes]:
+    """Every object's bytes, except the deletion journal's `recorded_at`:
+    the journal stamps lines with the wall clock rather than the run's
+    injected one, so two runs a second apart differ there and nowhere else."""
+    objects: dict[str, bytes] = {}
+    for key, stored in store.objects.items():
+        payload = stored.payload
+        if key.endswith(".jsonl"):
+            lines = [json.loads(line) for line in payload.decode().splitlines()]
+            for line in lines:
+                line.pop("recorded_at", None)
+            payload = json.dumps(lines, sort_keys=True).encode()
+        objects[key] = payload
+    return objects
+
+
+def test_a_concurrent_run_is_byte_identical_to_a_sequential_one(
+    tmp_path: Path,
+) -> None:
+    sequential, one = _corpus_run(tmp_path / "one", 1)
+    concurrent, four = _corpus_run(tmp_path / "four", 4)
+
+    assert [replace(r, duration_seconds=0) for r in one] == [
+        replace(r, duration_seconds=0) for r in four
+    ]
+    assert _without_wall_clock(sequential.manifest_client) == _without_wall_clock(
+        concurrent.manifest_client
+    )
+    assert {k: v.payload for k, v in _store(sequential).objects.items()} == {
+        k: v.payload for k, v in _store(concurrent).objects.items()
+    }
+    assert four[0].checkpoints_committed == 2
+
+
+def test_a_worker_failure_commits_nothing_and_leaves_no_thread(tmp_path: Path) -> None:
+    sink = _CrashingSink()
+    world = World(tmp_path=tmp_path, sink=sink, concurrency=4)
+    before = _published(world, *((f"d{n}", text(3)) for n in range(1, 9)))
+    for n in range(1, 9):
+        _moved(world, f"d{n}", text(5))
+    sink.crash_on.add("d3")
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert world.manifest() == before
+    assert not [t for t in threading.enumerate() if t.name.startswith("content-export")]
+
+
+def test_concurrency_is_capped_by_the_sink(tmp_path: Path) -> None:
+    sink = LoggingSink(capabilities=replace(FULL_SINK_CAPABILITIES, max_concurrency=2))
+    world = World(tmp_path=tmp_path, sink=sink, concurrency=8)
+
+    assert world.coordinator().concurrency == 2
+
+
+def test_a_limited_concurrent_run_reads_exactly_its_limit(tmp_path: Path) -> None:
+    world = World(tmp_path=tmp_path, sink=LoggingSink(), concurrency=4)
+    for n in range(1, 7):
+        world.source.put(make_row(f"d{n}"), text(3))
+
+    report = world.export(limit=2)
+
+    assert report.new_count == 2
+    assert sorted(world.source.reads) == ["d1", "d2"]
+
+
+def test_the_abort_holds_under_concurrency(tmp_path: Path) -> None:
+    world = World(
+        tmp_path=tmp_path, sink=LoggingSink(), concurrency=4, abort_threshold=3
+    )
+    before = _all_failing(world, 40, permanent=True)
+
+    report = world.export("run-2")
+
+    assert report.outcome == "failed"
+    assert report.error_type == "SystemicSinkFailure"
+    # At most the rows already submitted when it tripped; nothing after.
+    window = world.concurrency * publish_service._WINDOW_PER_WORKER
+    assert len(_upserted(world)) <= 3 + window - 1
+    assert world.manifest() == before
+
+
+def test_one_slow_document_does_not_idle_the_other_workers(tmp_path: Path) -> None:
+    """Head-of-line blocking: results are applied in row order, so with a
+    window no wider than the pool, a slow first document would hold every
+    finished slot behind it and no further row would be submitted. Here d1
+    waits until four later documents have published, which only happens if
+    the window lets them through."""
+    released = threading.Event()
+    published_others: list[str] = []
+
+    class _HeadBlockingSink(LoggingSink):
+        def _upsert_document(
+            self, record: DocumentRecord, chunks: tuple[Chunk, ...] | None
+        ) -> UpsertOutcome:
+            if record.document_id == "d1":
+                released.wait(timeout=5)
+            else:
+                published_others.append(record.document_id)
+                if len(published_others) >= 4:
+                    released.set()
+            return super()._upsert_document(record, chunks)
+
+    world = World(tmp_path=tmp_path, sink=_HeadBlockingSink(), concurrency=2)
+    for n in range(1, 9):
+        world.source.put(make_row(f"d{n}"), text(3))
+
+    report = world.export()
+
+    assert released.is_set()
+    assert report.outcome == "success"
+    assert report.new_count == 8
+
+
+def test_an_interrupt_mid_run_commits_nothing_and_leaves_no_thread(
+    tmp_path: Path,
+) -> None:
+    """A BaseException from a worker (Ctrl-C reaching it, SystemExit) is not
+    turned into a `failed` report: it escapes, but only after the pool has
+    shut down, with nothing committed and the run lock released."""
+
+    class _InterruptingSink(LoggingSink):
+        def _upsert_document(
+            self, record: DocumentRecord, chunks: tuple[Chunk, ...] | None
+        ) -> UpsertOutcome:
+            if record.document_id == "d3":
+                raise KeyboardInterrupt
+            return super()._upsert_document(record, chunks)
+
+    world = World(tmp_path=tmp_path, sink=_InterruptingSink(), concurrency=4)
+    for n in range(1, 9):
+        world.source.put(make_row(f"d{n}"), text(3))
+
+    with pytest.raises(KeyboardInterrupt):
+        world.export()
+
+    assert world.manifest() is None
+    assert not [t for t in threading.enumerate() if t.name.startswith("content-export")]
+    with run_lock(world.work_dir) as acquired:
+        assert acquired is True

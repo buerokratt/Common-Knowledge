@@ -48,6 +48,10 @@ The scheduler manages these recurring tasks (configured in `DSL/CronManager/sche
    - URL: `[CKB_RUUTER_INTERNAL]/pipeline/zip`
    - Purpose: Archives and compresses processed data
 
+4. **Content Export** (ships disabled; hourly at :17 once enabled):
+   - URL: `[CKB_RUUTER_INTERNAL]/pipeline/content-export`
+   - Purpose: Starts the content-external export; see `content-external/README.md`
+
 ## API Endpoints
 
 ### POST /render_next_run
@@ -150,7 +154,7 @@ The scheduler service integrates with:
 ## Configuration
 
 Scheduled tasks are defined in `DSL/CronManager/scheduler.yml` with:
-- **Trigger**: Cron expression for execution timing
+- **Trigger**: Cron expression for execution timing, or `"false"`, which registers the job but never schedules it
 - **Type**: `exec` — runs a shell script
 - **Command**: one script per job in `DSL/CronManagerScripts/` (e.g. `trigger_zipping.sh`), which sources `constants.ini` and calls `$CKB_RUUTER_INTERNAL/<path>`
 
