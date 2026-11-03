@@ -12,6 +12,7 @@ cleaning = [
     "unstructured[docx,doc,pptx,md]==0.18.5",
     "pydantic-settings==2.10.1",
     "beautifulsoup4==4.13.4",
+    "html5lib==1.1",
     "langdetect==1.0.9",
     "trafilatura==2.0.0",
     "markdownify==0.14.1",
