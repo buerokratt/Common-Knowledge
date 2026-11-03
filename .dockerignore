@@ -61,6 +61,3 @@ migrate.sh
 # Tests run separately via pytest, not via Docker
 tests
 pytest.ini
-
-# Local-only measurement script, never shipped (content-external/RUNBOOK.md)
-content-external/scripts
