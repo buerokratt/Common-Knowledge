@@ -7,6 +7,7 @@ import pytest
 
 from exporter.services.deletion_journal import (
     JOURNAL_DIRNAME,
+    ORPHAN_TAIL_REASON,
     TAIL_REASON,
     DeletionJournal,
     agency_journals,
@@ -251,3 +252,95 @@ def test_only_a_closed_journal_needs_a_mirror_until_it_has_one(
     # Closed again by a later run: the copy is stale, so mirror again.
     journal.close(closed_by="run-2")
     assert journal.needs_mirror()
+
+
+# --- the pending fold the drain reads (J1) -----------------------------------
+
+
+def test_an_intent_with_no_outcome_is_pending(tmp_path: Path) -> None:
+    """A run killed between the intent and the sink's answer."""
+    journal = _journal(tmp_path)
+    journal.intend_document_deletes({"d1": "is_deleted"})
+
+    assert journal.pending_document_deletes() == {"d1": "is_deleted"}
+
+
+def test_an_unresolved_outcome_is_pending_and_a_resolved_one_is_not(
+    tmp_path: Path,
+) -> None:
+    journal = _journal(tmp_path)
+    journal.intend_document_deletes({"d1": "is_deleted", "d2": "is_excluded"})
+    journal.document_deletes_done(
+        DeleteOutcome(deleted=("d1",), failed={"d2": "InjectedFailure"})
+    )
+
+    assert journal.pending_document_deletes() == {"d2": "is_excluded"}
+
+
+def test_the_latest_line_wins(tmp_path: Path) -> None:
+    """A drain appends to the journal it drains; what it resolved is no longer
+    pending, and what it intended and never answered is."""
+    journal = _journal(tmp_path)
+    journal.intend_document_deletes({"d1": "is_deleted", "d2": "is_deleted"})
+    journal.document_deletes_done(DeleteOutcome(deferred=("d1", "d2")))
+    journal.intend_document_deletes({"d1": "is_deleted"}, drained_by="drain-1")
+    journal.document_deletes_done(DeleteOutcome(missing=("d1",)), drained_by="drain-1")
+    journal.intend_document_deletes({"d2": "is_deleted"}, drained_by="drain-2")
+
+    assert journal.pending_document_deletes() == {"d2": "is_deleted"}
+    drained = [e["drained_by"] for e in journal.entries() if "drained_by" in e]
+    assert drained == ["drain-1", "drain-1", "drain-2"]
+
+
+def test_pending_ignores_another_agency_and_closed_lines(tmp_path: Path) -> None:
+    journal = _journal(tmp_path)
+    journal.intend_document_deletes({"d1": "is_deleted"})
+    journal.close(closed_by=RUN_ID)
+    other = DeletionJournal(tmp_path, run_id=RUN_ID, agency_id="agency-2")
+    other.intend_document_deletes({"x1": "is_deleted"})
+
+    assert journal.pending_document_deletes() == {"d1": "is_deleted"}
+    assert other.pending_document_deletes() == {"x1": "is_deleted"}
+
+
+def test_a_torn_line_in_the_middle_does_not_hide_what_follows(
+    tmp_path: Path,
+) -> None:
+    journal = _journal(tmp_path)
+    journal.intend_document_deletes({"d1": "is_deleted"})
+    with journal.path.open("ab") as handle:
+        handle.write(b'{"event": "outc')  # a crash cut this short
+    journal.intend_document_deletes({"d2": "is_deleted"})
+
+    assert journal.pending_document_deletes() == {
+        "d1": "is_deleted",
+        "d2": "is_deleted",
+    }
+
+
+def test_pending_tails_are_counted_per_document(tmp_path: Path) -> None:
+    journal = _journal(tmp_path)
+    journal.intend_chunk_delete("d1", [5, 6, 7])
+    journal.chunk_delete_done("d1", DeleteOutcome(deleted=(5, 6), failed={7: "x"}))
+    journal.intend_chunk_delete("d2", [3])
+    journal.chunk_delete_done("d2", DeleteOutcome(missing=(3,)))
+
+    assert journal.pending_chunk_entries() == 1
+
+
+def test_pending_tails_are_counted_by_the_reason_they_were_intended(
+    tmp_path: Path,
+) -> None:
+    """The export's own tails and reconcile's orphan tails are retried by
+    different things, so they are counted apart."""
+    journal = _journal(tmp_path)
+    journal.intend_chunk_delete("d1", [5])
+    journal.chunk_delete_done("d1", DeleteOutcome(failed={5: "x"}))
+    journal.intend_chunk_delete("d2", [9], reason=ORPHAN_TAIL_REASON)
+    journal.chunk_delete_done("d2", DeleteOutcome(failed={9: "x"}))
+    journal.intend_chunk_delete("d3", [4], reason=ORPHAN_TAIL_REASON)
+    journal.chunk_delete_done("d3", DeleteOutcome(deleted=(4,)))
+
+    assert journal.pending_chunk_entries() == 1
+    assert journal.pending_chunk_entries(reason=TAIL_REASON) == 1
+    assert journal.pending_chunk_entries(reason=ORPHAN_TAIL_REASON) == 1

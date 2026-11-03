@@ -1,4 +1,5 @@
-"""F9 — POST /export_agency_async and POST /drain_deletions.
+"""F9 — POST /export_agency_async; J1/J4 — POST /drain_deletions and POST
+/reconcile_async.
 
 `multiprocessing.Process` is replaced by a recorder: these tests assert what
 the endpoint starts, not what the child does (tests/test_exporter_worker.py
@@ -15,7 +16,12 @@ from fastapi.testclient import TestClient
 from exporter.api.app import _PROCESS_CONTEXT, app
 from exporter.api.config import Settings
 from exporter.services.run_state import RunStateStore
-from exporter.worker.tasks import ExportTask, run_export_process
+from exporter.worker.tasks import (
+    ExportTask,
+    OperationTask,
+    run_export_process,
+    run_operation_process,
+)
 
 
 class _RecordedProcess:
@@ -51,7 +57,7 @@ def processes(
     monkeypatch.setattr(_PROCESS_CONTEXT, "Process", _RecordedProcess)
     # app is a module-level singleton, so a child one test started would
     # otherwise still be "running" in the next.
-    monkeypatch.setattr(app.state, "export_process", None, raising=False)
+    monkeypatch.setattr(app.state, "child_process", None, raising=False)
     _RecordedProcess.started = []
     return _RecordedProcess.started
 
@@ -185,12 +191,120 @@ def test_what_the_child_is_given_survives_pickling(
     assert args == process.args
 
 
-def test_drain_deletions_is_not_built_yet(processes: list[_RecordedProcess]) -> None:
+def test_a_drain_starts_one_process_and_is_dry_by_default(
+    processes: list[_RecordedProcess],
+) -> None:
+    """J2: with DRAIN_DELETES_ENABLED unset, the scheduled drain only
+    reports what it would retry."""
     with TestClient(app) as client:
-        response = client.post("/drain_deletions")
+        response = client.post(
+            "/drain_deletions", json={"agency_base_id": "agency-1", "run_id": "d-1"}
+        )
 
-    assert response.status_code == 501
-    assert "J1" in response.json()["detail"]
+    assert response.status_code == 200
+    assert response.json() == {
+        "status": "started",
+        "operation": "drain",
+        "agency_base_id": "agency-1",
+        "run_id": "d-1",
+    }
+    assert len(processes) == 1
+    assert processes[0].target is run_operation_process
+    task = processes[0].args[0]
+    assert task == OperationTask(
+        operation="drain", agency_id="agency-1", run_id="d-1", dry_run=True
+    )
+
+
+@pytest.mark.parametrize(("asked_dry", "expected_dry"), [(False, False), (True, True)])
+def test_an_enabled_drain_deletes_unless_the_body_asks_for_a_dry_run(
+    processes: list[_RecordedProcess],
+    monkeypatch: pytest.MonkeyPatch,
+    asked_dry: bool,
+    expected_dry: bool,
+) -> None:
+    """The body can make a drain less destructive, never more."""
+    monkeypatch.setenv("DRAIN_DELETES_ENABLED", "true")
+    with TestClient(app) as client:
+        client.post(
+            "/drain_deletions",
+            json={"agency_base_id": "agency-1", "dry_run": asked_dry},
+        )
+
+    assert processes[0].args[0].dry_run is expected_dry
+
+
+@pytest.mark.parametrize(("enabled", "repair"), [("false", False), ("true", True)])
+def test_reconcile_repairs_only_when_the_deployment_says_so(
+    processes: list[_RecordedProcess],
+    monkeypatch: pytest.MonkeyPatch,
+    enabled: str,
+    repair: bool,
+) -> None:
+    """J5's repair is RECONCILE_REPAIR_ENABLED's alone; a `repair` in the body
+    is ignored."""
+    monkeypatch.setenv("RECONCILE_REPAIR_ENABLED", enabled)
+    with TestClient(app) as client:
+        response = client.post(
+            "/reconcile_async", json={"agency_base_id": "agency-1", "repair": True}
+        )
+
+    assert response.json()["operation"] == "reconcile"
+    assert processes[0].target is run_operation_process
+    task = processes[0].args[0]
+    assert (task.operation, task.repair) == ("reconcile", repair)
+
+
+def test_an_operation_while_an_export_runs_starts_nothing_and_is_busy(
+    processes: list[_RecordedProcess], tmp_path: Path
+) -> None:
+    """One live child of any kind: they all take the same run lock. The busy
+    is recorded as the drain's, and the export's record is untouched."""
+    with TestClient(app) as client:
+        client.post("/export_agency_async", json={"agency_base_id": "a-1"})
+        response = client.post(
+            "/drain_deletions", json={"agency_base_id": "a-1", "run_id": "d-2"}
+        )
+        health = client.get("/health").json()
+
+    assert response.json()["status"] == "busy"
+    assert len(processes) == 1
+    assert health["last_drain"]["outcome"] == "busy"
+    assert health["last_drain"]["run_id"] == "d-2"
+    assert health["last_reconcile"] is None
+    assert RunStateStore(tmp_path / "work").read() is None
+
+
+def test_an_export_while_a_drain_runs_is_busy(
+    processes: list[_RecordedProcess],
+) -> None:
+    with TestClient(app) as client:
+        client.post("/drain_deletions", json={"agency_base_id": "a-1"})
+        response = client.post("/export_agency_async", json={"agency_base_id": "a-1"})
+
+    assert response.json()["status"] == "busy"
+    assert len(processes) == 1
+
+
+@pytest.mark.parametrize("path", ["/drain_deletions", "/reconcile_async"])
+def test_an_operation_id_that_would_escape_its_folder_is_refused(
+    processes: list[_RecordedProcess], path: str
+) -> None:
+    with TestClient(app) as client:
+        response = client.post(path, json={"agency_base_id": "a/b"})
+
+    assert response.status_code == 422
+    assert processes == []
+
+
+def test_there_is_no_purge_route(processes: list[_RecordedProcess]) -> None:
+    """J8: a purge is an operator's act at the CLI. An endpoint is something
+    a schedule can call, so none exists."""
+    paths = {getattr(route, "path", "") for route in app.routes}
+    assert not any("purge" in path for path in paths)
+    with TestClient(app) as client:
+        response = client.post("/purge", json={"agency_base_id": "a-1"})
+    assert response.status_code == 404
     assert processes == []
 
 

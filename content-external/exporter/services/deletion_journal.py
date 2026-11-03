@@ -42,7 +42,18 @@ since). Without that check, a drain that runs after a later export deletes live
 content — the sequential form of flagged risk 8, which the run lock alone does
 not prevent. Tail (`chunks`) entries are informational besides: diff.record()
 keeps a document whose tail was not confirmed on its previous entry, so the
-next export recomputes and retries that tail by itself.
+next export recomputes and retries that tail by itself. Reconcile's repair
+(J5) journals its tails with ORPHAN_TAIL_REASON instead: those ordinals were
+never counted by any manifest, so no export retries them, and the next
+`reconcile --repair` finds them in its listing again.
+
+AS BUILT (services/drain_service.py). `pending_document_deletes()` is the
+fold above, latest line wins. The drain acts only on closed journals — an
+unclosed one's documents are still in the committed manifest, and the next
+export settles them — and appends its own intent and outcome lines to the
+journal it drains, each marked `drained_by`, so a later drain sees what it
+did. The journal's length then differs from its mirror and the drain mirrors
+it again.
 
 MIRRORED. `{run_id}.mirrored` beside a journal holds the byte length last
 copied to the manifest store. A closed journal whose length differs — never
@@ -69,6 +80,7 @@ from exporter.stores.base import DeleteOutcome
 __all__ = [
     "CLOSED_EVENT",
     "JOURNAL_DIRNAME",
+    "ORPHAN_TAIL_REASON",
     "TAIL_REASON",
     "DeletionJournal",
     "DeletionKind",
@@ -83,11 +95,18 @@ JOURNAL_DIRNAME = "_deferred"
 # has (C16).
 TAIL_REASON = "tail"
 
+# The reason on reconcile's repair (J5): ordinals past both the manifest's
+# count and the destination record's, which no manifest ever counted. Kept
+# apart from TAIL_REASON because the export retries its own tails and never
+# these.
+ORPHAN_TAIL_REASON = "orphan_tail"
+
 # The line a committed run appends once the manifest has caught up with a
 # journal; see CLOSED in the module docstring.
 CLOSED_EVENT = "closed"
 
 _INTENT_EVENT = "intent"
+_OUTCOME_EVENT = "outcome"
 _JOURNAL_SUFFIX = ".jsonl"
 _MIRRORED_SUFFIX = ".mirrored"
 
@@ -196,39 +215,57 @@ class DeletionJournal:
 
     # -- documents ---------------------------------------------------------
 
-    def intend_document_deletes(self, reasons: Mapping[str, str]) -> None:
+    def intend_document_deletes(
+        self, reasons: Mapping[str, str], *, drained_by: str | None = None
+    ) -> None:
         """Journal whole-document deletes, keyed document_id -> reason, before
-        the sink is called. One fsync for the batch."""
+        the sink is called. One fsync for the batch. `drained_by` names the
+        drain run appending to this (another run's) journal."""
+        extra = _drained(drained_by)
         self._append(
-            self._line(_INTENT_EVENT, DeletionKind.DOCUMENT, document_id, reason=reason)
+            self._line(
+                _INTENT_EVENT,
+                DeletionKind.DOCUMENT,
+                document_id,
+                reason=reason,
+                **extra,
+            )
             for document_id, reason in reasons.items()
         )
         self._intents += len(reasons)
 
-    def document_deletes_done(self, outcome: DeleteOutcome[str]) -> None:
+    def document_deletes_done(
+        self, outcome: DeleteOutcome[str], *, drained_by: str | None = None
+    ) -> None:
         """Journal what the sink did with each document, one line each."""
+        extra = _drained(drained_by)
         items = (*outcome.succeeded, *outcome.unresolved)
         self._append(
             self._line(
-                "outcome",
+                _OUTCOME_EVENT,
                 DeletionKind.DOCUMENT,
                 document_id,
                 **_resolution(outcome, only=document_id),
+                **extra,
             )
             for document_id in items
         )
 
     # -- chunk tails -------------------------------------------------------
 
-    def intend_chunk_delete(self, document_id: str, ordinals: Sequence[int]) -> None:
-        """Journal a tail delete before the sink is called."""
+    def intend_chunk_delete(
+        self, document_id: str, ordinals: Sequence[int], *, reason: str = TAIL_REASON
+    ) -> None:
+        """Journal a tail delete before the sink is called. `reason` is
+        TAIL_REASON for the export's own tails, ORPHAN_TAIL_REASON for
+        reconcile's repair."""
         self._append(
             [
                 self._line(
                     _INTENT_EVENT,
                     DeletionKind.CHUNKS,
                     document_id,
-                    reason=TAIL_REASON,
+                    reason=reason,
                     ordinals=sorted(ordinals),
                 )
             ]
@@ -240,10 +277,67 @@ class DeletionJournal:
         self._append(
             [
                 self._line(
-                    "outcome", DeletionKind.CHUNKS, document_id, **_resolution(outcome)
+                    _OUTCOME_EVENT,
+                    DeletionKind.CHUNKS,
+                    document_id,
+                    **_resolution(outcome),
                 )
             ]
         )
+
+    # -- pending work (the drain, J1) --------------------------------------
+
+    def pending_document_deletes(self) -> dict[str, str]:
+        """Every whole-document delete of this agency's not yet known to have
+        landed, document_id -> the reason it was intended. Lines are folded in
+        the order written and the latest wins: a trailing intent, or an
+        outcome naming the document unresolved, is pending; an outcome naming
+        it resolved is done. Whether the journal is closed does not matter."""
+        reasons: dict[str, str] = {}
+        pending: dict[str, str] = {}
+        for entry in self._agency_lines(DeletionKind.DOCUMENT):
+            document_id = str(entry["document_id"])
+            if entry.get("event") == _INTENT_EVENT:
+                reasons[document_id] = str(entry.get("reason", ""))
+                pending[document_id] = reasons[document_id]
+            elif entry.get("event") == _OUTCOME_EVENT:
+                if document_id in _unresolved_items(entry):
+                    pending[document_id] = reasons.get(document_id, "")
+                elif document_id in entry.get("resolved", ()):
+                    pending.pop(document_id, None)
+        return pending
+
+    def pending_chunk_entries(self, *, reason: str = TAIL_REASON) -> int:
+        """Documents with a tail delete of this agency's, intended with
+        `reason`, not known to have landed. Counted, never acted on: see THE
+        CONTRACT FOR THE DRAIN. An intent written before reasons were told
+        apart reads as TAIL_REASON, which is the only one that existed."""
+        pending: dict[str, set[int]] = {}
+        reasons: dict[str, str] = {}
+        for entry in self._agency_lines(DeletionKind.CHUNKS):
+            document_id = str(entry["document_id"])
+            if entry.get("event") == _INTENT_EVENT:
+                pending[document_id] = {int(o) for o in entry.get("ordinals", ())}
+                reasons[document_id] = str(entry.get("reason", TAIL_REASON))
+            elif entry.get("event") == _OUTCOME_EVENT:
+                left = pending.get(document_id, set())
+                left -= {int(o) for o in entry.get("resolved", ())}
+                left |= {int(o) for o in _unresolved_items(entry)}
+                pending[document_id] = left
+        return sum(
+            1
+            for document_id, ordinals in pending.items()
+            if ordinals and reasons.get(document_id, TAIL_REASON) == reason
+        )
+
+    def _agency_lines(self, kind: DeletionKind) -> list[dict[str, Any]]:
+        return [
+            entry
+            for entry in self.entries()
+            if entry.get("agency_id") == self._agency_id
+            and entry.get("kind") == kind.value
+            and "document_id" in entry
+        ]
 
     # -- reading -----------------------------------------------------------
 
@@ -349,6 +443,22 @@ def _fsync_directory(directory: Path) -> None:
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _drained(drained_by: str | None) -> dict[str, object]:
+    """The field a drain adds to the lines it appends; none otherwise, so an
+    export's journal reads exactly as it did before the drain existed."""
+    return {} if drained_by is None else {"drained_by": drained_by}
+
+
+def _unresolved_items(entry: Mapping[str, Any]) -> list[Any]:
+    """The items an outcome line left unresolved, tolerating a malformed
+    list: a line this service did not write is skipped, not trusted."""
+    return [
+        unresolved["item"]
+        for unresolved in entry.get("unresolved", ())
+        if isinstance(unresolved, Mapping) and "item" in unresolved
+    ]
 
 
 def _resolution[T: Hashable](

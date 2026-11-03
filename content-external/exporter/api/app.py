@@ -9,9 +9,14 @@ POST /export_agency_async is the production surface (F9): G1's cron step
 calls it, and it starts the export in its own process and returns at once,
 as cleaning/api/app.py's /clean_source_async does — but with a spawned
 process and at most one live export child; see the handler. The CLI
-(python -m exporter.run_sync) is an operations tool beside it. POST
-/drain_deletions is Stage J's (J1) and answers 501 until then, so the route
-G1 and J3 will call already exists.
+(python -m exporter.run_sync) is an operations tool beside it.
+
+POST /drain_deletions (J1) and POST /reconcile_async (J4) start Stage J's
+deletion operations the same way, sharing the one-live-child bound with the
+export. Both default to their non-destructive form — a dry drain, a
+report-only reconcile — until DRAIN_DELETES_ENABLED / RECONCILE_REPAIR_ENABLED
+say otherwise. A purge has no route at all (J8); it is
+`python -m exporter.run_ops purge`, an operator's act.
 """
 
 import multiprocessing
@@ -23,7 +28,7 @@ from multiprocessing.process import BaseProcess
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi import Depends, FastAPI, Request
 
 from exporter.api.config import (
     ConfigurationError,
@@ -34,22 +39,34 @@ from exporter.api.config import (
     log_redacted_config,
 )
 from exporter.api.models import (
+    DrainRequest,
     ExportRequest,
     ExportStarted,
     HealthResponse,
     LastRunSummary,
+    OperationRequest,
+    OperationStarted,
 )
 from exporter.services.agency_guard import (
     MultipleAgenciesError,
     check_single_agency_at_startup,
 )
+from exporter.services.operations import (
+    AnyReport,
+    DrainReport,
+    OperationStateStore,
+    ReconcileReport,
+    log_operation_outcome,
+)
 from exporter.services.run_log import log_run_outcome
-from exporter.services.run_state import RunStateStore
+from exporter.services.run_state import RunStateStore, utc_now_iso
 from exporter.worker.tasks import (
     ExportTask,
+    OperationTask,
     configure_logging,
     new_run_id,
     run_export_process,
+    run_operation_process,
 )
 
 
@@ -154,6 +171,17 @@ def export_agency_async(
         return _start_export(request, task, settings, work_dir, run_state)
 
 
+def _child_running(request: Request) -> bool:
+    """Whether the child this process last started — an export, a drain or a
+    reconcile — is still alive. One live child at a time, of any kind: they
+    all take the same run lock, so a second could only report `busy`."""
+    # Reaps finished children, which would otherwise linger as zombies
+    # between hourly ticks.
+    multiprocessing.active_children()
+    running: BaseProcess | None = getattr(request.app.state, "child_process", None)
+    return running is not None and running.is_alive()
+
+
 def _start_export(
     request: Request,
     task: ExportTask,
@@ -161,11 +189,7 @@ def _start_export(
     work_dir: Path,
     run_state: RunStateStore,
 ) -> ExportStarted:
-    # Reaps finished children, which would otherwise linger as zombies
-    # between hourly ticks.
-    multiprocessing.active_children()
-    running: BaseProcess | None = getattr(request.app.state, "export_process", None)
-    if running is not None and running.is_alive():
+    if _child_running(request):
         log_run_outcome(
             outcome="busy",
             run_id=task.run_id,
@@ -187,20 +211,105 @@ def _start_export(
         target=run_export_process, args=(task, settings, work_dir)
     )
     process.start()
-    request.app.state.export_process = process
+    request.app.state.child_process = process
     return ExportStarted(
         status="started", agency_base_id=task.agency_id, run_id=task.run_id
     )
 
 
 @app.post("/drain_deletions")
-def drain_deletions() -> None:
-    """Stage J (J1). The route exists so its caller's contract is stable;
-    until the drain is built it refuses rather than reporting a drain that
-    did not happen."""
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail="drain_deletions is Stage J (J1); not built yet",
+def drain_deletions(
+    request: Request,
+    body: DrainRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    work_dir: Annotated[Path, Depends(get_work_dir)],
+) -> OperationStarted:
+    """Start one drain (J1) in its own process and return immediately.
+
+    Dry unless DRAIN_DELETES_ENABLED is set (J2): the body can ask for a dry
+    run, never for a real one the deployment has not enabled. The schedule
+    that calls this (J3) lands with Stage G's export cron."""
+    task = OperationTask(
+        operation="drain",
+        agency_id=body.agency_base_id,
+        run_id=body.run_id or new_run_id(),
+        dry_run=body.dry_run or not settings.drain_deletes_enabled,
+    )
+    with _START_LOCK:
+        return _start_operation(request, task, settings, work_dir)
+
+
+@app.post("/reconcile_async")
+def reconcile_async(
+    request: Request,
+    body: OperationRequest,
+    settings: Annotated[Settings, Depends(get_settings)],
+    work_dir: Annotated[Path, Depends(get_work_dir)],
+) -> OperationStarted:
+    """Start one reconcile (J4) in its own process and return immediately.
+
+    Repairs orphaned tails (J5) only when RECONCILE_REPAIR_ENABLED is set;
+    the body has no say. The daily schedule (J6) lands with Stage G.
+
+    There is deliberately no purge route (J8): a purge is an operator's act
+    at the CLI, and an endpoint is something a schedule can call."""
+    task = OperationTask(
+        operation="reconcile",
+        agency_id=body.agency_base_id,
+        run_id=body.run_id or new_run_id(),
+        repair=settings.reconcile_repair_enabled,
+    )
+    with _START_LOCK:
+        return _start_operation(request, task, settings, work_dir)
+
+
+def _start_operation(
+    request: Request, task: OperationTask, settings: Settings, work_dir: Path
+) -> OperationStarted:
+    if task.operation == "purge":
+        raise ValueError("a purge is never started over HTTP (J8)")
+    if _child_running(request):
+        busy: AnyReport
+        now = utc_now_iso()
+        if task.operation == "drain":
+            busy = DrainReport(
+                run_id=task.run_id,
+                agency_id=task.agency_id,
+                sink_id=settings.sink_id,
+                outcome="busy",
+                started_at=now,
+                finished_at=now,
+                dry_run=task.dry_run,
+            )
+        else:
+            busy = ReconcileReport(
+                run_id=task.run_id,
+                agency_id=task.agency_id,
+                sink_id=settings.sink_id,
+                outcome="busy",
+                started_at=now,
+                finished_at=now,
+                repair=task.repair,
+            )
+        log_operation_outcome(task.operation, busy)
+        OperationStateStore(work_dir, task.operation).record(busy)
+        return OperationStarted(
+            status="busy",
+            operation=task.operation,
+            agency_base_id=task.agency_id,
+            run_id=task.run_id,
+        )
+
+    process = _PROCESS_CONTEXT.Process(
+        target=run_operation_process, args=(task, settings, work_dir)
+    )
+    process.start()
+    request.app.state.child_process = process
+    return OperationStarted(
+        status="started",
+        operation=task.operation,
+        agency_base_id=task.agency_id,
+        run_id=task.run_id,
     )
 
 
@@ -208,6 +317,7 @@ def drain_deletions() -> None:
 def health(
     settings: Annotated[Settings, Depends(get_settings)],
     run_state: Annotated[RunStateStore, Depends(get_run_state)],
+    work_dir: Annotated[Path, Depends(get_work_dir)],
 ) -> HealthResponse:
     """Liveness, configuration identity, and the last run's outcome.
 
@@ -231,4 +341,6 @@ def health(
         chunk_profile=settings.chunk_profile,
         work_dir=settings.content_work_dir,
         last_run=LastRunSummary(**asdict(last_run)) if last_run else None,
+        last_drain=OperationStateStore(work_dir, "drain").read(),
+        last_reconcile=OperationStateStore(work_dir, "reconcile").read(),
     )

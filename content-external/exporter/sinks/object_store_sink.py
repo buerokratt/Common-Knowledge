@@ -47,11 +47,14 @@ records the purge.
 
 `sweep_stale` is not supported. A listable sink sweeps orphans by the ordinal
 tail rule — list a document's chunks, drop ordinals >= chunk_count (J5) — which
-needs no timestamp. The `synced_at` sweep is the non-listable path (L10).
+needs no timestamp. The `synced_at` sweep is the non-listable path (L10). The
+tail rule lives in services/reconcile_service.py, over `list_documents`, which
+reports each document's chunks and the chunk_count its own record declares.
 """
 
+import json
 import re
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterator
 from datetime import datetime
 
 from exporter.core.ids import (
@@ -357,8 +360,8 @@ class ObjectStoreSink(ContentSink):
     ) -> DeleteOutcome[str]:
         raise NotSupported(
             "the object-store sink sweeps orphans by the ordinal tail rule "
-            "(read_document + delete_chunks, J5); the synced_at sweep is the "
-            "non-listable sinks' path (L10)"
+            "(reconcile's repair: list_documents + delete_chunks, J5); the "
+            "synced_at sweep is the non-listable sinks' path (L10)"
         )
 
     def _holds_agency_content(self) -> bool:
@@ -369,6 +372,57 @@ class ObjectStoreSink(ContentSink):
             self._parse(obj.key) is not None
             for obj in self._store.list_keys(self._documents_prefix)
         )
+
+    def _list_documents(self) -> Iterator[DocumentProbe]:
+        """One listing of `documents/`, every key parsed (D12): records and
+        chunks are grouped by document, and anything else — a
+        pseudo-directory, a stray object — is not ours to count. Each
+        record present is then read for the chunk_count it declares, the
+        ground J5's tail rule stands on; a record that cannot be read or
+        does not parse declares nothing, which a repair treats as "do not
+        touch"."""
+        records: set[str] = set()
+        ordinals: dict[str, list[int]] = {}
+        for obj in self._store.list_keys(self._documents_prefix):
+            parsed = self._parse(obj.key)
+            if parsed is None:
+                continue
+            document_id, ordinal = parsed
+            if ordinal is None:
+                records.add(document_id)
+            else:
+                ordinals.setdefault(document_id, []).append(ordinal)
+        for document_id in sorted(records | ordinals.keys()):
+            present = sorted(ordinals.get(document_id, ()))
+            yield DocumentProbe(
+                document_id=document_id,
+                record_present=document_id in records,
+                chunk_count=len(present),
+                chunk_ordinals=tuple(present),
+                declared_chunk_count=(
+                    self._declared_chunk_count(document_id)
+                    if document_id in records
+                    else None
+                ),
+            )
+
+    def _declared_chunk_count(self, document_id: str) -> int | None:
+        """The chunk_count a document's metadata.json states, or None when it
+        cannot be read or says nothing usable. A store error propagates: a
+        reconcile that cannot read the destination must not report it."""
+        if not self._store.capabilities.can_read:
+            return None
+        payload = self._store.get_bytes(self._metadata_key(document_id))
+        if payload is None:
+            return None
+        try:
+            record = json.loads(payload)
+        except ValueError:
+            return None
+        count = record.get("chunk_count") if isinstance(record, dict) else None
+        if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+            return None
+        return count
 
     def _read_document(self, document_id: str) -> DocumentProbe | None:
         record_present = self._store.exists(self._metadata_key(document_id))

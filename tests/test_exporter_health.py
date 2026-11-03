@@ -23,6 +23,9 @@ HEALTH_KEYS = {
     "chunk_profile",
     "work_dir",
     "last_run",
+    # Stage J, additive: the last drain's and reconcile's outcome.
+    "last_drain",
+    "last_reconcile",
 }
 
 

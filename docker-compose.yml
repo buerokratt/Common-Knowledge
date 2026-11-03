@@ -568,6 +568,13 @@ services:
       # no longer accounts for. The object-store sink reports not_supported.
       # - STALE_SWEEP_ENABLED=true
       #
+      # Deletion operations (Stage J): both off by default. Off, POST
+      # /drain_deletions only reports what it would retry (J2: run one full
+      # cycle dry first) and POST /reconcile_async only reports drift. On,
+      # the drain deletes and reconcile removes orphaned tail chunks (J5).
+      # - DRAIN_DELETES_ENABLED=true
+      # - RECONCILE_REPAIR_ENABLED=true
+      #
       # MANIFEST_STORE_BACKEND=local is development only and additionally
       # requires MANIFEST_STORE_ALLOW_LOCAL=true. Do not set it here: a
       # re-provisioned volume would read as a first run, republishing the

@@ -548,7 +548,9 @@ so the exporter reads a `404` as "nothing held" only when its body says that,
 and treats any other `404` as a failed read-back. `chunk_ordinals` is optional;
 `chunk_count` alone is enough to be useful. This is what lets the exporter
 check, before a first run, that the destination is really empty, and lets a
-reconcile report "clean" rather than "unverifiable". Agreed, with
+reconcile compare the manifest's documents ("clean_partial" or "drift")
+rather than report "unverifiable". Full "clean" would also need a listing,
+which this contract does not offer. Agreed, with
 `chunk_ordinals` (question 13). The exporter uses it for the first-run check.
 If it were withdrawn, the exporter would go back to trusting its own
 manifest, and say so.
@@ -617,7 +619,7 @@ question 4.
 | 10 | Will you implement document and tail deletes (§9.1, §9.2), points before the record, with `404` for "already gone" **per item**, never for the whole request? | Whether deletions reach you at all | Yes, as written | 5 |
 | 11 | Will you implement the agency delete (§9.3)? | `supports_agency_scoped_delete` — and with it a purge | Yes → `True` | 7 |
 | 12 | Will you implement the keep-list sweep (§10), enforcing the keep list inside the delete itself? | `supports_stale_sweep` | Yes → `True` (still off per deployment unless `STALE_SWEEP_ENABLED`) | 7 |
-| 13 | Can you expose the read-back probe (§11), and does it list ordinals? | `supports_read_back`, `read_back_lists_ordinals` — reconcile "clean" vs "unverifiable", and the first-run check | Yes, with ordinals → both `True` | 10 |
+| 13 | Can you expose the read-back probe (§11), and does it list ordinals? | `supports_read_back`, `read_back_lists_ordinals` — reconcile "clean_partial" vs "unverifiable", and the first-run check | Yes, with ordinals → both `True` | 10 |
 | 14 | How many ids may one delete request name? | `DELETE_BATCH_IDS` | 500 (the proposal's number) | 5 |
 | 15 | Will you route every request by the `{collection}` path segment (§1), and is a new collection created on first write or by you beforehand? | `LLM_MODULE_COLLECTION`; whether the bootstrap needs a create step | Yes; created on first write | 6 |
 
