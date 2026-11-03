@@ -397,6 +397,15 @@ class Settings(BaseSettings):
     # the whole corpus and held nothing back (F20), on a sink that has one.
     stale_sweep_enabled: bool = False
 
+    # --- deletion operations (Stage J) -------------------------------------
+    # Both off by default, and both only ever loosen what the CLI can already
+    # do by hand. Off, POST /drain_deletions runs as a dry run (J2: inspect the
+    # journal for one full cycle before deleting anything), and
+    # POST /reconcile_async reports drift without repairing it (J4). An HTTP
+    # caller can make either less destructive, never more.
+    drain_deletes_enabled: bool = False
+    reconcile_repair_enabled: bool = False
+
     # --- this service's own durable volume ---------------------------------
     # Holds the run lock (F2) and the deferred-deletion journal, which must
     # survive a restart, plus the last-run and dead-letter records, which are

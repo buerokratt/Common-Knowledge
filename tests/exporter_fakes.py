@@ -74,6 +74,7 @@ from exporter.stores.base import (
     StoreObject,
 )
 from exporter.stores.s3_store import S3Store
+from exporter.worker.wiring import DeletionContext
 
 FULL_STORE_CAPABILITIES = StoreCapabilities(
     can_delete=True, can_list=True, can_read=True, supports_batch_delete=True
@@ -443,6 +444,27 @@ class RecordingSink(ContentSink):
             chunk_ordinals=ordinals,
         )
 
+    def _list_documents(self) -> Iterator[DocumentProbe]:
+        # Parse, never count (D12): a document directory is named by a record
+        # or a chunk under it, never by an entry that is neither.
+        prefix = f"{self.PREFIX}/agencies/{self.agency_id}/documents/"
+        documents: set[str] = set()
+        for obj in self.store.list_keys(prefix):
+            parts = obj.key[len(prefix) :].split("/")
+            if parts[1:] == ["metadata.json"] or (
+                len(parts) == 3
+                and parts[1] == "chunks"
+                and _CHUNK_NAME.fullmatch(parts[2]) is not None
+            ):
+                documents.add(parts[0])
+        for document_id in sorted(documents):
+            probe = self._read_document(document_id)
+            if probe is None:
+                continue
+            payload = self.store.get_bytes(self._metadata_key(document_id))
+            declared = None if payload is None else json.loads(payload)["chunk_count"]
+            yield replace(probe, declared_chunk_count=declared)
+
 
 def make_row(
     document_id: str,
@@ -568,8 +590,9 @@ def patch_wiring(
     manifest_client: ExternalStoreClient,
     checkpoint_every: int = 250,
 ) -> None:
-    """Make exporter.worker.tasks build its coordinator over these fakes, and
-    stub A17's agency check, so the task, the CLI and the endpoint's child
+    """Make exporter.worker.tasks build its coordinator — and the deletion
+    operations their sink and manifest service — over these fakes, and stub
+    A17's agency check, so the task, both CLIs and the endpoints' children
     run end to end with no network. The compact profile keeps chunks small."""
     profile = CHUNK_PROFILES["compact"]
 
@@ -601,5 +624,20 @@ def patch_wiring(
             run_state=run_state,
         )
 
+    def build_context(
+        _settings: object, *, agency_id: str, run_id: str
+    ) -> DeletionContext:
+        assert agency_id == sink.agency_id
+        return DeletionContext(
+            sink=sink,
+            manifests=ManifestService(
+                ManifestStore(manifest_client, prefix=MANIFEST_PREFIX),
+                sink_id=sink.sink_id,
+                on_missing="first_run",
+            ),
+            chunker_fingerprint=chunker_fingerprint(profile),
+        )
+
     monkeypatch.setattr("exporter.worker.tasks.build_coordinator", build)
+    monkeypatch.setattr("exporter.worker.tasks.build_deletion_context", build_context)
     monkeypatch.setattr("exporter.worker.tasks.require_single_agency", lambda _s: 1)

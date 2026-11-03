@@ -7,10 +7,19 @@ stale, absent or orphaned from inside that slice, so any operation that acts
 on completeness would delete live content after it:
 
 - `sweep_stale` (L10): every document not synced this run is "stale";
-- the orphan tail sweep (J5), when it runs after an export;
-- `run_purge` (J7), which is the whole-agency case of the same reasoning;
 - and the corpus watermark, which the coordinator withholds itself from the
   same flag.
+
+TWO STAGE J OPERATIONS WERE EXPECTED HERE AND DO NOT NEED IT, because
+neither concludes anything from what a run did not see. The orphan tail sweep
+(J5, services/reconcile_service.py) is not tied to a run: it reads the
+destination itself and measures each document's tail from the larger of the
+count the destination's own record declares and the manifest's, so a
+document an export held back keeps every chunk its record still counts. Its
+guard is D12's — parse every listed key, never count. The purge (J7,
+services/purge_service.py) never enumerates CKB: it is told, by an operator
+who repeats the agency id, and its guards are that confirmation, the
+fail-closed manifest read and DiffResult.is_purge.
 
 The production-readiness review found this invariant recognised for the
 sweeps and missed for the watermark, which is the lesson this module exists
@@ -34,8 +43,8 @@ own, so L10's sweep also carries a keep list — every document the committed
 manifest lists — and the destination spares those whatever their
 `synced_at` (sinks/base.py's sweep_stale).
 
-Every sweep calls this guard before acting: L10's, after the commit in
-services/publish_service.py, and Stage J's when it lands.
+Every sweep that concludes from completeness calls this guard before acting:
+today that is L10's, after the commit in services/publish_service.py.
 """
 
 from exporter.core.schemas import RunReport

@@ -33,7 +33,7 @@ from exporter.core.redaction import sanitize_sensitive_text
 from exporter.services.run_log import log_run_outcome, scrub_value
 from exporter.services.run_state import RunStateStore
 
-__all__ = ["ERROR_LOG_PREFIX", "catch_error", "send_error"]
+__all__ = ["ERROR_LOG_PREFIX", "catch_error", "log_error_line", "send_error"]
 
 logger = logging.getLogger(__name__)
 
@@ -43,6 +43,29 @@ ERROR_LOG_PREFIX = "content-external error"
 # Long enough for a Resql URL path or a store key and an error code; short
 # enough that a library message quoting more than that is cut off.
 _MAX_MESSAGE_CHARS = 300
+
+
+def log_error_line(
+    *, run_id: str, agency_id: str, sink: str, error: BaseException
+) -> None:
+    """The `content-external error` line alone — what the deletion
+    operations (Stage J) emit for a failure before they could report one.
+    They keep their own last-outcome record, so they must not reach the
+    export's run line or last-run record, which A15's alert reads."""
+    # Last on the line, so it keeps its spaces: everything after `message=`
+    # is the message. Newlines and runs of whitespace still collapse, so one
+    # error is one line.
+    message = " ".join(sanitize_sensitive_text(str(error)).split())
+    message = message[:_MAX_MESSAGE_CHARS] or "-"
+    logger.error(
+        "%s run_id=%s agency_id=%s sink=%s error_type=%s message=%s",
+        ERROR_LOG_PREFIX,
+        scrub_value(run_id),
+        scrub_value(agency_id),
+        scrub_value(sink),
+        scrub_value(type(error).__name__),
+        message,
+    )
 
 
 def send_error(
@@ -57,21 +80,8 @@ def send_error(
     """Report `error` as this run's `failed` outcome. Never raises: losing
     the report must not replace the error being reported."""
     error_type = type(error).__name__
-    # Last on the line, so it keeps its spaces: everything after `message=`
-    # is the message. Newlines and runs of whitespace still collapse, so one
-    # error is one line.
-    message = " ".join(sanitize_sensitive_text(str(error)).split())
-    message = message[:_MAX_MESSAGE_CHARS] or "-"
     try:
-        logger.error(
-            "%s run_id=%s agency_id=%s sink=%s error_type=%s message=%s",
-            ERROR_LOG_PREFIX,
-            scrub_value(run_id),
-            scrub_value(agency_id),
-            scrub_value(sink),
-            scrub_value(error_type),
-            message,
-        )
+        log_error_line(run_id=run_id, agency_id=agency_id, sink=sink, error=error)
         log_run_outcome(
             outcome="failed",
             run_id=run_id,

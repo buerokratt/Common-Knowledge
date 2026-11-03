@@ -37,8 +37,9 @@ report's skipped count and its reasons, rather than comparing totals alone.
 
 This deployment is configured for `CONTENT_SINK=object_store`. Confirm the
 running value using [Which sink is this deployment running?](README.md#which-sink-is-this-deployment-running).
-On a non-listable sink such as `llm_module`, reconcile (not built yet) can
-only report `unverifiable`, never `clean`; see
+On a non-listable sink such as `llm_module`, reconcile can see only what
+read-back returns, so its best result is `clean_partial`, never `clean`; with
+no read-back it reports `unverifiable`; see
 [Sink parity](README.md#sink-parity--what-each-sink-can-and-cant-do). A failed run may mean the destination is down rather
 than that CKB is wrong.
 
@@ -680,6 +681,137 @@ The last run's value is also on `GET /health`, as `last_run.stale_sweep` and
 `refused` there means every tick is refusing until the re-chunk is run by
 hand, as described above). A `busy` tick or a failure before the run started
 keeps a `refused` value. Only a run that completes clears it.
+
+## Draining deferred deletes (J1, J2)
+
+**What it is.** When the destination refuses a delete, the export journals it
+under `$CONTENT_WORK_DIR/_deferred/<run_id>.jsonl` and commits anyway. The
+`deletions_unresolved` count in the report says how many. The drain retries
+those deletes.
+
+**First, one full cycle dry.** `DRAIN_DELETES_ENABLED` is off by default, so
+`POST /drain_deletions` only reports. By hand:
+
+```bash
+python -m exporter.run_ops drain --agency-id <agency> --dry-run
+```
+
+Read `candidate_ids` in the report against CKB: each one should be a
+document that is really deleted, excluded or `not_found`. Then set
+`DRAIN_DELETES_ENABLED=true`, or drain by hand without `--dry-run`.
+
+`candidate_ids` is in the CLI's JSON report only. A dry drain from the cron
+or `POST /drain_deletions` logs and records counts, never ids (F13), so
+reading a cron dry cycle means either running the CLI dry run above or
+reading the journals themselves under `$CONTENT_WORK_DIR/_deferred/`.
+
+**The schedule.** `trigger_content_drain` ships disabled. Enabling it while
+`DRAIN_DELETES_ENABLED` is off is how to run the dry cycle on the cron:
+every tick reports and none deletes. Enable it with the one-line change in
+[Schedule](README.md#schedule), or invoke it by hand:
+
+```bash
+curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_drain'
+```
+
+**Reading the report** (`content-external drain` line, or `last_drain` on
+`/health`):
+
+| Field | Meaning | Action |
+|---|---|---|
+| `outcome=nothing_pending` | Every journalled delete has landed | none |
+| `outcome=drained`, `still_unresolved=0` | The retries landed | none |
+| `still_unresolved` > 0 | The destination still refuses | the next drain retries; if it persists, check the destination's credentials and permissions |
+| `skipped_republished` | Restored and re-published since the delete was journalled | none: deleting it would remove live content |
+| `awaiting_export` | A journal from an export that died before its commit | none: the next export settles it |
+| `tails_left_to_export` | A tail delete the destination refused | none: the next export retries it |
+| `tails_left_to_reconcile` | An orphan-tail delete from reconcile's repair the destination refused | no export retries these: run `run_ops reconcile --repair`, which finds them in its listing again |
+| `outcome=failed`, `NoManifestToDrainError` | A pending delete, and no committed manifest to re-check it against | the drain will not delete blind; investigate the manifest store. With nothing pending the drain never reads the manifest, so a deployment whose first export has not committed reports `nothing_pending` |
+| `outcome=busy` | An export or another operation held the lock | none |
+
+## Reconciling the destination (J4, J5, J9)
+
+**What it is.** A read of what the destination holds, compared with the
+committed manifest. `trigger_content_reconcile` runs it daily at 03:35
+(J6) once enabled; it ships disabled, and the one-line change is in
+[Schedule](README.md#schedule). Until then run it by hand, through the cron
+job or the CLI:
+
+```bash
+curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_reconcile'
+python -m exporter.run_ops reconcile --agency-id <agency>
+```
+
+**`scope` is a property of the sink, not a fault.**
+
+- `full`: the object-store sink, which lists everything.
+- `manifest_documents`: the llm-module sink with read-back. It sees only
+  what the manifest lists, so no drift is `clean_partial`, never `clean`:
+  anything else at the destination was not looked at. Alert on
+  `outcome=clean` and this scope will never satisfy it; alert on
+  `outcome=drift` if `clean_partial` is the best this sink can do.
+- `none`: the outcome is `unverifiable`. Nothing was compared, so it is
+  never reported as `clean`.
+
+**Cost.** Full scope lists the agency's prefix and reads each document's
+record; read-back scope makes one request per manifest document, in
+sequence. Both grow with the corpus, and reconcile holds the run lock
+throughout: one still running at 03:47 makes that drain report `busy`
+(harmless; the next hour retries), and one still running at 04:17 makes that
+export report `busy` too. Watch `duration_seconds` in `last_reconcile`: if it
+nears 40 minutes, move `trigger_content_reconcile` rather than let it collide
+with the export.
+
+**Drift categories, and what to do:**
+
+| Field | Meaning | Action |
+|---|---|---|
+| `missing_documents` | In the manifest, absent from the destination | the manifest believes it is published, so no export, not even `--force`, re-sends it until its row moves (Gate 2). Re-clean or edit the document in CKB. If many are missing, re-bootstrap. Reconcile does not repair this category |
+| `record_missing` | Chunks with no record (an F3 breach) | escalate: the publish order was violated |
+| `chunk_gaps` | An ordinal below the manifest's count is absent | as `missing_documents` |
+| `orphan_tail_documents` / `orphan_tail_chunks` | Chunks at or past the count | `--repair`, or `RECONCILE_REPAIR_ENABLED=true` |
+| `unrecorded_documents` | At the destination, not in the manifest (`full` scope only) | usually a run that died before its commit; the next export settles it. If it persists, investigate before deleting anything by hand |
+
+**Repair** removes orphaned tails only, at `full` scope, and only where the
+document's record states its own chunk count. The tail starts at the larger
+of that count and the manifest's. Each delete is journalled first, and the
+journal is closed and mirrored, so the next export does not republish the
+repaired documents. `outcome=repaired` means nothing else drifted. Run one
+cycle report-only before setting `RECONCILE_REPAIR_ENABLED=true`.
+`tails_unresolved` > 0 means the destination refused some deletes. No export
+retries those (no manifest counted them); the next repair finds them in its
+listing and tries again, and until then the drain reports them as
+`tails_left_to_reconcile`.
+
+## Purging an agency (J7, J8)
+
+**A purge deletes everything the committed manifest records for the agency
+at the destination.** It is never scheduled and has no HTTP route.
+
+1. **Disable the export's schedule** (Stage G's CronManager entry). An export
+   after a purge republishes every finished document CKB still holds.
+2. Confirm nothing is running: `/health` shows the last run finished.
+3. Purge, repeating the agency id:
+
+   ```bash
+   python -m exporter.run_ops purge --agency-id <agency> --confirm <agency>
+   ```
+
+4. Read the report:
+   - `outcome=purged`: every requested delete landed and the destination
+     was listed and found empty (`residual=verified_empty`). Done.
+   - `outcome=purged_unverified`: every requested delete was acknowledged,
+     but the sink cannot list (or the check failed), so `residual` is
+     `unverifiable` and `requested` against `deleted` + `missing` is all
+     there is. Confirm with the destination's owner.
+   - `outcome=incomplete`: `unresolved_ids` stay journalled. Run
+     `run_ops drain` until `still_unresolved=0`.
+
+   The CLI exits `0` for `purged`, `purged_unverified` and
+   `nothing_to_purge`, and `1` for `incomplete`, `busy` and `failed`, so a
+   script never carries on past a purge that did not finish.
+5. The manifest is kept, with no documents and no watermark. Re-enabling the
+   export later republishes the agency in full.
 
 ## llm-module cutover (L19–L25)
 
