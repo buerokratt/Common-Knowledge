@@ -20,6 +20,7 @@ import ApiList from 'pages/API';
 import ApiDetail from 'pages/API/ApiDetail';
 
 import './locale/et_EE';
+import useTabCloseEffect from 'hooks/useTabCloseEffects';
 
 const customJwtCookieKey = 'customJwtCookie';
 
@@ -64,6 +65,8 @@ const App: FC = () => {
       return useStore.getState().setUserInfo(res.response);
     },
   });
+
+  useTabCloseEffect();
 
   return (
     <Routes>

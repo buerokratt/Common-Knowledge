@@ -70,7 +70,7 @@ class EntireSourceSpider(SpecifiedPagesSpider):
 
         while True:
             result = requests.get(
-                f"{self.settings.get('RUUTER_INTERNAL')}/ckb/source-file/get-one-source-file-to-scrape",
+                f"{self.settings.get('CKB_RUUTER_INTERNAL')}/source-file/get-one-source-file-to-scrape",
                 params={
                     "source_id": self.task.source_id,
                     "reference_time": scrapped_before,

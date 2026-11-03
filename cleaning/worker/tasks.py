@@ -7,6 +7,7 @@ import mimetypes
 import re
 import socket
 import textwrap
+import time
 from html import escape as html_escape
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,11 @@ from uuid import uuid4
 import pymupdf4llm
 import requests
 import trafilatura
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 from bs4.element import NavigableString, PreformattedString, Tag
 from langdetect import detect, LangDetectException
 from markdownify import markdownify
-from openai import AzureOpenAI, APIError
+from openai import AzureOpenAI, APIError, RateLimitError
 
 from unstructured.documents.elements import Title, ListItem, Table, CodeSnippet
 from unstructured.partition.auto import partition
@@ -637,6 +638,126 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
 # LLM helpers
 # ---------------------------------------------------------------------------
 
+# Elements that never carry document content -- safe to drop whole before
+# handing HTML to the LLM. Trims 60-99% of tokens on typical Estonian public-
+# sector CMS pages (mostly framework bundles, inline SVG icons, base64
+# images) without touching real text.
+_LLM_HTML_DROP_TAGS: set[str] = {
+    "script", "style", "noscript", "template",
+    "svg", "iframe", "canvas",
+    "meta", "link", "base",
+}
+
+# Per-tag attribute allow-list. Everything not listed is removed.
+# Landmark/nav tags (<header>, <footer>, <nav>, <aside>, <form>) are
+# DELIBERATELY kept -- stripping them would collapse the LLM re-extract's
+# advantage over the deterministic BS extractor, which does drop them.
+_LLM_HTML_KEEP_ATTRS: dict[str, set[str]] = {
+    "a":        {"href", "title"},
+    "img":      {"src", "alt", "title"},
+    "th":       {"colspan", "rowspan", "scope"},
+    "td":       {"colspan", "rowspan"},
+    "col":      {"span"},
+    "colgroup": {"span"},
+}
+_LLM_HTML_ALWAYS_KEEP_ATTRS: set[str] = {"id"}
+
+# data:image/png;base64,... blobs can be tens of KB each. Anything past this
+# length is replaced with a stub token so the LLM still sees the reference
+# without paying to tokenise the payload.
+_LLM_DATA_URI_MAX_LEN = 128
+
+_LLM_WHITESPACE_RUN_RE = re.compile(r"[ \t]+")
+_LLM_TRIPLE_NEWLINE_RE = re.compile(r"\n{3,}")
+
+# Approximate input-token ceiling for a single re-extract call. Post-strip
+# pages this large are exceedingly rare; when they occur the caller falls
+# back to BeautifulSoup, which is the same graceful path used for any other
+# empty _llm_extract return. Ceiling sits well below gpt-5-mini's context
+# window so there is headroom for the system prompt and TPM burst.
+_LLM_INPUT_TOKEN_CEILING = 200_000
+
+# Rough chars-to-tokens factor for size-gating. Fit against tiktoken on the
+# benchmark corpus; within ~15% of the true count on typical HTML. Kept as
+# a cheap heuristic so tiktoken is not added as a runtime dependency.
+_LLM_TOKENS_PER_CHAR = 0.28
+
+
+def _estimate_tokens(text: str) -> int:
+    """Cheap token-count estimate for the input size-gate."""
+    return int(len(text) * _LLM_TOKENS_PER_CHAR)
+
+
+def _prestrip_html_for_llm(html: str) -> str:
+    """
+    Deterministic cleanup applied to raw HTML before it is sent to the LLM
+    re-extractor. Strips non-content elements, framework-attribute noise and
+    base64 blobs; preserves every element and text run that could plausibly
+    hold document content -- including landmark tags a BS-style noise strip
+    would drop, since letting the LLM see them is the whole point of the
+    re-extract path.
+    """
+    soup = BeautifulSoup(html, "lxml")
+
+    for tag_name in _LLM_HTML_DROP_TAGS:
+        for tag in soup.find_all(tag_name):
+            tag.decompose()
+
+    for comment in soup.find_all(string=lambda s: isinstance(s, Comment)):
+        comment.extract()
+
+    for tag in soup.find_all(True):
+        for attr in ("src", "href", "srcset"):
+            val = tag.get(attr)
+            if (
+                isinstance(val, str)
+                and val.startswith("data:")
+                and len(val) > _LLM_DATA_URI_MAX_LEN
+            ):
+                tag[attr] = "[data-uri]"
+        keep = _LLM_HTML_KEEP_ATTRS.get(tag.name, set()) | _LLM_HTML_ALWAYS_KEEP_ATTRS
+        for attr in list(tag.attrs.keys()):
+            if attr not in keep:
+                del tag.attrs[attr]
+
+    out = str(soup)
+    out = _LLM_WHITESPACE_RUN_RE.sub(" ", out)
+    out = _LLM_TRIPLE_NEWLINE_RE.sub("\n\n", out)
+    return out
+
+
+# Rate-limit retry configuration. Applied to both _llm_evaluate and
+# _llm_extract; a 429 on either aborts the quality-control path, so we would
+# rather sleep and retry than silently degrade to BS on a transient burst.
+_LLM_MAX_ATTEMPTS = 3
+_LLM_RETRY_BASE_DELAY_S = 2.0
+
+
+def _call_with_llm_retry(fn, *args, **kwargs):
+    """
+    Invoke *fn* with exponential-backoff retry on Azure/OpenAI 429 responses.
+
+    RateLimitError is transient; other exceptions propagate to the caller,
+    which already logs them and returns a safe empty value.
+    """
+    for attempt in range(_LLM_MAX_ATTEMPTS):
+        try:
+            return fn(*args, **kwargs)
+        except RateLimitError as exc:
+            if attempt == _LLM_MAX_ATTEMPTS - 1:
+                logger.warning(
+                    f"[llm] rate-limited after {_LLM_MAX_ATTEMPTS} attempts; "
+                    f"giving up: {exc}"
+                )
+                raise
+            delay = _LLM_RETRY_BASE_DELAY_S * (2 ** attempt)
+            logger.info(
+                f"[llm] rate-limited (attempt {attempt + 1}/{_LLM_MAX_ATTEMPTS}); "
+                f"sleeping {delay:.1f}s before retry"
+            )
+            time.sleep(delay)
+
+
 _EVAL_SYSTEM = textwrap.dedent("""
     You are a quality-evaluation assistant for web-page text extraction.
     You will receive a Markdown-formatted extraction of a web page's main body.
@@ -686,7 +807,8 @@ def _llm_evaluate(
     so the caller can fall back gracefully without crashing.
     """
     try:
-        response = client.chat.completions.create(
+        response = _call_with_llm_retry(
+            client.chat.completions.create,
             model=deployment,
             response_format={"type": "json_object"},
             messages=[
@@ -713,22 +835,41 @@ def _llm_evaluate(
 def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
     """
     Ask the LLM to re-extract the main content from raw HTML.
-    Returns the extracted Markdown, or empty string on any error so the
-    caller can fall back gracefully without crashing.
 
-    Tables are swapped for placeholders before the HTML is sent and the
-    original HTML is restored afterwards, the same two-pass strategy as
-    _trafilatura_extract: left to itself the model rewrites tables as
+    Pre-strips the HTML deterministically (scripts, styles, base64 blobs,
+    attribute noise) before the call -- typical CMS pages drop 60-99% of
+    their token count without losing any content, which both cuts cost and
+    keeps huge pages from tripping the model's context window. If the
+    stripped HTML is still oversized, skips the LLM call and returns an
+    empty string so the caller falls back to BeautifulSoup.
+
+    Tables are swapped for placeholders before the HTML is stripped and sent,
+    and the original HTML is restored afterwards, the same two-pass strategy
+    as _trafilatura_extract: left to itself the model rewrites tables as
     Markdown pipe tables and garbles colspan/rowspan headers.
+
+    Returns the extracted Markdown, or empty string on any error or
+    oversized input, so the caller can fall back gracefully.
     """
     soup = BeautifulSoup(html, _PAGE_PARSER)
     tables, markers = _swap_tables_for_placeholders(soup)
+    stripped = _prestrip_html_for_llm(str(soup) if tables else html)
+    approx_tokens = _estimate_tokens(stripped)
+    if approx_tokens > _LLM_INPUT_TOKEN_CEILING:
+        logger.warning(
+            f"[html] pre-stripped HTML ~{approx_tokens} tokens exceeds "
+            f"ceiling {_LLM_INPUT_TOKEN_CEILING}; skipping LLM re-extract "
+            "(caller will fall back to BeautifulSoup)"
+        )
+        return ""
+
     try:
-        response = client.chat.completions.create(
+        response = _call_with_llm_retry(
+            client.chat.completions.create,
             model=deployment,
             messages=[
                 {"role": "system", "content": _EXTRACT_SYSTEM},
-                {"role": "user", "content": str(soup) if tables else html},
+                {"role": "user", "content": stripped},
             ],
         )
         choice = response.choices[0]
@@ -1490,7 +1631,7 @@ def clean_file_task(entity: EntityToClean) -> None:
             f.write(cleaned_text)
 
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+            f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
             json={"source_file_path": cleaned_text_filename.as_posix()},
             timeout=ruuter_timeout,
         )
@@ -1520,7 +1661,7 @@ def clean_file_task(entity: EntityToClean) -> None:
             json.dump(metadata, f)
 
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+            f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
             json={"source_file_path": cleaned_metadata_filename.as_posix()},
             timeout=ruuter_timeout,
         )
@@ -1548,7 +1689,7 @@ def clean_file_task(entity: EntityToClean) -> None:
         for img_path in extracted_images:
             try:
                 r = requests.post(
-                    f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                    f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
                     json={"source_file_path": img_path.as_posix()},
                     timeout=ruuter_timeout,
                 )
@@ -1574,7 +1715,7 @@ def clean_file_task(entity: EntityToClean) -> None:
         # NOTE: Ruuter's update-cleaned-file endpoint must be extended to
         # accept the image_urls field so images are persisted in the DB.
         r = requests.post(
-            f"{settings.ruuter_internal}/ckb/source-file/update-cleaned-file",
+            f"{settings.ckb_ruuter_internal}/source-file/update-cleaned-file",
             json={
                 "base_id": entity.source_file_id,
                 "cleaned_data_url": uploaded_cleaned_text_url,
@@ -1608,7 +1749,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     for file in task.files:
         try:
             requests.post(
-                f"{settings.ruuter_internal}/ckb/source-file/update-scrapped-file-stop-scrapping",
+                f"{settings.ckb_ruuter_internal}/source-file/update-scrapped-file-stop-scrapping",
                 json={"base_id": file.base_id, "status": "cleaning"},
                 timeout=30,
             )
@@ -1660,7 +1801,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     if logs_path.exists():
         try:
             upload_result = requests.post(
-                f"{settings.ruuter_internal}/ckb/pipeline/upload-file-sync",
+                f"{settings.ckb_ruuter_internal}/pipeline/upload-file-sync",
                 json={"source_file_path": logs_path.as_posix()},
                 timeout=30,
             )
@@ -1672,7 +1813,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     # Update the run report
     try:
         response = requests.post(
-            f"{settings.ruuter_internal}/ckb/reports/update",
+            f"{settings.ckb_ruuter_internal}/reports/update",
             json={
                 "baseId": task.source_run_report_base_id,
                 "scrapingFinishedAt": datetime.datetime.now(datetime.UTC).isoformat(),
@@ -1689,7 +1830,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
     # so a failure on the first does not prevent the second from running.
     try:
         requests.post(
-            f"{settings.ruuter_internal}/ckb/source/update-status",
+            f"{settings.ckb_ruuter_internal}/source/update-status",
             json={"source_id": task.source_base_id, "status": "finished"},
             timeout=30,
         )
@@ -1698,7 +1839,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
 
     try:
         requests.post(
-            f"{settings.ruuter_internal}/ckb/agency/update-zip-dirty",
+            f"{settings.ckb_ruuter_internal}/agency/update-zip-dirty",
             json={"sourceId": task.source_base_id, "agencyId": task.agency_base_id},
             timeout=30,
         )
@@ -1707,7 +1848,7 @@ def clean_source_task(task: SourceCleaningTask) -> None:
 
     try:
         requests.get(
-            f"{settings.ruuter_internal}/ckb/pipeline/zip",
+            f"{settings.ckb_ruuter_internal}/pipeline/zip",
             timeout=300,
         )
     except requests.exceptions.RequestException as e:

@@ -25,7 +25,7 @@ class UploadedFileSpider(SpecifiedPagesSpider):
         base_id, _ = self.get_base_id_and_hash(response.request.url)
 
         requests.post(
-            f"{self.settings.get('RUUTER_INTERNAL')}/ckb/pipeline/delete-file-sync",
+            f"{self.settings.get('CKB_RUUTER_INTERNAL')}/pipeline/delete-file-sync",
             json={
                 "source_file_id": base_id,
             },

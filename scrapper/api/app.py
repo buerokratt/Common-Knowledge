@@ -89,7 +89,7 @@ def generate_edited_metadata(task: EditedMetadataTask) -> str:
         json.dump(metadata, f)
 
     requests.post(
-        f"{settings.RUUTER_INTERNAL}/ckb/pipeline/upload-file-sync",
+        f"{settings.CKB_RUUTER_INTERNAL}/pipeline/upload-file-sync",
         json={
             "source_file_path": os.path.join(task.source_file_path, "edited.meta.json"),
         },
