@@ -1,0 +1,103 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Store the cleaning report (extraction method, LLM verdict) for a cleaned file"
+  method: post
+  accepts: json
+  returns: json
+  namespace: source-file
+  allowlist:
+    body:
+      - field: source_file_base_id
+        type: string
+        description: "Source file base ID"
+      - field: source_base_id
+        type: string
+        description: "Source base ID"
+      - field: agency_base_id
+        type: string
+        description: "Agency base ID"
+      - field: source_run_report_base_id
+        type: string
+        description: "Source run report base ID"
+      - field: url
+        type: string
+        description: "Cleaned URL"
+      - field: file_type
+        type: string
+        description: "File extension, e.g. .html"
+      - field: quality_control
+        type: string
+        description: "basic, comprehensive or empty"
+      - field: evaluated_method
+        type: string
+        description: "Extractor whose output the LLM evaluated"
+      - field: extraction_method
+        type: string
+        description: "Extractor that produced the final cleaned text"
+      - field: llm_model
+        type: string
+        description: "Azure OpenAI deployment name"
+      - field: llm_verdict
+        type: string
+        description: "pass, fail, error or empty"
+      - field: llm_reason
+        type: string
+        description: "LLM one-sentence reason"
+      - field: llm_issue_category
+        type: string
+        description: "Issue category on fail"
+      - field: llm_extract_status
+        type: string
+        description: "success, empty, error or empty string"
+      - field: eval_prompt_tokens
+        type: string
+        description: "Evaluation prompt tokens"
+      - field: eval_completion_tokens
+        type: string
+        description: "Evaluation completion tokens"
+      - field: extract_prompt_tokens
+        type: string
+        description: "Re-extraction prompt tokens"
+      - field: extract_completion_tokens
+        type: string
+        description: "Re-extraction completion tokens"
+      - field: cleaned_data_url
+        type: string
+        description: "Cleaned text URL this report describes"
+      - field: deterministic_data_url
+        type: string
+        description: "Deterministic extraction URL (comprehensive + LLM re-extract only)"
+
+
+createCleaningReport:
+  call: http.post
+  args:
+    url: "[#CKB_RESQL]/cleaning_report/create_cleaning_report"
+    contentType: json
+    body:
+      source_file_base_id: ${incoming.body.source_file_base_id}
+      source_base_id: ${incoming.body.source_base_id}
+      agency_base_id: ${incoming.body.agency_base_id}
+      source_run_report_base_id: ${incoming.body.source_run_report_base_id}
+      url: ${incoming.body.url}
+      file_type: ${incoming.body.file_type}
+      quality_control: ${incoming.body.quality_control}
+      evaluated_method: ${incoming.body.evaluated_method}
+      extraction_method: ${incoming.body.extraction_method}
+      llm_model: ${incoming.body.llm_model}
+      llm_verdict: ${incoming.body.llm_verdict}
+      llm_reason: ${incoming.body.llm_reason}
+      llm_issue_category: ${incoming.body.llm_issue_category}
+      llm_extract_status: ${incoming.body.llm_extract_status}
+      eval_prompt_tokens: ${incoming.body.eval_prompt_tokens}
+      eval_completion_tokens: ${incoming.body.eval_completion_tokens}
+      extract_prompt_tokens: ${incoming.body.extract_prompt_tokens}
+      extract_completion_tokens: ${incoming.body.extract_completion_tokens}
+      cleaned_data_url: ${incoming.body.cleaned_data_url}
+      deterministic_data_url: ${incoming.body.deterministic_data_url}
+  result: res
+
+returnSuccess:
+  return: "OK"
+  next: end

@@ -1,0 +1,15 @@
+{{- if .Values.contentExternal.enabled }}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.contentExternal.nameOverride }}
+  labels:
+    app: {{ .Values.contentExternal.nameOverride }}
+spec:
+  type: {{ .Values.contentExternal.service.type }}
+  ports:
+    - port: {{ .Values.contentExternal.service.port }}
+      targetPort: {{ .Values.contentExternal.service.port }}
+  selector:
+    app: {{ .Values.contentExternal.nameOverride }}
+{{- end }}
