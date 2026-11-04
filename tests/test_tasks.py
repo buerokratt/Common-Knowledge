@@ -751,6 +751,132 @@ class TestTableOnlyPages:
         assert "Dirhami" in result
 
 
+_PAGE_URL = "https://www.example.ee/et/pere/toetused"
+_LINK_PAGE = (
+    "<html><body><nav><a href='/'>Avaleht</a></nav><main>"
+    "<h1>Peretoetused</h1>"
+    "<p>Peretoetuste kohta loe lähemalt <a href='/toetused/lapsetoetus'>"
+    "lapsetoetuse lehelt</a> ja vaata ka <a href='https://www.ska.ee/pere'>"
+    "SKA kodulehte</a>. See lõik on piisavalt pikk, et seda peetaks "
+    "põhisisuks, sest siin on mitu lauset teksti.</p>"
+    "<p><img src='/files/skeem.png' alt='Toetuste skeem'></p>"
+    "<p><img src='data:image/gif;base64,R0lGOD' data-src='lazy.jpg' alt='Laisk'></p>"
+    "<p>Teine lõik selgitab taotlemise korda pikemalt ja sisaldab samuti "
+    "olulist infot inimestele, kes soovivad toetust taotleda.</p>"
+    "<table><tr><th>Toetus</th><th>Summa</th></tr>"
+    "<tr><td><a href='vorm.pdf'>Lapsetoetus</a></td><td>80 €</td></tr></table>"
+    "</main></body></html>"
+)
+
+
+class TestLinksAndImages:
+    """Cleaned text is read away from its page: link and image targets must
+    survive extraction, as absolute URLs."""
+
+    def test_resolve_page_urls(self) -> None:
+        from bs4 import BeautifulSoup
+
+        from worker.tasks import _resolve_page_urls
+
+        soup = BeautifulSoup(
+            "<a href='a/b'>x</a><a href='#top'>t</a><a href='mailto:x@y.ee'>m</a>"
+            "<a href='javascript:void(0)'>js</a>"
+            "<img src='i.png'><img data-lazy-src='/l.png'>",
+            "html.parser",
+        )
+        _resolve_page_urls(soup, _PAGE_URL)
+        hrefs = [a["href"] for a in soup.find_all("a")]
+        assert hrefs == [
+            "https://www.example.ee/et/pere/a/b",
+            "#top",
+            "mailto:x@y.ee",
+        ]
+        assert "js" in soup.get_text()
+        assert [i["src"] for i in soup.find_all("img")] == [
+            "https://www.example.ee/et/pere/i.png",
+            "https://www.example.ee/l.png",
+        ]
+
+    def test_base_href_wins_over_page_url(self) -> None:
+        from bs4 import BeautifulSoup
+
+        from worker.tasks import _resolve_page_urls
+
+        soup = BeautifulSoup(
+            "<head><base href='/sisu/'></head><a href='x.pdf'>x</a>", "html.parser"
+        )
+        _resolve_page_urls(soup, _PAGE_URL)
+        assert soup.a["href"] == "https://www.example.ee/sisu/x.pdf"
+
+    def test_relative_urls_kept_without_page_url(self) -> None:
+        from bs4 import BeautifulSoup
+
+        from worker.tasks import _resolve_page_urls
+
+        soup = BeautifulSoup("<a href='/x'>x</a>", "html.parser")
+        _resolve_page_urls(soup, None)
+        assert soup.a["href"] == "/x"
+
+    @pytest.mark.parametrize("extractor", ["trafilatura", "beautifulsoup"])
+    def test_extractors_keep_links_and_images(self, extractor: str) -> None:
+        from worker.tasks import _beautifulsoup_extract, _trafilatura_extract
+
+        fn = _trafilatura_extract if extractor == "trafilatura" else _beautifulsoup_extract
+        result = fn(_LINK_PAGE, url=_PAGE_URL) or ""
+        assert "[lapsetoetuse lehelt](https://www.example.ee/toetused/lapsetoetus)" in result
+        assert "[SKA kodulehte](https://www.ska.ee/pere)" in result
+        assert "![Toetuste skeem](https://www.example.ee/files/skeem.png)" in result
+        assert "https://www.example.ee/et/pere/lazy.jpg" in result
+        assert 'href="https://www.example.ee/et/pere/vorm.pdf"' in result
+        assert "Avaleht" not in result
+
+    def test_bs_partition_path_keeps_links(self) -> None:
+        """partition_html keeps text only; links must reach it pre-rendered."""
+        from unstructured.documents.elements import NarrativeText
+
+        from worker.tasks import _beautifulsoup_extract
+
+        seen: list[str] = []
+
+        def fake_partition(*, text: str, **_: object) -> list:
+            seen.append(text)
+            return [NarrativeText("x " * 400)]
+
+        with patch("worker.tasks.partition_html", side_effect=fake_partition):
+            _beautifulsoup_extract(_LINK_PAGE, url=_PAGE_URL)
+        assert "[SKA kodulehte](https://www.ska.ee/pere)" in seen[0]
+        assert "<table" not in seen[0]
+
+    def test_link_urls_do_not_count_as_kept_text(self) -> None:
+        from worker.tasks import _visible_text_len
+
+        assert _visible_text_len("[abc](https://example.ee/very/long/path)") == len(
+            "[abc]"
+        )
+
+    def test_llm_receives_absolute_urls_and_is_told_to_keep_them(self) -> None:
+        from worker.tasks import _EXTRACT_SYSTEM, _llm_extract
+
+        client = MagicMock()
+        client.chat.completions.create.return_value.choices[0].finish_reason = "stop"
+        client.chat.completions.create.return_value.choices[
+            0
+        ].message.content = "x " * 400
+        _llm_extract(client, "dep", _LINK_PAGE, url=_PAGE_URL)
+        sent = client.chat.completions.create.call_args.kwargs["messages"][-1]
+        assert 'href="https://www.example.ee/toetused/lapsetoetus"' in sent["content"]
+        assert 'src="https://www.example.ee/files/skeem.png"' in sent["content"]
+        assert "[text](url)" in _EXTRACT_SYSTEM
+
+    def test_clean_html_passes_page_url(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", _LINK_PAGE, use_llm=False)
+        entity.url = _PAGE_URL
+        result, _ = clean_html(entity, None, None)
+        assert "https://www.example.ee/files/skeem.png" in result
+
+
 class TestLLMExtractTables:
     """The LLM never sees or writes table markup: tables go out as
     placeholders and the original HTML is restored into its answer."""

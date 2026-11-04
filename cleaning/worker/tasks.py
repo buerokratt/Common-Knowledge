@@ -1,4 +1,5 @@
 import base64
+import copy
 import datetime
 import ipaddress
 import json
@@ -454,6 +455,103 @@ _TABLE_PLACEHOLDER_SUFFIX = "ENDCKBTABLE"
 _MARKDOWN_LINE_PREFIX = r"(?:[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|\d+\.[ \t]+|>[ \t]*))*"
 
 
+# URL schemes that are not navigable resources and are never rewritten.
+_NON_RESOLVABLE_URL_PREFIXES = ("data:", "mailto:", "tel:", "javascript:", "#")
+
+# Lazy-loading attributes CMSs put the real image URL in, while src holds a
+# spinner GIF or a data: placeholder.
+_LAZY_IMG_SRC_ATTRS = ("data-src", "data-lazy-src", "data-original")
+
+
+def _resolve_page_urls(soup: BeautifulSoup, page_url: str | None) -> None:
+    """
+    Rewrite link and image URLs in *soup* to absolute URLs, in place.
+
+    Cleaned text is read far from the page it came from, so a relative
+    "/toetused/vorm.pdf" or "skeem.png" is a dead reference there. Relative
+    URLs are resolved against the page's <base href> (itself resolved against
+    *page_url*) or *page_url*. Lazy-loaded images get their real URL moved
+    into src. javascript: links carry no destination and are unwrapped to
+    their text. Without a usable base, relative URLs are left as they are:
+    a relative link still says more than none.
+    """
+    base = page_url or ""
+    base_tag = soup.find("base", href=True)
+    if isinstance(base_tag, Tag) and isinstance(base_tag.get("href"), str):
+        base = urljoin(base, base_tag["href"].strip())
+    can_resolve = urlparse(base).scheme in ("http", "https")
+
+    def resolve(value: str) -> str:
+        value = value.strip()
+        if not can_resolve or not value or value.lower().startswith(
+            _NON_RESOLVABLE_URL_PREFIXES
+        ):
+            return value
+        try:
+            return urljoin(base, value)
+        except ValueError:
+            return value
+
+    for img in soup.find_all("img"):
+        if not isinstance(img, Tag):
+            continue
+        src = img.get("src")
+        if not isinstance(src, str) or not src.strip() or src.startswith("data:"):
+            for attr in _LAZY_IMG_SRC_ATTRS:
+                lazy = img.get(attr)
+                if isinstance(lazy, str) and lazy.strip():
+                    img["src"] = lazy
+                    break
+        # trafilatura reads data-src ahead of src, so resolve those too.
+        for attr in ("src", *_LAZY_IMG_SRC_ATTRS):
+            if isinstance(img.get(attr), str):
+                img[attr] = resolve(img[attr])
+
+    for link in soup.find_all("a", href=True):
+        if not isinstance(link, Tag):
+            continue
+        href = link["href"] if isinstance(link["href"], str) else ""
+        if href.strip().lower().startswith("javascript:"):
+            link.unwrap()
+            continue
+        link["href"] = resolve(href)
+
+
+def _markdown_link_text(link: Tag) -> str:
+    """Markdown for *link*, or just its text when it has nowhere to go."""
+    text = " ".join(link.get_text(" ").split())
+    href = link.get("href")
+    href = href.strip() if isinstance(href, str) else ""
+    if not href or href.startswith("#"):
+        return text
+    if not text:
+        text = href
+    return f"[{text}]({href.replace(' ', '%20')})"
+
+
+def _inline_links_as_markdown(root: Tag) -> None:
+    """
+    Replace <img> and <a> in *root* with their Markdown spelled out as text.
+
+    partition_html keeps element text only, so every link target and image
+    would otherwise vanish from the BeautifulSoup fallback's output. Images
+    go first so an image inside a link ends up as that link's text.
+    """
+    for img in root.find_all("img"):
+        if not isinstance(img, Tag):
+            continue
+        src = img.get("src")
+        src = src.strip() if isinstance(src, str) else ""
+        if not src or src.startswith("data:"):
+            continue
+        alt = img.get("alt")
+        alt = " ".join(alt.split()) if isinstance(alt, str) else ""
+        img.replace_with(NavigableString(f"![{alt}]({src.replace(' ', '%20')})"))
+    for link in root.find_all("a"):
+        if isinstance(link, Tag):
+            link.replace_with(NavigableString(_markdown_link_text(link)))
+
+
 def _swap_tables_for_placeholders(soup: BeautifulSoup) -> tuple[list[str], list[str]]:
     """
     Replace every top-level <table> in *soup* with a paragraph placeholder.
@@ -512,9 +610,18 @@ def _restore_tables(
     return text, missing
 
 
+# The "(url)" half of a Markdown link or image: not text a reader sees.
+_MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\([^)\s]*\)")
+
+
 def _visible_text_len(markup: str) -> int:
-    """Length of the text in *markup* once tags and whitespace runs go."""
-    return len(" ".join(_TAG_RE.sub(" ", markup).split()))
+    """
+    Length of the text in *markup* once tags, Markdown link targets and
+    whitespace runs go. Link targets are dropped so that a page full of
+    long URLs does not look like it kept more content than it did.
+    """
+    text = _MARKDOWN_LINK_TARGET_RE.sub("]", _TAG_RE.sub(" ", markup))
+    return len(" ".join(text.split()))
 
 
 def _dropped_main_content(text: str, missing: list[str]) -> bool:
@@ -528,12 +635,13 @@ def _dropped_main_content(text: str, missing: list[str]) -> bool:
     return dropped > _visible_text_len(text)
 
 
-def _beautifulsoup_extract(html: str) -> str:
+def _beautifulsoup_extract(html: str, url: str | None = None) -> str:
     """
     Multi-step fallback extractor that produces Markdown output.
 
     Steps:
-      1. Strip noisy elements (header, footer, nav, script, style, aside, form).
+      1. Strip noisy elements (header, footer, nav, script, style, aside, form)
+         and resolve link/image URLs against *url* (see _resolve_page_urls).
       2. Swap tables out for placeholders so neither Unstructured's
          text_as_html (which drops colspan/rowspan and downgrades <th>) nor
          markdownify's pipe-table renderer can flatten them.
@@ -542,11 +650,15 @@ def _beautifulsoup_extract(html: str) -> str:
          skip_headers_and_footers, falling back to markdownify when
          partition returns nothing or drops tables that outweigh what it
          kept. Move to the next candidate if a target yields no text.
+         partition_html sees a copy with links and images already written
+         out as Markdown, since it keeps element text only; markdownify
+         renders them itself.
       4. Put the original table HTML back.
     """
     soup = BeautifulSoup(html, _PAGE_PARSER)
     for tag in soup(["header", "footer", "nav", "script", "style", "aside", "form"]):
         tag.decompose()
+    _resolve_page_urls(soup, url)
 
     tables, markers = _swap_tables_for_placeholders(soup)
 
@@ -558,8 +670,10 @@ def _beautifulsoup_extract(html: str) -> str:
     for target in (soup.find("main"), soup.find("body"), soup):
         if target is None:
             continue
+        linked = copy.copy(target)
+        _inline_links_as_markdown(linked)
         partitioned = partition_html(
-            text=str(target),
+            text=str(linked),
             languages=settings.languages,
             skip_headers_and_footers=True,
         )
@@ -602,16 +716,24 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     trafilatura's lossy Markdown table renderer (which cannot represent
     colspan/rowspan or multi-line cells) while keeping trafilatura's strong
     prose extraction.
+
+    Links and images are kept as Markdown, with URLs made absolute
+    beforehand (trafilatura resolves link URLs itself, but not image ones):
+    a cleaned document with a dead or missing reference is worse than one
+    carrying an extra URL.
     """
     soup = BeautifulSoup(html, _PAGE_PARSER)
+    _resolve_page_urls(soup, url)
     tables, markers = _swap_tables_for_placeholders(soup)
 
     result = trafilatura.extract(
-        str(soup) if tables else html,
+        str(soup),
         url=url,
         output_format="markdown",
         include_comments=False,
         include_tables=not tables,
+        include_links=True,
+        include_images=True,
         favor_precision=True,
     )
     if not result:
@@ -787,6 +909,12 @@ _EXTRACT_SYSTEM = textwrap.dedent("""
     Return clean Markdown for prose (headings, lists, bold/italic where
     appropriate). Do not add any commentary of your own.
 
+    Links and images:
+    - Keep every link in the main content as a Markdown link [text](url)
+      and every image as ![alt](url).
+    - Copy URLs exactly as they appear in the href/src attribute; never
+      shorten, guess or invent one.
+
     Tables:
     - Every table in the page has been replaced by a placeholder token of
       the form CKBTABLEPLACEHOLDER...ENDCKBTABLE. The original table is put
@@ -924,7 +1052,9 @@ def _llm_evaluate(
     )
 
 
-def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtraction:
+def _llm_extract(
+    client: AzureOpenAI, deployment: str, html: str, url: str | None = None
+) -> LLMExtraction:
     """
     Ask the LLM to re-extract the main content from raw HTML.
 
@@ -934,6 +1064,9 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtracti
     keeps huge pages from tripping the model's context window. If the
     stripped HTML is still oversized, skips the LLM call and returns an
     "error" extraction so the caller falls back to BeautifulSoup.
+
+    Link and image URLs are made absolute first (see _resolve_page_urls) so
+    the model copies usable URLs rather than page-relative ones.
 
     Tables are swapped for placeholders before the HTML is stripped and sent,
     and the original HTML is restored afterwards, the same two-pass strategy
@@ -945,8 +1078,9 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> LLMExtracti
     fall back gracefully.
     """
     soup = BeautifulSoup(html, _PAGE_PARSER)
+    _resolve_page_urls(soup, url)
     tables, markers = _swap_tables_for_placeholders(soup)
-    stripped = _prestrip_html_for_llm(str(soup) if tables else html)
+    stripped = _prestrip_html_for_llm(str(soup))
     approx_tokens = _estimate_tokens(stripped)
     if approx_tokens > _LLM_INPUT_TOKEN_CEILING:
         logger.warning(
@@ -1051,7 +1185,7 @@ def clean_html(
         logger.warning(
             f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}"
         )
-        return _beautifulsoup_extract(html), CleaningReport(
+        return _beautifulsoup_extract(html, url=entity.url), CleaningReport(
             extraction_method="beautifulsoup"
         )
 
@@ -1073,7 +1207,7 @@ def clean_html(
         logger.warning(
             f"[html] trafilatura empty for {entity.url}; using BeautifulSoup before LLM eval"
         )
-        extracted = _beautifulsoup_extract(html)
+        extracted = _beautifulsoup_extract(html, url=entity.url)
         report.evaluated_method = report.extraction_method = "beautifulsoup"
 
     logger.info(f"[html] running LLM evaluation for {entity.url}")
@@ -1092,10 +1226,10 @@ def clean_html(
             f"[html] LLM eval failed, falling back to BeautifulSoup for {entity.url}"
         )
         report.extraction_method = "beautifulsoup"
-        return _beautifulsoup_extract(html), report
+        return _beautifulsoup_extract(html, url=entity.url), report
 
     logger.info(f"[html] LLM correction: re-extracting from raw HTML for {entity.url}")
-    extraction = _llm_extract(client, deployment, html)
+    extraction = _llm_extract(client, deployment, html, url=entity.url)
     report.extraction = extraction
     if extraction.content:
         report.extraction_method = "llm"
@@ -1106,7 +1240,7 @@ def clean_html(
         f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}"
     )
     report.extraction_method = "beautifulsoup"
-    return _beautifulsoup_extract(html), report
+    return _beautifulsoup_extract(html, url=entity.url), report
 
 
 # ---------------------------------------------------------------------------
