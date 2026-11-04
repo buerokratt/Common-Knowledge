@@ -1,0 +1,164 @@
+<mxfile host="65bd71144e">
+    <diagram id="c1" name="1. System Context">
+        <mxGraphModel dx="948" dy="613" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="c1-1" parent="1" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=20;fontStyle=1;fontColor=#222222;fontFamily=Helvetica;" value="Content External Pipeline — System Context" vertex="1">
+                    <mxGeometry height="40" width="900" x="40" y="10" as="geometry"/>
+                </mxCell>
+                <mxCell id="c1-2" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#1168BD;strokeColor=#F08705;strokeWidth=3;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;CKB&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Software system]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Scrapes and cleans public-sector content. Its &lt;b&gt;content-external&lt;/b&gt; pipeline chunks finished documents every hour.&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="160" width="340" x="60" y="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="c1-3" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Object store&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Azure Blob / S3]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Chunks (object_store sink) and manifest.json&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="140" width="280" x="620" y="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="c1-4" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;llm-module&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[External system]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Embeds chunks into Qdrant&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="280" x="620" y="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="c1-5" edge="1" parent="1" source="c1-2" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c1-3" value="manifest.json (always)&lt;br&gt;+ chunks">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c1-6" edge="1" parent="1" source="c1-2" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;dashed=1;dashPattern=6 4;strokeColor=#9673A6;fontColor=#6A4C93;" target="c1-4" value="Pushes chunks">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c1-7" parent="1" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fontSize=11;fillColor=#FAFAFA;strokeColor=#BBBBBB;fontColor=#333333;fontFamily=Helvetica;" value="&lt;b&gt;&amp;#8212;&amp;#8212;&lt;/b&gt; always &amp;nbsp;&amp;nbsp; &lt;span style=&#39;color:#9673A6&#39;&gt;&lt;b&gt;- - -&lt;/b&gt;&lt;/span&gt; one or the other, set per deployment by &lt;i&gt;CONTENT_SINK&lt;/i&gt;&lt;br&gt;&lt;i&gt;Target design. Only &lt;b&gt;GET /health&lt;/b&gt; is built today.&lt;/i&gt;" vertex="1">
+                    <mxGeometry height="60" width="860" x="40" y="420" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="c2" name="2. Container">
+        <mxGraphModel dx="1108" dy="717" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="c2-1" parent="1" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=20;fontStyle=1;fontColor=#222222;fontFamily=Helvetica;" value="Content External Pipeline — Container" vertex="1">
+                    <mxGeometry height="40" width="900" x="40" y="10" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-2" parent="1" style="rounded=1;arcSize=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;dashPattern=8 4;strokeColor=#444444;fontColor=#444444;align=left;verticalAlign=bottom;spacingLeft=10;spacingBottom=6;fontSize=12;fontFamily=Helvetica;" value="&lt;b&gt;CKB&lt;/b&gt;  [Software system]" vertex="1">
+                    <mxGeometry height="500" width="680" x="40" y="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-3" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#438DD5;strokeColor=#3C7FC0;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;CronManager + Ruuter internal&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Bürokratt DSL]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Hourly trigger, at :17&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="260" x="80" y="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-4" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#1168BD;strokeColor=#F08705;strokeWidth=3;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;content-external&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Python / FastAPI]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;NEW. Finds changed documents, chunks them, publishes them&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="140" width="260" x="420" y="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-5" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#438DD5;strokeColor=#3C7FC0;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;CKB database&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Resql → PostgreSQL]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;source_file rows&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="130" width="260" x="80" y="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-6" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#438DD5;strokeColor=#3C7FC0;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;CKB S3 bucket&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Object storage]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Cleaned text + metadata sidecars&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="130" width="260" x="420" y="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-7" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Object store&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Azure Blob / S3]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Chunks and manifest.json&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="140" width="280" x="820" y="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-8" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;llm-module&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[External system]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Embeds chunks into Qdrant&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="280" x="820" y="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-9" edge="1" parent="1" source="c2-3" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c2-4" value="Starts an export&lt;br&gt;[HTTP]">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-10" edge="1" parent="1" source="c2-4" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c2-5" value="Reads changed rows&lt;br&gt;(read-only)">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-11" edge="1" parent="1" source="c2-4" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c2-6" value="Reads cleaned text&lt;br&gt;(read-only)">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-12" edge="1" parent="1" source="c2-4" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c2-7" value="Writes manifest + chunks">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-13" edge="1" parent="1" source="c2-4" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;dashed=1;dashPattern=6 4;strokeColor=#9673A6;fontColor=#6A4C93;" target="c2-8" value="Pushes chunks [HTTPS]&lt;br&gt;endpoint not agreed yet">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c2-14" parent="1" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fontSize=11;fillColor=#FAFAFA;strokeColor=#BBBBBB;fontColor=#333333;fontFamily=Helvetica;" value="&lt;b&gt;&amp;#8212;&amp;#8212;&lt;/b&gt; always &amp;nbsp;&amp;nbsp; &lt;span style=&#39;color:#9673A6&#39;&gt;&lt;b&gt;- - -&lt;/b&gt;&lt;/span&gt; one or the other, set per deployment by &lt;i&gt;CONTENT_SINK&lt;/i&gt;&lt;br&gt;&lt;i&gt;Target design. Only &lt;b&gt;GET /health&lt;/b&gt; is built today.&lt;/i&gt;" vertex="1">
+                    <mxGeometry height="60" width="1060" x="40" y="600" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+    <diagram id="c3" name="3. Component">
+        <mxGraphModel dx="1334" dy="863" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="850" pageHeight="1100" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="c3-1" parent="1" style="text;html=1;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=20;fontStyle=1;fontColor=#222222;fontFamily=Helvetica;" value="content-external — Component" vertex="1">
+                    <mxGeometry height="40" width="900" x="20" y="10" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-2" parent="1" style="rounded=1;arcSize=1;whiteSpace=wrap;html=1;fillColor=none;dashed=1;dashPattern=8 4;strokeColor=#444444;fontColor=#444444;align=left;verticalAlign=bottom;spacingLeft=10;spacingBottom=6;fontSize=12;fontFamily=Helvetica;" value="&lt;b&gt;content-external&lt;/b&gt;  [Container]" vertex="1">
+                    <mxGeometry height="540" width="760" x="240" y="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-3" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Ruuter internal&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[CKB]&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="80" width="200" x="520" y="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-4" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#85BBF0;strokeColor=#5A9BD8;fontColor=#000000;" value="&lt;b style=&#39;font-size:13px&#39;&gt;API&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#333333&#39;&gt;[api/]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Receives the trigger, starts a run&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="90" width="200" x="520" y="190" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-5" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#D5E8D4;strokeColor=#82B366;fontColor=#000000;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Diff + chunker&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#333333&#39;&gt;[core/]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Pure logic: what changed, how to split it&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="200" x="280" y="340" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-6" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#85BBF0;strokeColor=#5A9BD8;fontColor=#000000;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Publish coordinator&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#333333&#39;&gt;[services/]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Runs each step; commits the manifest last&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="200" x="520" y="340" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-7" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#85BBF0;strokeColor=#5A9BD8;fontColor=#000000;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Manifest service&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#333333&#39;&gt;[services/]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Record of what is published&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="200" x="760" y="340" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-8" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#85BBF0;strokeColor=#5A9BD8;fontColor=#000000;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Document reader&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#333333&#39;&gt;[services/]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Fetches changed rows and their text&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="200" x="280" y="520" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-9" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#85BBF0;strokeColor=#5A9BD8;fontColor=#000000;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Sink&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#333333&#39;&gt;[sinks/]&lt;/span&gt;&lt;br&gt;&lt;br&gt;&lt;span style=&#39;font-size:11px&#39;&gt;Object store or llm-module, picked by CONTENT_SINK&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="110" width="200" x="520" y="520" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-10" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Resql&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[CKB]&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="80" width="200" x="20" y="470" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-11" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;CKB S3 bucket&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[CKB]&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="100" width="200" x="20" y="610" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-12" parent="1" style="shape=cylinder3;boundedLbl=1;backgroundOutline=1;size=12;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;Object store&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[Azure Blob / S3]&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="130" width="220" x="1080" y="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-13" parent="1" style="rounded=1;arcSize=6;whiteSpace=wrap;html=1;fontSize=11;fontFamily=Helvetica;fillColor=#8C8C8C;strokeColor=#6B6B6B;fontColor=#ffffff;" value="&lt;b style=&#39;font-size:13px&#39;&gt;llm-module&lt;/b&gt;&lt;br&gt;&lt;span style=&#39;font-size:10px;color:#E6EEF7&#39;&gt;[External system]&lt;/span&gt;" vertex="1">
+                    <mxGeometry height="100" width="220" x="1080" y="600" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-14" edge="1" parent="1" source="c3-3" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-4" value="POST /export_agency_async">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-15" edge="1" parent="1" source="c3-4" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-6" value="Runs export">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-16" edge="1" parent="1" source="c3-6" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-5" value="classify, chunk">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-17" edge="1" parent="1" source="c3-6" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-8" value="Get documents">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-18" edge="1" parent="1" source="c3-6" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-7" value="Load / commit">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-19" edge="1" parent="1" source="c3-6" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-9" value="Publish / delete">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-20" edge="1" parent="1" source="c3-8" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-10" value="SELECT">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-21" edge="1" parent="1" source="c3-8" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-11" value="Read">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-22" edge="1" parent="1" source="c3-7" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;" target="c3-12" value="manifest.json">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-23" edge="1" parent="1" source="c3-9" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;dashed=1;dashPattern=6 4;strokeColor=#9673A6;fontColor=#6A4C93;" target="c3-12" value="Chunks">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-24" edge="1" parent="1" source="c3-9" style="endArrow=blockThin;endFill=1;html=1;rounded=0;edgeStyle=none;strokeWidth=1.5;strokeColor=#707070;fontColor=#404040;fontSize=10;labelBackgroundColor=#ffffff;fontFamily=Helvetica;dashed=1;dashPattern=6 4;strokeColor=#9673A6;fontColor=#6A4C93;" target="c3-13" value="Chunks">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="c3-25" parent="1" style="rounded=0;whiteSpace=wrap;html=1;align=left;verticalAlign=top;spacing=10;fontSize=11;fillColor=#FAFAFA;strokeColor=#BBBBBB;fontColor=#333333;fontFamily=Helvetica;" value="&lt;b&gt;&amp;#8212;&amp;#8212;&lt;/b&gt; always &amp;nbsp;&amp;nbsp; &lt;span style=&#39;color:#9673A6&#39;&gt;&lt;b&gt;- - -&lt;/b&gt;&lt;/span&gt; one or the other, set per deployment by &lt;i&gt;CONTENT_SINK&lt;/i&gt;&lt;br&gt;&lt;i&gt;Target design. Only &lt;b&gt;GET /health&lt;/b&gt; is built today.&lt;/i&gt;" vertex="1">
+                    <mxGeometry height="60" width="1060" x="240" y="720" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

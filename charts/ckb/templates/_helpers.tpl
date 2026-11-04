@@ -98,15 +98,60 @@ What it refuses, and why:
 {{- if and (eq $method "approle") (not $va.auth.approleSecret.name) -}}
 {{- fail "contentExternal.vaultAgent.auth.method=approle needs contentExternal.vaultAgent.auth.approleSecret.name: a Secret holding the role_id and secret_id. Note that vault/init.sh gives secret_id a 24h TTL, so something must rotate that Secret — kubernetes auth needs no rotation." -}}
 {{- end -}}
-{{- range .Values.contentExternal.env -}}
+{{- range concat (.Values.contentExternal.env | default list) (.Values.contentExternal.extraEnv | default list) -}}
 {{- if has .name (list "VAULT_ADDR" "VAULT_TOKEN_PATH") -}}
-{{- fail (printf "contentExternal.env sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.vaultAddr / vaultAgent.tokenMountPath). Remove it from env." .name) -}}
+{{- fail (printf "contentExternal.env or extraEnv sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.vaultAddr / vaultAgent.tokenMountPath). Remove it." .name) -}}
 {{- end -}}
 {{- end -}}
 {{- if hasKey (.Values.contentExternal.podAnnotations | default dict) "vault.hashicorp.com/agent-inject" -}}
 {{- fail "contentExternal.vaultAgent is enabled AND podAnnotations asks the Vault Agent Injector for an agent. Use one: two agents write two tokens, and the service reads only one of them." -}}
 {{- end -}}
 {{- $method -}}
+{{- end -}}
+
+{{/*
+Stage H, chart side. Returns contentExternal.storeBackend, or aborts.
+
+The object-store backend is a scalar value rather than an env entry so one
+values.yaml serves every environment: staging flips it with --set, which on
+the env list would replace the whole list. The deployment renders
+CONTENT_EXTERNAL_STORE_BACKEND from it, and for azure_blob also
+AZURE_STORAGE_CONTAINER and VAULT_SECRET_PATH. Same shape as the helpers
+above: the deployment cannot render those without going through this.
+
+What it refuses, and why:
+- an unknown backend;
+- azure_blob with no container. The service would refuse the first run by
+  name; failing the render says so before anything is installed;
+- azure_blob with no Vault agent, neither the sidecar nor the injector
+  annotation. The credential is read through the agent's token, so every
+  run would fail with ConfigurationError;
+- a rendered name also set in env or extraEnv. Two values would win or lose
+  by list order.
+*/}}
+{{- define "ckb.contentExternal.storeBackend" -}}
+{{- $ce := .Values.contentExternal -}}
+{{- $backend := $ce.storeBackend | default "s3" -}}
+{{- if not (has $backend (list "s3" "azure_blob")) -}}
+{{- fail (printf "contentExternal.storeBackend must be s3 or azure_blob, got %q" $backend) -}}
+{{- end -}}
+{{- $rendered := list "CONTENT_EXTERNAL_STORE_BACKEND" -}}
+{{- if eq $backend "azure_blob" -}}
+{{- $rendered = concat $rendered (list "AZURE_STORAGE_CONTAINER" "VAULT_SECRET_PATH") -}}
+{{- if not ($ce.azure).container -}}
+{{- fail "contentExternal.storeBackend=azure_blob needs contentExternal.azure.container: the container must already exist, and this service never creates or guesses one." -}}
+{{- end -}}
+{{- $injector := hasKey ($ce.podAnnotations | default dict) "vault.hashicorp.com/agent-inject" -}}
+{{- if not (or $ce.vaultAgent.enabled $injector) -}}
+{{- fail "contentExternal.storeBackend=azure_blob reads its credential from Vault through an agent token: set contentExternal.vaultAgent.enabled=true (with serviceAccount.create=true for kubernetes auth), or use the Vault Agent Injector's annotations." -}}
+{{- end -}}
+{{- end -}}
+{{- range concat ($ce.env | default list) ($ce.extraEnv | default list) -}}
+{{- if has .name $rendered -}}
+{{- fail (printf "contentExternal.env or extraEnv sets %s, which the deployment renders from contentExternal.storeBackend / azure. Remove it and set those values instead." .name) -}}
+{{- end -}}
+{{- end -}}
+{{- $backend -}}
 {{- end -}}
 
 {{/*

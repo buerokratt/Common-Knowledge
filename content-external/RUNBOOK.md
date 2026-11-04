@@ -23,6 +23,11 @@ the group `scheduler`. In HTTP commands here, `<cron-manager>` and
 Submission is not completion. Read the summary in `/health`'s `last_run`,
 the `content-external run` log line, or the full CLI report from
 `--output-json`; see [Observability](README.md#observability--how-to-tell-this-is-working).
+A run refused before the export starts (a configuration, Vault or
+store-build error) writes no `--output-json` report and exits `2` for a
+`ConfigurationError`, `1` otherwise. Its type is in `/health`'s
+`last_run.error_type` and the `content-external run` line; its cause is only
+in the `content-external error` log line.
 
 | Outcome | What to do |
 |---|---|
@@ -57,9 +62,12 @@ semantics and first-run safeguards are in
 
 1. Keep `trigger_content_export` non-firing with `trigger: "false"` in
    [scheduler.yml](../DSL/CronManager/scheduler.yml).
-2. Confirm the exporter container is up, the destination bucket is
-   accessible, and both sets of credentials work: CKB's `S3_*` / `AWS_*`
-   read keys and the destination's own keys. See
+2. Confirm the exporter container is up, the destination is accessible, and
+   both sets of credentials work: CKB's `S3_*` / `AWS_*` read keys, and the
+   destination's credentials — the `EXTERNAL_S3_*` keys for `s3`, or for
+   `azure_blob` the Vault secret in
+   [Azure Blob and Vault](#azure-blob-and-vault) plus a container that already
+   exists. See
    [Environment variables](README.md#environment-variables) and
    [Reading CKB's bucket](README.md#reading-ckbs-bucket). Check the service:
 
@@ -99,10 +107,21 @@ up once they are finished.
 
 ## Azure Blob and Vault
 
-With `CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`, every run reads its
-credential from the Vault KV v2 secret `blob/connections/azure_blob/content`.
-`vault/init.sh` seeds it with `REPLACE_ME` placeholders, and a run refuses
-them. Replace the secret with `account_url`
+Azure is selected per deployment: on Compose with
+`CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`, `AZURE_STORAGE_CONTAINER` and
+`COMPOSE_PROFILES=azure-blob` in the root `.env`; on Helm with
+`contentExternal.storeBackend=azure_blob`, `contentExternal.azure.container`
+and `contentExternal.vaultAgent.enabled=true` (never put those variable names
+in `env` or `extraEnv`; the chart refuses them). Step by step:
+[docs/staging-deployment.md](docs/staging-deployment.md).
+
+Every run then reads its credential from the Vault KV v2 secret at
+`VAULT_SECRET_PATH` (`blob/connections/azure_blob/content`; on Helm,
+`contentExternal.azure.vaultSecretPath`). `vault/init.sh` seeds it with
+`REPLACE_ME` placeholders, and a run refuses them. Replace the secret with
+`vault kv put`, not `kv patch` (a patch keeps the placeholder `account_key`
+beside the new form, and the secret is refused for holding two), with
+`account_url`
 (`https://<account>.blob.core.windows.net`, no query string) plus exactly one
 of:
 
@@ -118,9 +137,9 @@ the `content-external run` log line:
 
 | `error_type` | Cause | What to do |
 |---|---|---|
-| `ConfigurationError` | The secret still holds a placeholder, `account_url` is missing or has a query string, it does not hold exactly one credential form, or Vault answered 403/404 | Fix the secret or the `content-external-policy` grant. The next tick fails the same way until then |
+| `ConfigurationError` | The secret still holds a placeholder, `account_url` is missing or has a query string, it does not hold exactly one credential form, Vault answered 403/404, `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` is empty, or the agent token file is missing or empty. On Compose a 403 also follows an expired AppRole `secret_id` (24h TTL), and a missing token follows an unset `azure-blob` profile | Read the `content-external error` line for which one. Fix the secret, the setting or the `content-external-policy` grant. On Compose, start the `azure-blob` profile, or re-run `vault-init` (`docker compose up --force-recreate --no-deps vault-init`) to mint a new `secret_id`, at least daily. The next tick fails the same way until then |
 | `StoreError`, retryable | Vault unreachable, timed out, 429 or 5xx | Nothing; the next tick retries |
-| `StoreError`, permanent | Any other Vault 4xx, or a response that is not a KV v2 secret | Check `VAULT_ADDR` and `VAULT_SECRET_PATH` |
+| `StoreError`, permanent | Any other Vault 4xx, or a response that is not a KV v2 secret | Check `VAULT_ADDR` and `VAULT_SECRET_PATH` (on Helm, `contentExternal.vaultAgent.vaultAddr` and `contentExternal.azure.vaultSecretPath`) |
 
 The image runs as root, which is the only reason it can read the agent's
 token file (owned by `vault:vault`, mode 0640). Adding a `USER` to the
@@ -808,8 +827,10 @@ at the destination.** It is never scheduled and has no HTTP route.
      `run_ops drain` until `still_unresolved=0`.
 
    The CLI exits `0` for `purged`, `purged_unverified` and
-   `nothing_to_purge`, and `1` for `incomplete`, `busy` and `failed`, so a
-   script never carries on past a purge that did not finish.
+   `nothing_to_purge`, `1` for `incomplete`, `busy` and `failed`, and `2` for
+   a usage or configuration error that stopped it before it started (a
+   `--confirm` mismatch included), so a script never carries on past a purge
+   that did not finish.
 5. The manifest is kept, with no documents and no watermark. Re-enabling the
    export later republishes the agency in full.
 
@@ -855,8 +876,9 @@ deletion journal the old collection left open. If the change was not
 deliberate, restore the previous value.
 
 **The old collection is never removed by this service.** Neither
-`run_purge` nor the stale sweep can see it, and startup refuses
-`contextual_chunks_*` as a target.
+`run_ops purge` nor the stale sweep can see it, and startup refuses
+`contextual_chunks_azure`, `contextual_chunks_aws` and anything in
+`LLM_MODULE_PROTECTED_COLLECTIONS` as a target.
 
 **The hourly ZIP job stays (L24).** The llm-module stops pulling
 `zipped/{agency}.zip`, but the Global Classifier still consumes it. Do not

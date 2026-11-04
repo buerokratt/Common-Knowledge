@@ -2,16 +2,16 @@
 
 Reads CKB's cleaned corpus, chunks it, and publishes it to an external
 retrieval destination — an object store (S3-compatible / Azure Blob) or the
-llm-module, chosen per deployment. See
-[content-external-pipeline.md](../content-external-pipeline.md) for the full
-design and
-[content-external-pipeline-task-breakdown.md](../content-external-pipeline-task-breakdown.md)
-for the stage-by-stage build plan.
+llm-module, chosen per deployment. Operating the service is in
+[RUNBOOK.md](RUNBOOK.md), and a step-by-step staging deployment is in
+[docs/staging-deployment.md](docs/staging-deployment.md).
 
 ## ⚠️ Global Classifier safety — read this first
 
 This service shares a database and an S3 bucket with the Global Classifier's
-data path (the hourly ZIP job at `GET /ckb/client/data/import`). Six rules
+data path: the hourly ZIP job (`trigger_zipping` → Ruuter-internal
+`GET /ckb/pipeline/zip`) and the Classifier's download endpoint
+`GET /ckb/client/data/import`. Six rules
 keep that path intact. Each has a **silent** failure mode if violated — there
 is no error, no log line, just a Classifier that quietly goes stale.
 
@@ -49,7 +49,7 @@ pattern as `cleaning/`.
 ```bash
 uv sync --frozen --extra content-external --group dev
 CONTENT_WORK_DIR=/tmp/content-external-work \
-  uv run uvicorn exporter.api.app:app --reload --port 8125
+  uv run uvicorn --app-dir content-external exporter.api.app:app --reload --port 8125
 ```
 
 `CONTENT_WORK_DIR` has no default and the service refuses to start without
@@ -71,27 +71,43 @@ it — see the note in the table below.
 | `EXTERNAL_S3_ENDPOINT_URL` / `EXTERNAL_S3_BUCKET_NAME` | for a run on `object_store` + `s3` | The destination: any S3-compatible endpoint (SeaweedFS, MinIO, AWS), chosen by URL alone. Path-style addressing. Not checked at startup, so `/health` comes up before a destination exists. A run refuses and names every missing variable |
 | `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` | for a run on `object_store` + `s3` | The destination's **own** credentials. They are passed to boto3 explicitly and never come from its default chain, which would pick up `AWS_*`: those are CKB's read-only keys and are never used to write (rule 6). A blank value is refused rather than defaulted. They need `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject` and `s3:ListBucket` on the destination bucket: every delete first HEADs the key to tell `deleted` from `missing`, and HEAD is authorised as a GET. Without `ListBucket`, a missing key answers 403 and is reported as an error, never as absent. The bucket must not be CKB's own (`S3_BUCKET_NAME` on `S3_ENDPOINT_URL`), and no prefix may contain a `scrapped-data` segment (rule 1). In the chart the credentials come from a Secret (`contentExternal.externalStore.secret`) |
 | `EXTERNAL_S3_REGION` | no (default `us-east-1`) | Region to sign with. S3-compatible stores ignore the value |
-| `EXTERNAL_S3_SUPPORTS_BATCH_DELETE` | no (default `true`) | Set `false` for a store whose `DeleteObjects` is missing or partial. Deletes then go one key at a time, with the same per-key outcome |
+| `EXTERNAL_S3_SUPPORTS_BATCH_DELETE` | no (default `true`) | S3 backend only. Set `false` for a store whose `DeleteObjects` is missing or partial. Deletes then go one key at a time, with the same per-key outcome. Azure Blob always deletes through the Blob Batch API (up to 256 keys per batch) and has no equivalent setting |
 | `MANIFEST_STORE_BACKEND` / `MANIFEST_STORE_ENDPOINT_URL` / `MANIFEST_STORE_BUCKET` / `MANIFEST_STORE_PREFIX` | required for `llm_module`; optional for `object_store` (defaults to the sink's own store/prefix) | Where the per-agency manifest is committed. The `llm_module` sink has nowhere to hold it, so these must be set explicitly for that deployment — startup fails otherwise. `MANIFEST_STORE_BACKEND` is `s3` \| `azure_blob` \| `local`, or blank to inherit. An explicit `s3` manifest store authenticates with `EXTERNAL_S3_ACCESS_KEY_ID` / `EXTERNAL_S3_SECRET_ACCESS_KEY` / `EXTERNAL_S3_REGION` (on `llm_module` there is no object-store destination, so those keys are the manifest store's), checked at startup. They are sent to `MANIFEST_STORE_ENDPOINT_URL`, so on an `object_store` deployment with a separate manifest bucket they must be valid on both endpoints. Its bucket must not be CKB's own. An explicit `azure_blob` manifest store requires `MANIFEST_STORE_BUCKET` and `VAULT_SECRET_PATH` at startup; its account URL and credentials come from Vault, ignoring `MANIFEST_STORE_ENDPOINT_URL` and `EXTERNAL_S3_*`. Any `MANIFEST_STORE_*` value set beside an empty backend is ignored, and startup logs a warning naming it |
 | `MANIFEST_STORE_ALLOW_LOCAL` | no (default `false`) | Development only. `MANIFEST_STORE_BACKEND=local` puts the manifest on `CONTENT_WORK_DIR` and is refused without this flag — see the warning below |
 | `LLM_MODULE_*` (base URL, timeouts, batch caps, auth path) | required for `llm_module` | The llm-module sink's wire contract. `LLM_MODULE_BASE_URL` must be `https://`. `LLM_MODULE_VAULT_SECRET_PATH` names the KV v2 secret holding `{"token": …}` (compose: `content-external/llm_module`), read through `VAULT_TOKEN_PATH` on every operation. Not used by the `object_store` sink |
 | `LLM_MODULE_COLLECTION` | required for `llm_module` | L19: the **physical** collection this deployment writes to, in every request path (`/ingest/v1/collections/{collection}/…`). A new one beside the live corpus, never the retrieval alias, and never `contextual_chunks_azure` / `contextual_chunks_aws` (refused at startup). 1–64 of `A-Z a-z 0-9 _ -`. Part of the manifest's sink_id (`llm_module:<collection>`), so changing it against an existing manifest fails the run; a re-bootstrap into another collection also takes a fresh `MANIFEST_STORE_PREFIX`. See [docs/llm-module-cutover.md](docs/llm-module-cutover.md) |
-| `LLM_MODULE_PROTECTED_COLLECTIONS` | no (default empty) | Comma-separated names `LLM_MODULE_COLLECTION` may never be, case-insensitive, on top of the built-in `contextual_chunks_*`. Put the **retrieval alias** here, and any other live collection on that llm-module: startup refuses them, and so does the sink factory |
+| `LLM_MODULE_PROTECTED_COLLECTIONS` | no (default empty) | Comma-separated names `LLM_MODULE_COLLECTION` may never be, case-insensitive, on top of the built-in `contextual_chunks_azure` and `contextual_chunks_aws`. Put the **retrieval alias** here, and any other live collection on that llm-module: startup refuses them, and so does the sink factory |
 | `LLM_MODULE_CHUNK_PROFILE_CONFIRMED` | required for `llm_module` | The `CHUNK_PROFILE` name typed again, once it has been checked against the llm-module embedder's token limit (contract §13 q1). Startup refuses `llm_module` until the two match. Compose and the chart set `CHUNK_PROFILE` for every deployment, so it cannot show the check happened on its own. Never give this a default on a deployment surface |
 | `LLM_MODULE_ENABLE_METADATA_MERGE` | no (default `false`) | L25. `true` lets a metadata-only change send the record alone (contract §8). Off, every metadata change is a full re-push and a re-embed, which is always correct. Set it only once the llm-module is confirmed to apply a merge all-or-nothing: a far side that answered a merge without applying it would leave stale metadata that nothing retries |
 | `LLM_MODULE_ALLOW_PROPOSED_CONTRACT` | no (default `false`) | Development only, and **not needed now that the contract is agreed** (`AGREED_TERMS.status = "agreed"`, recorded 2026-10-28). It matters only if the agreement is withdrawn and `llm_module` is refused again |
 | `STALE_SWEEP_ENABLED` | no (default `false`) | L10. After a committed run that saw the whole corpus and held nothing back, ask the destination to delete what was synced before the run and is not in the committed manifest's keep list. Never changes a run's outcome; reported as `stale_sweep=` (`disabled`, `refused`, `not_supported`, `failed`, `done`) |
 | `DRAIN_DELETES_ENABLED` | no (default `false`) | J2. Off, `POST /drain_deletions` only reports what it would retry. Run it that way for one full cycle and read the reports before setting `true`. The CLI's `run_ops drain` deletes unless `--dry-run` |
 | `RECONCILE_REPAIR_ENABLED` | no (default `false`) | J5. Off, `POST /reconcile_async` only reports drift. `true` also removes orphaned tail chunks, on a sink that can list. The CLI's `run_ops reconcile` repairs only with `--repair` |
-| `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; the llm-module's is its owner's to state), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
+| `EXPORT_CONCURRENCY` | no (default `4`, max `16`) | Documents prepared and published in parallel: across documents, never within one, so a document's record still lands before its chunks. The run uses the lower of this and the sink's declared ceiling (`object_store`: 16; `llm_module`: 2, per the agreed contract), and logs when it is capped. Peak memory is `EXPORT_CONCURRENCY × MAX_DOCUMENT_BYTES × 3` plus overhead, asserted at startup against the container limit. A concurrent run commits the same manifest bytes as a sequential one |
 | `SINK_FAILURE_ABORT_THRESHOLD` | no (default `25`) | Consecutive **permanent** upsert failures (a refused credential, a missing bucket, a wrong base URL) after which the run aborts with nothing committed and reports `failed` / `SystemicSinkFailure`. A published document resets the count, and retryable failures never count. One permanent failure is a document's problem: it is held and retried. This many in a row is the destination's |
 | `DIFF_ON_MISSING_MANIFEST` | no (default `first_run`) | `first_run` treats a missing manifest as a bootstrap. `fail` refuses it. Flip to `fail` once the bootstrap is done. Even under `first_run`, a first run refuses a destination that already holds the agency's content (see *Running an export*) |
 | `BOOTSTRAP_CHECKPOINT_EVERY` | no (default `250`) | On a first run, commit the manifest every N published documents, with the watermark withheld, so a killed bootstrap resumes |
 
 ### Azure Blob
 
-Set `CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`, `AZURE_STORAGE_CONTAINER`
-and `VAULT_SECRET_PATH`. The Vault KV v2 secret holds `account_url` plus
+The service reads `CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`,
+`AZURE_STORAGE_CONTAINER` and `VAULT_SECRET_PATH`. How each deployment sets
+them:
+
+- **Compose:** set `CONTENT_EXTERNAL_STORE_BACKEND=azure_blob`,
+  `AZURE_STORAGE_CONTAINER` and `COMPOSE_PROFILES=azure-blob` (which starts
+  `vault-agent-content`) in the root `.env`. `VAULT_SECRET_PATH` is fixed in
+  `docker-compose.yml`.
+- **Helm:** set `contentExternal.storeBackend=azure_blob`,
+  `contentExternal.azure.container` and `contentExternal.vaultAgent.enabled=true`;
+  `contentExternal.azure.vaultSecretPath` defaults to
+  `blob/connections/azure_blob/content`. The chart renders the three variables
+  from these values and refuses to render if any of them is also set in
+  `contentExternal.env` or `extraEnv`, if the container is empty, or if no
+  Vault agent is configured.
+
+Step by step: [docs/staging-deployment.md](docs/staging-deployment.md). The
+Vault KV v2 secret holds `account_url` plus
 exactly one credential form: `account_key`, `sas_token`, or all three of
 `tenant_id`, `client_id` and `client_secret` for a service principal. Partial
 or mixed forms are refused. Credentials are explicit; no default credential
@@ -108,9 +124,12 @@ An explicit Azure manifest store uses `MANIFEST_STORE_BUCKET` with the same
 Vault account and credentials. With no explicit manifest backend, it inherits
 the destination container and prefix.
 
-Local compose stays on `s3` (SeaweedFS/MinIO); an Azure run also needs the
-agent (`docker compose --profile azure-blob up -d`). The Azure backend has
-not yet run against a real Azure account.
+Local compose stays on `s3` (SeaweedFS/MinIO) unless `.env` says otherwise.
+The Azure backend has run end to end against the Azurite emulator, but not
+yet against a real Azure account. Deletes are unverified there: Azurite
+rejects Blob Batch requests, and the Azure store always deletes in batches,
+so check the first real delete in staging (a refused delete waits in the
+drain journal, it is never lost).
 
 ### Reading CKB's bucket
 
@@ -128,8 +147,11 @@ therefore fails the run. A definitive object 404 is handled as missing.
 
 These are a different bucket and credentials from `EXTERNAL_S3_*`, which
 publishes the output. Reusing file-processing's keys is acceptable for
-**local development only**. The reader always uses its own boto3 client
-and never calls file-processing (Global Classifier rule 6).
+**local development only**. On Compose that is what happens: content-external
+and file-processing read the same `AWS_*` variables from the root `.env`, so a
+dedicated key needs a `docker-compose.yml` change. The chart keeps them apart
+through `contentExternal.sourceBucket.secret`. The reader always uses its own
+boto3 client and never calls file-processing (Global Classifier rule 6).
 
 ### The startup validation matrix
 
@@ -143,7 +165,7 @@ so, which is indistinguishable from never having run.
 | `object_store`, no `MANIFEST_STORE_*` | **OK** — inherits the sink's own store, bucket and prefix. Zero new configuration for this deployment |
 | `llm_module`, no manifest store | **refuses to start** — names `MANIFEST_STORE_BACKEND` |
 | `llm_module`, no `LLM_MODULE_BASE_URL`, no `LLM_MODULE_COLLECTION` or no `LLM_MODULE_VAULT_SECRET_PATH` | **refuses to start** — names whichever is missing |
-| `llm_module` with `LLM_MODULE_COLLECTION` set to `contextual_chunks_*`, or not one plain path segment | **refuses to start** — L19: bootstrap beside, never in place |
+| `llm_module` with `LLM_MODULE_COLLECTION` set to `contextual_chunks_azure`, `contextual_chunks_aws` or a name in `LLM_MODULE_PROTECTED_COLLECTIONS`, or not one plain path segment | **refuses to start** — L19: bootstrap beside, never in place |
 | `MANIFEST_STORE_BACKEND=local` without `MANIFEST_STORE_ALLOW_LOCAL=true` | **refuses to start** |
 | `MANIFEST_STORE_BACKEND=azure_blob` | **OK** with `MANIFEST_STORE_BUCKET` and `VAULT_SECRET_PATH`; refuses to start if either is missing |
 | `llm_module` with no explicit `CHUNK_PROFILE` | **refuses to start** — names `CHUNK_PROFILE`; the default was chosen for a destination that embeds its own chunks |
@@ -235,8 +257,10 @@ endpoint is unauthenticated. The sanitised message is in the
 `content-external error` log line (below).
 
 `run_observed_full_corpus` is true only for a run that classified every row.
-A `--limit` run, an aborted run and any `busy` or `failed` run report false.
-It is `null` on a record written before the field existed.
+A `--limit` run, an aborted run, and a `busy` or `failed` run reported by the
+coordinator report false. It is `null` on a record written before the field
+existed, on a `busy` the endpoint itself refused, and on a failure reported
+before the coordinator ran.
 
 `stale_sweep` and `stale_swept_count` are the L10 sweep's result, the same
 value as the run line's `stale_sweep=`. `not_run` means the sweep is enabled
@@ -271,10 +295,11 @@ docker logs content-external | grep 'content-external run'
 ```
 
 ```
-content-external run agency_id=… deletions_recorded=0 docs_content_changed=4 \
-  docs_deleted=1 docs_metadata_changed=0 docs_new=12 docs_skipped=3 \
-  docs_unchanged=340 duration_seconds=251.400 error_type=- full_corpus=true \
-  outcome=success run_id=r-2026-09-16T17 sink=object_store upsert_deferred=0 \
+content-external run agency_id=… dead_lettered=0 deletions_recorded=0 \
+  docs_content_changed=4 docs_deleted=1 docs_metadata_changed=0 docs_new=12 \
+  docs_skipped=3 docs_unchanged=340 duration_seconds=251.400 error_type=- \
+  full_corpus=true outcome=success rechunk=- run_id=r-2026-09-16T17 \
+  sink=object_store stale_sweep=disabled upsert_deferred=0 \
   upsert_failed_permanent=1 upsert_failed_retryable=0 upsert_published=15
 ```
 
@@ -538,7 +563,7 @@ deletes through the sink like any other.
   journal for the drain.
 - **The next export republishes every finished document CKB still holds**,
   so disable the export's schedule first. See
-  [RUNBOOK.md](RUNBOOK.md#purging-an-agency).
+  [RUNBOOK.md](RUNBOOK.md#purging-an-agency-j7-j8).
 
 The drain and reconcile have schedules of their own, shipped disabled like
 the export's; see [Schedule](#schedule). Until they are enabled, both
@@ -698,7 +723,7 @@ not a fault in this run.
 | Per-document upsert | `metadata.json` + `chunks/NNNNN.json` | one request carrying the record + its chunks | The sink owns batching; the coordinator calls `upsert_document()` either way |
 | Deterministic addressing | blob key from `ids.py` | `chunk_id` as the point id — a contract requirement | If the far side re-keys on a content hash instead, idempotency is void |
 | `list` | yes | no | Reconcile degrades to manifest-trusted reporting; the orphan sweep uses `synced_at` instead of a listing |
-| Batch delete | yes, or per-key fallback | batches of up to 500 document ids, one item each; tails by point id | `DeleteOutcome` is identical either way — a missing batch API stays a performance note |
+| Batch delete | s3: yes, or per-key with `EXTERNAL_S3_SUPPORTS_BATCH_DELETE=false`; azure_blob: always Blob Batch | batches of up to 500 document ids, one item each; tails by point id | `DeleteOutcome` is identical either way — a missing batch API stays a performance note |
 | Stale sweep (`STALE_SWEEP_ENABLED`) | not supported — the ordinal tail rule (Stage J) | `synced_at < run start` **and not in the manifest's keep list** (agreed: §13 q4, q12) | Reported as `stale_sweep=not_supported`; never improvised |
 | Agency delete (purge) | prefix delete | by the filterable `agency_id` (agreed: §13 q4, q11) | The purge's residue step reports `not_supported` |
 | Re-chunk (a fingerprint change) | a longer run | a full corpus **re-embed** | On the llm-module sink the run is refused until an operator passes `--accept-rechunk` (RUNBOOK) |
@@ -787,7 +812,14 @@ path, written only where nothing is stored yet:
 `content-external/llm_module` — deliberately outside `llm/connections/*`,
 which other services' policies can read — and
 `blob/connections/azure_blob/content`. A placeholder is refused, never
-sent. In a cluster, `contentExternal.vaultAgent.enabled: true` runs the same
+sent. Write the real secret with `vault kv put`, not `kv patch`: a patch keeps
+the placeholder `account_key` beside the new form, and the secret is refused
+for holding two. The compose AppRole's `secret_id` expires 24 hours after
+`vault-init` mints it and is renewed only when `vault-init` runs again, so
+re-run it at least daily
+(`docker compose up --force-recreate --no-deps vault-init`); otherwise the
+agent cannot re-authenticate and every run reads the credential with an
+expired token (`ConfigurationError`, Vault 403). In a cluster, `contentExternal.vaultAgent.enabled: true` runs the same
 agent as a sidecar. It authenticates with the pod's service account
 (Kubernetes auth, the default, so there is nothing to rotate) or with
 AppRole, keeps the token in a memory-backed volume, and points
