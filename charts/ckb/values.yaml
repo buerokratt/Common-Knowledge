@@ -585,6 +585,9 @@ contentExternal:
   nameOverride: content-external
   image:
     repository: ghcr.io/buerokratt/common-knowledge
+    # content-external-<RELEASE>-<VERSION>-<BUILD>-<FIX> from
+    # .env.content-external, as .github/workflows/build-content-external.yml
+    # tags it. Bump both together.
     tag: content-external-dev-1-1-1
     pullPolicy: IfNotPresent
   service:
@@ -699,8 +702,31 @@ contentExternal:
       value: "object_store"
     - name: CHUNK_PROFILE
       value: "azure_native"
+  # Per-environment additions, appended after env. A deploy job can set these
+  # without restating env, which Helm would replace whole:
+  #   --set-json 'contentExternal.extraEnv=[{"name":"DIFF_ON_MISSING_MANIFEST","value":"fail"}]'
+  extraEnv: []
+  # The object-store sink's backend: s3 (externalStore below) or azure_blob.
+  # Scalars rather than env entries so an environment flips them with --set:
+  #   --set contentExternal.storeBackend=azure_blob
+  #   --set contentExternal.azure.container=<container>
+  #   --set contentExternal.vaultAgent.enabled=true
+  #   --set contentExternal.serviceAccount.create=true
+  # The deployment renders CONTENT_EXTERNAL_STORE_BACKEND from storeBackend,
+  # and for azure_blob also AZURE_STORAGE_CONTAINER and VAULT_SECRET_PATH.
+  # Rendering refuses azure_blob without a container or a Vault agent, and
+  # any of those three names also set in env or extraEnv. Before the first
+  # Azure run: the Vault secret at azure.vaultSecretPath holds account_url
+  # plus exactly one credential form (content-external/RUNBOOK.md, "Azure
+  # Blob and Vault"), the container already exists (this service never
+  # creates one), and the bootstrap follows content-external/RUNBOOK.md,
+  # "First deployment (bootstrap)". The manifest lives in the container too.
+  storeBackend: s3
+  azure:
+    container: ""
+    vaultSecretPath: "blob/connections/azure_blob/content"
   # L11's credential path for an llm_module deployment — see the comment
-  # above. Empty for object_store, which needs no Vault.
+  # above. Empty for an s3 object_store, which needs no Vault.
   podAnnotations: {}
   extraVolumes: []
   extraVolumeMounts: []
@@ -718,7 +744,8 @@ contentExternal:
   # `credential unavailable`) and a non-root agent cannot read its role_id.
   podSecurityContext: {}
   # L11: the built-in Vault Agent sidecar (option 1 above). Off by default;
-  # an object_store deployment needs no Vault at all.
+  # an s3 object_store deployment needs no Vault at all. azure_blob and
+  # llm_module do: their credentials are read through this agent's token.
   #
   # It keeps a token at <tokenMountPath>/token in a memory-backed emptyDir,
   # renewed and re-authenticated by the agent, and the chart points

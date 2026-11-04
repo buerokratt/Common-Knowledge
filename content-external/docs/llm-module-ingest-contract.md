@@ -5,8 +5,10 @@
 > proposed. Each wire question in [§13](#13-questions-for-the-llm-module-owner-and-their-recorded-answers)
 > therefore has a recorded answer, and the exporter runs under them:
 > `AGREED_TERMS.status` is `agreed`, so `CONTENT_SINK=llm_module` starts
-> without the development flag, and metadata merges, the agency delete, the
-> keep-list sweep and read-back are all on.
+> without the development flag. The agency delete and read-back are on.
+> Metadata merges and the keep-list sweep are agreed but stay off until a
+> deployment sets `LLM_MODULE_ENABLE_METADATA_MERGE=true` (§8) or
+> `STALE_SWEEP_ENABLED=true` (§10).
 >
 > **What the assumption does not cover.** Three questions ask for facts only
 > the llm-module can supply, so they stay open: q1 (embedding model and token
@@ -373,8 +375,14 @@ document instead and counts each one in its run report.
 ## 9. Deletes
 
 Every delete uses the same headers as an upsert (§1), the same
-`Idempotency-Key` scheme (§6, with `del` in place of the part), and the same
-item-by-item response (§3). A delete item's status means:
+`Idempotency-Key` scheme (§6) with a delete segment in place of the part, and
+the same item-by-item response (§3). The keys are:
+
+- whole documents (§9.1): `{collection}:{run_id}:del:b{batch}[:r{round}]:{digest}`,
+  with no `{document_id}`, because one request carries up to
+  `DELETE_BATCH_IDS` documents;
+- tail chunks (§9.2): `{collection}:{run_id}:{document_id}:del:b{batch}[:r{round}]:{digest}`;
+- a whole agency (§9.3): `{collection}:{run_id}:del-agency:{digest}`. A delete item's status means:
 
 | Item status | The exporter treats it as |
 |---|---|

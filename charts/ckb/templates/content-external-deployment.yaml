@@ -5,6 +5,7 @@
 {{- $vaultMethod = include "ckb.contentExternal.vaultAgentMethod" . }}
 {{- end }}
 {{- $serviceAccount := include "ckb.contentExternal.serviceAccountName" . }}
+{{- $storeBackend := include "ckb.contentExternal.storeBackend" . }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -42,9 +43,12 @@ spec:
         {{- end }}
       {{- end }}
     spec:
-      {{- if $serviceAccount }}
-      serviceAccountName: {{ $serviceAccount }}
-      {{- end }}
+      # Always rendered, `default` when the namespace default is meant. An
+      # upgrade that omits it (serviceAccount.create switched off, e.g. back
+      # from azure_blob to s3) leaves it refilled from the deprecated
+      # serviceAccount alias, and the new pods then demand the account that
+      # same upgrade deleted.
+      serviceAccountName: {{ $serviceAccount | default "default" }}
       {{- with .Values.contentExternal.podSecurityContext }}
       securityContext:
         {{- toYaml . | nindent 8 }}
@@ -64,6 +68,21 @@ spec:
             {{- range .Values.contentExternal.env }}
             - name: {{ .name }}
               value: {{ .value | quote }}
+            {{- end }}
+            {{- range .Values.contentExternal.extraEnv }}
+            - name: {{ .name }}
+              value: {{ .value | quote }}
+            {{- end }}
+            # Stage H: the object-store backend, from contentExternal.storeBackend
+            # and contentExternal.azure. storeBackend refuses azure_blob without
+            # a container or a Vault agent, and these names set elsewhere too.
+            - name: CONTENT_EXTERNAL_STORE_BACKEND
+              value: {{ $storeBackend | quote }}
+            {{- if eq $storeBackend "azure_blob" }}
+            - name: AZURE_STORAGE_CONTAINER
+              value: {{ .Values.contentExternal.azure.container | quote }}
+            - name: VAULT_SECRET_PATH
+              value: {{ .Values.contentExternal.azure.vaultSecretPath | quote }}
             {{- end }}
             {{- if $va.enabled }}
             # L11: the token the sidecar below keeps fresh, read on every
