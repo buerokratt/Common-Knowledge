@@ -293,6 +293,24 @@ class TestTrafilaturaFormatting:
         assert _ensure_page_title("Page", "Body").startswith("# Page\n\nBody")
         assert _ensure_page_title("Page", "# Page\n\nBody") == "# Page\n\nBody"
 
+    def test_news_date_and_lead_kept(self) -> None:
+        from worker.tasks import _deterministic_extract
+
+        lead = "The agency will be at the fair on all three days and focuses on plant protection this year."
+        html = f"""<html><body><main><div class="card-body"><h1>Fair news</h1>
+          <p class="card-text vp-date">22.04.2022 | 13:39</p></div>
+          <div class="block-lead-text"><div class="lead">{lead}</div></div>
+          <article><p>{_LONG_PARA}</p><p>{_LONG_PARA}</p></article></main></body></html>"""
+        result = _deterministic_extract(html) or ""
+        assert result.startswith(f"# Fair news\n\n22.04.2022 | 13:39\n\n{lead}")
+        assert result.count(lead) == 1
+
+    def test_header_not_duplicated(self) -> None:
+        from worker.tasks import _ensure_page_header
+
+        md = "# T\n\n01.02.2024\n\nLead"
+        assert _ensure_page_header(("T", "01.02.2024", ""), md) == md
+
 
 class TestCloudflareEmails:
     def test_decodes_protected_link(self) -> None:
@@ -393,6 +411,16 @@ class TestMainRegionExtract:
           <div class="template__sidebar"></div></div></section>
           </main></body></html>"""
         assert section in (_deterministic_extract(html) or "")
+
+    def test_site_footer_inside_main_dropped(self) -> None:
+        from worker.tasks import _main_region_extract
+
+        html = f"""<html><body><main><h1>T</h1><p>{_LONG_PARA}</p>
+          <article><p>{_LONG_PARA}</p><footer>Author: Mari</footer></article>
+          <footer class="site-footer-vp">Registry code 77001458</footer></main></body></html>"""
+        result = _main_region_extract(html) or ""
+        assert "Registry code" not in result
+        assert "Author: Mari" in result
 
     def test_good_trafilatura_extract_kept(self) -> None:
         from worker.tasks import _prefer_main_region

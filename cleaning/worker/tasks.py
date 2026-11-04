@@ -567,6 +567,39 @@ def _page_title(soup: BeautifulSoup) -> str:
     return h1.get_text(" ", strip=True) if h1 else ""
 
 
+_DATE_LINE_RE = re.compile(r"\b\d{1,2}\.\s?\d{1,2}\.\s?\d{4}\b")
+_LEAD_MIN_CHARS = 60
+
+
+def _page_header(soup: BeautifulSoup) -> tuple[str, str, str]:
+    """
+    The page's title, publication-date line and lead paragraph, as Markdown.
+
+    Article templates put the date beside the <h1> and the lead in a
+    separate block (Bootstrap ``.lead``); trafilatura drops both with the
+    title, e.g. on the shared state Drupal template (pta.agri.ee, ria.ee,
+    ttja.ee and nine other agencies) where 196 of 337 news pages lost
+    their lead.
+    """
+    h1 = soup.find("h1")
+    if h1 is None:
+        return "", "", ""
+    title = h1.get_text(" ", strip=True)
+    date = ""
+    for sib in h1.find_next_siblings(limit=3):
+        text = sib.get_text(" ", strip=True)
+        if text and len(text) <= 40 and _DATE_LINE_RE.search(text):
+            date = text
+            break
+    lead = ""
+    el = h1.find_next(class_="lead")
+    if el is not None and el.find_parent(["nav", "footer", "aside"]) is None:
+        text = _html_to_markdown(str(el))
+        if len(text) >= _LEAD_MIN_CHARS:
+            lead = text
+    return title, date, lead
+
+
 def _ensure_page_title(title: str, extracted: str) -> str:
     """
     Prepend the page's <h1> as a Markdown heading when the extract lacks it.
@@ -577,6 +610,21 @@ def _ensure_page_title(title: str, extracted: str) -> str:
     if not title or _normalize_for_match(title) in _normalize_for_match(extracted):
         return extracted
     return f"# {title}\n\n{extracted}"
+
+
+def _ensure_page_header(header: tuple[str, str, str], extracted: str) -> str:
+    """Add the title, date line and lead (see ``_page_header``) the extract lacks."""
+    title, date, lead = header
+    norm = _normalize_for_match(extracted)
+    extra = [x for x in (date, lead) if x and _normalize_for_match(x)[:80] not in norm]
+    out = _ensure_page_title(title, extracted)
+    if not extra:
+        return out
+    block = "\n\n".join(extra)
+    if title and out.startswith(f"# {title}\n\n"):
+        head, _, rest = out.partition("\n\n")
+        return f"{head}\n\n{block}\n\n{rest}"
+    return f"{block}\n\n{out}"
 
 
 _WORD_RE = re.compile(r"[\W_]+")
@@ -652,7 +700,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     noise. Links are kept so the knowledge base retains their targets.
     """
     soup = _prepare_html(html)
-    title = _page_title(soup)
+    header = _page_header(soup)
     for tag in soup.find_all(_INLINE_FORMATTING_TAGS):
         tag.unwrap()
     tables, markers = _swap_tables_for_placeholders(soup)
@@ -677,7 +725,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
             f"[html] trafilatura dropped {missing} of {len(tables)} table(s) "
             "as out-of-scope content"
         )
-    return _ensure_page_title(title, result) if result else None
+    return _ensure_page_header(header, result) if result else None
 
 
 # ---------------------------------------------------------------------------
@@ -714,6 +762,20 @@ def _strip_main_furniture(main: Tag) -> None:
             tag.decompose()
 
 
+def _drop_site_footer(main: Tag) -> None:
+    """
+    Drop a site footer that the template puts inside <main> (the shared state
+    Drupal template: address, registry code, newsletter, cookie links). An
+    article's own <footer> (author, source) stays. Only the <main> extract
+    does this: the gate still counts footer text as missed content, which is
+    what makes it pick <main> on event pages whose venue and times
+    trafilatura drops.
+    """
+    for tag in main.find_all("footer"):
+        if not tag.decomposed and tag.find_parent("article") is None:
+            tag.decompose()
+
+
 def _main_region_extract(html: str) -> str | None:
     """
     Convert the page's <main> element to Markdown, minus page furniture.
@@ -726,15 +788,16 @@ def _main_region_extract(html: str) -> str | None:
     main = _main_region(soup)
     if main is None:
         return None
-    title = _page_title(main)
+    header = _page_header(main)
     _strip_main_furniture(main)
+    _drop_site_footer(main)
     for tag in main.find_all(["span", "font"]):
         tag.unwrap()
     # Swapped across the whole soup (new_tag lives there); only <main> is rendered.
     tables, markers = _swap_tables_for_placeholders(soup)
     result = _html_to_markdown(str(main))
     result, _ = _restore_tables(result, tables, markers)
-    return _ensure_page_title(title, result) if result.strip() else None
+    return _ensure_page_header(header, result) if result.strip() else None
 
 
 def _main_text_blocks(main: Tag) -> list[str]:
