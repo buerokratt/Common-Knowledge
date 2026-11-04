@@ -50,7 +50,7 @@ cd Common-Knowledge
 ### Step 2 — Build the dependency service images
 
 `docker-compose.yml` builds the CKB-owned services (GUI, scrapper, cleaning, file-processing,
-scheduler, data-export, search-service) from this repo, but it expects several **Bürokratt
+scheduler, data-export, search-service, content-external) from this repo, but it expects several **Bürokratt
 platform images to already exist locally** — it references them by bare tag (`image: ruuter`,
 `image: resql`, …) with no build context, so `docker-compose up` fails with a "pull
 access denied / no such image" error if they are missing.
