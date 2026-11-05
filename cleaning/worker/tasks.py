@@ -1,4 +1,5 @@
 import base64
+import copy
 import datetime
 import ipaddress
 import json
@@ -348,10 +349,97 @@ def clean_html_tables(text: str) -> str:
     return "".join(out)
 
 
+# GFM delimiter row: "| --- | :---: |". A pipe is required so a bare "---"
+# (thematic break, setext heading underline) never starts a table.
+_PIPE_DELIMITER_RE = re.compile(
+    r"^[ \t]*\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$"
+)
+_UNESCAPED_PIPE_RE = re.compile(r"(?<!\\)\|")
+_ESCAPED_BR_RE = re.compile(r"&lt;br\s*/?&gt;", re.IGNORECASE)
+
+
+def _split_pipe_row(line: str) -> list[str]:
+    """Split one pipe-table row into cell texts, honouring escaped pipes."""
+    row = line.strip()
+    if row.startswith("|"):
+        row = row[1:]
+    if row.endswith("|") and not row.endswith("\\|"):
+        row = row[:-1]
+    return [cell.strip().replace("\\|", "|") for cell in _UNESCAPED_PIPE_RE.split(row)]
+
+
+def _pipe_cell_html(cell: str) -> str:
+    # pymupdf4llm writes in-cell line breaks as a literal <br>; keep those
+    # and escape everything else.
+    return _ESCAPED_BR_RE.sub("<br/>", html_escape(cell))
+
+
+def _pipe_table_to_html(header: list[str], rows: list[list[str]]) -> str:
+    width = len(header)
+    out = ["<table>", "<thead>", "<tr>"]
+    out.extend(f"<th>{_pipe_cell_html(cell)}</th>" for cell in header)
+    out.extend(["</tr>", "</thead>", "<tbody>"])
+    for row in rows:
+        # GFM pads short rows and drops cells beyond the header's width.
+        cells = (row + [""] * width)[:width]
+        out.append("<tr>")
+        out.extend(f"<td>{_pipe_cell_html(cell)}</td>" for cell in cells)
+        out.append("</tr>")
+    out.extend(["</tbody>", "</table>"])
+    return "".join(out)
+
+
+def markdown_tables_to_html(text: str) -> str:
+    """
+    Rewrite every Markdown pipe table in *text* as an HTML <table>.
+
+    pymupdf4llm only knows pipe tables, and an LLM may still emit one; the
+    knowledge base stores tables as HTML regardless of source. A table is a
+    header row with pipes, a delimiter row with the same cell count, then
+    every following non-blank line that contains a pipe. Fenced code blocks
+    and HTML comments are left alone.
+    """
+    # Split on "\n" only: masking preserves exactly those, so line i of both
+    # lists is the same line (splitlines would also break on   etc.).
+    lines = text.split("\n")
+    masked = _mask_non_markup(text).split("\n")
+    out: list[str] = []
+    i = 0
+    while i < len(lines):
+        header = masked[i]
+        if (
+            i + 1 < len(lines)
+            and "|" in header
+            and "|" in masked[i + 1]
+            and _PIPE_DELIMITER_RE.match(masked[i + 1])
+            and len(_split_pipe_row(header)) == len(_split_pipe_row(masked[i + 1]))
+        ):
+            end = i + 2
+            while end < len(lines) and masked[end].strip() and "|" in masked[end]:
+                end += 1
+            out.append(
+                _pipe_table_to_html(
+                    _split_pipe_row(lines[i]),
+                    [_split_pipe_row(line) for line in lines[i + 2 : end]],
+                )
+            )
+            i = end
+            continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
 # ---------------------------------------------------------------------------
 # HTML extraction helpers
 # ---------------------------------------------------------------------------
 
+
+# Whole pages are parsed the way a browser parses them. lxml recovers from
+# unclosed tags differently: on ilmateenistus.ee an unclosed <li> in the
+# dropdown menu makes lxml nest the entire page body, tables included,
+# inside <nav>, which every extractor then strips as boilerplate.
+_PAGE_PARSER = "html5lib"
 
 # Placeholder tokens are deliberately alphanumeric: Markdown writers escape
 # punctuation (markdownify turns "@@CKB_TABLE_1@@" into "@@CKB\\_TABLE\\_1@@"),
@@ -364,6 +452,103 @@ _TABLE_PLACEHOLDER_SUFFIX = "ENDCKBTABLE"
 # it looked like a short standalone paragraph. Strip that off when restoring
 # so the table HTML does not end up glued to a "## " or "- ".
 _MARKDOWN_LINE_PREFIX = r"(?:[ \t]*(?:#{1,6}[ \t]+|[-*+][ \t]+|\d+\.[ \t]+|>[ \t]*))*"
+
+
+# URL schemes that are not navigable resources and are never rewritten.
+_NON_RESOLVABLE_URL_PREFIXES = ("data:", "mailto:", "tel:", "javascript:", "#")
+
+# Lazy-loading attributes CMSs put the real image URL in, while src holds a
+# spinner GIF or a data: placeholder.
+_LAZY_IMG_SRC_ATTRS = ("data-src", "data-lazy-src", "data-original")
+
+
+def _resolve_page_urls(soup: BeautifulSoup, page_url: str | None) -> None:
+    """
+    Rewrite link and image URLs in *soup* to absolute URLs, in place.
+
+    Cleaned text is read far from the page it came from, so a relative
+    "/toetused/vorm.pdf" or "skeem.png" is a dead reference there. Relative
+    URLs are resolved against the page's <base href> (itself resolved against
+    *page_url*) or *page_url*. Lazy-loaded images get their real URL moved
+    into src. javascript: links carry no destination and are unwrapped to
+    their text. Without a usable base, relative URLs are left as they are:
+    a relative link still says more than none.
+    """
+    base = page_url or ""
+    base_tag = soup.find("base", href=True)
+    if isinstance(base_tag, Tag) and isinstance(base_tag.get("href"), str):
+        base = urljoin(base, base_tag["href"].strip())
+    can_resolve = urlparse(base).scheme in ("http", "https")
+
+    def resolve(value: str) -> str:
+        value = value.strip()
+        if not can_resolve or not value or value.lower().startswith(
+            _NON_RESOLVABLE_URL_PREFIXES
+        ):
+            return value
+        try:
+            return urljoin(base, value)
+        except ValueError:
+            return value
+
+    for img in soup.find_all("img"):
+        if not isinstance(img, Tag):
+            continue
+        src = img.get("src")
+        if not isinstance(src, str) or not src.strip() or src.startswith("data:"):
+            for attr in _LAZY_IMG_SRC_ATTRS:
+                lazy = img.get(attr)
+                if isinstance(lazy, str) and lazy.strip():
+                    img["src"] = lazy
+                    break
+        # trafilatura reads data-src ahead of src, so resolve those too.
+        for attr in ("src", *_LAZY_IMG_SRC_ATTRS):
+            if isinstance(img.get(attr), str):
+                img[attr] = resolve(img[attr])
+
+    for link in soup.find_all("a", href=True):
+        if not isinstance(link, Tag):
+            continue
+        href = link["href"] if isinstance(link["href"], str) else ""
+        if href.strip().lower().startswith("javascript:"):
+            link.unwrap()
+            continue
+        link["href"] = resolve(href)
+
+
+def _markdown_link_text(link: Tag) -> str:
+    """Markdown for *link*, or just its text when it has nowhere to go."""
+    text = " ".join(link.get_text(" ").split())
+    href = link.get("href")
+    href = href.strip() if isinstance(href, str) else ""
+    if not href or href.startswith("#"):
+        return text
+    if not text:
+        text = href
+    return f"[{text}]({href.replace(' ', '%20')})"
+
+
+def _inline_links_as_markdown(root: Tag) -> None:
+    """
+    Replace <img> and <a> in *root* with their Markdown spelled out as text.
+
+    partition_html keeps element text only, so every link target and image
+    would otherwise vanish from the BeautifulSoup fallback's output. Images
+    go first so an image inside a link ends up as that link's text.
+    """
+    for img in root.find_all("img"):
+        if not isinstance(img, Tag):
+            continue
+        src = img.get("src")
+        src = src.strip() if isinstance(src, str) else ""
+        if not src or src.startswith("data:"):
+            continue
+        alt = img.get("alt")
+        alt = " ".join(alt.split()) if isinstance(alt, str) else ""
+        img.replace_with(NavigableString(f"![{alt}]({src.replace(' ', '%20')})"))
+    for link in root.find_all("a"):
+        if isinstance(link, Tag):
+            link.replace_with(NavigableString(_markdown_link_text(link)))
 
 
 def _swap_tables_for_placeholders(soup: BeautifulSoup) -> tuple[list[str], list[str]]:
@@ -395,15 +580,16 @@ def _swap_tables_for_placeholders(soup: BeautifulSoup) -> tuple[list[str], list[
 
 def _restore_tables(
     text: str, tables: list[str], markers: list[str]
-) -> tuple[str, int]:
+) -> tuple[str, list[str]]:
     """
     Substitute captured table HTML back in for its placeholder.
 
-    Returns (text, missing) where *missing* counts placeholders the extractor
-    dropped — normally boilerplate tables pruned as out-of-scope, but worth
-    logging so a broken round-trip is distinguishable from correct pruning.
+    Returns (text, missing) where *missing* holds the HTML of tables whose
+    placeholder the extractor dropped — normally boilerplate tables pruned as
+    out-of-scope, but worth logging so a broken round-trip is distinguishable
+    from correct pruning, and see _dropped_main_content.
     """
-    missing = 0
+    missing: list[str] = []
     for marker, table_html in zip(markers, tables, strict=True):
         # Tolerate a Markdown writer having backslash-escaped characters of
         # the marker on its way through the extractor.
@@ -419,29 +605,59 @@ def _restore_tables(
             text, count = pattern.subn(lambda _, repl=table_html: repl, text)
             replaced += count
         if not replaced:
-            missing += 1
+            missing.append(table_html)
     return text, missing
 
 
-def _beautifulsoup_extract(html: str) -> str:
+# The "(url)" half of a Markdown link or image: not text a reader sees.
+_MARKDOWN_LINK_TARGET_RE = re.compile(r"\]\([^)\s]*\)")
+
+
+def _visible_text_len(markup: str) -> int:
+    """
+    Length of the text in *markup* once tags, Markdown link targets and
+    whitespace runs go. Link targets are dropped so that a page full of
+    long URLs does not look like it kept more content than it did.
+    """
+    text = _MARKDOWN_LINK_TARGET_RE.sub("]", _TAG_RE.sub(" ", markup))
+    return len(" ".join(text.split()))
+
+
+def _dropped_main_content(text: str, missing: list[str]) -> bool:
+    """
+    True when an extraction threw away tables carrying more text than it
+    kept. That is not boilerplate pruning: the tables *were* the page's main
+    content (a data page that is one big table plus a skip link), and the
+    caller should try another extractor rather than return the leftovers.
+    """
+    dropped = sum(_visible_text_len(table) for table in missing)
+    return dropped > _visible_text_len(text)
+
+
+def _beautifulsoup_extract(html: str, url: str | None = None) -> str:
     """
     Multi-step fallback extractor that produces Markdown output.
 
     Steps:
-      1. Strip noisy elements (header, footer, nav, script, style, aside, form).
+      1. Strip noisy elements (header, footer, nav, script, style, aside, form)
+         and resolve link/image URLs against *url* (see _resolve_page_urls).
       2. Swap tables out for placeholders so neither Unstructured's
          text_as_html (which drops colspan/rowspan and downgrades <th>) nor
          markdownify's pipe-table renderer can flatten them.
       3. Extract from <main>, else <body>, else the cleaned root (avoiding
          html/head wrapper noise), via partition_html with
          skip_headers_and_footers, falling back to markdownify when
-         partition returns nothing. Move to the next candidate if a target
-         yields no text.
+         partition returns nothing or drops tables that outweigh what it
+         kept. Move to the next candidate if a target yields no text.
+         partition_html sees a copy with links and images already written
+         out as Markdown, since it keeps element text only; markdownify
+         renders them itself.
       4. Put the original table HTML back.
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, _PAGE_PARSER)
     for tag in soup(["header", "footer", "nav", "script", "style", "aside", "form"]):
         tag.decompose()
+    _resolve_page_urls(soup, url)
 
     tables, markers = _swap_tables_for_placeholders(soup)
 
@@ -449,27 +665,42 @@ def _beautifulsoup_extract(html: str) -> str:
     # truthy in BeautifulSoup, so a page whose real content sits beside an
     # empty <main> would otherwise extract to nothing at all; falling through
     # on an empty result keeps that content instead of dropping the document.
-    extracted = ""
+    extracted, missing = "", tables
     for target in (soup.find("main"), soup.find("body"), soup):
         if target is None:
             continue
+        linked = copy.copy(target)
+        _inline_links_as_markdown(linked)
         partitioned = partition_html(
-            text=str(target),
+            text=str(linked),
             languages=settings.languages,
             skip_headers_and_footers=True,
         )
+        extracted = ""
         if partitioned:
-            extracted = _elements_to_markdown(partitioned)
-        else:
-            extracted = markdownify(str(target), heading_style="ATX")
+            extracted, missing = _restore_tables(
+                _elements_to_markdown(partitioned), tables, markers
+            )
+            # partition_html can return a single stray element (a skip link)
+            # for markup it fails to segment, losing the table placeholders
+            # with everything else. markdownify keeps all text, so use it.
+            if extracted.strip() and _dropped_main_content(extracted, missing):
+                logger.info(
+                    "[html] partition_html dropped the page's main table(s); "
+                    "using markdownify instead"
+                )
+                extracted = ""
+        if not extracted.strip():
+            extracted, missing = _restore_tables(
+                markdownify(str(target), heading_style="ATX"), tables, markers
+            )
         if extracted.strip():
             break
 
-    extracted, missing = _restore_tables(extracted, tables, markers)
     if missing:
         logger.info(
-            f"[html] BeautifulSoup extraction dropped {missing} of {len(tables)} "
-            "table(s) as out-of-scope content"
+            f"[html] BeautifulSoup extraction dropped {len(missing)} of "
+            f"{len(tables)} table(s) as out-of-scope content"
         )
     return extracted
 
@@ -484,25 +715,42 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     trafilatura's lossy Markdown table renderer (which cannot represent
     colspan/rowspan or multi-line cells) while keeping trafilatura's strong
     prose extraction.
+
+    Links and images are kept as Markdown, with URLs made absolute
+    beforehand (trafilatura resolves link URLs itself, but not image ones):
+    a cleaned document with a dead or missing reference is worse than one
+    carrying an extra URL.
     """
-    soup = BeautifulSoup(html, "lxml")
+    soup = BeautifulSoup(html, _PAGE_PARSER)
+    _resolve_page_urls(soup, url)
     tables, markers = _swap_tables_for_placeholders(soup)
 
     result = trafilatura.extract(
-        str(soup) if tables else html,
+        str(soup),
         url=url,
         output_format="markdown",
         include_comments=False,
         include_tables=not tables,
+        include_links=True,
+        include_images=True,
         favor_precision=True,
     )
     if not result:
         return None
 
     result, missing = _restore_tables(result, tables, markers)
+    if missing and _dropped_main_content(result, missing):
+        # favor_precision judged the placeholder paragraph to be noise on a
+        # page that is mostly table; returning the leftover (often just a
+        # skip link) would hide the failure from clean_html's fallback.
+        logger.warning(
+            f"[html] trafilatura dropped {len(missing)} table(s) carrying more "
+            "text than it kept; treating extraction as failed"
+        )
+        return None
     if missing:
         logger.info(
-            f"[html] trafilatura dropped {missing} of {len(tables)} table(s) "
+            f"[html] trafilatura dropped {len(missing)} of {len(tables)} table(s) "
             "as out-of-scope content"
         )
     return result or None
@@ -660,19 +908,21 @@ _EXTRACT_SYSTEM = textwrap.dedent("""
     Return clean Markdown for prose (headings, lists, bold/italic where
     appropriate). Do not add any commentary of your own.
 
+    Links and images:
+    - Keep every link in the main content as a Markdown link [text](url)
+      and every image as ![alt](url).
+    - Copy URLs exactly as they appear in the href/src attribute; never
+      shorten, guess or invent one.
+
     Tables:
-    - Preserve every row and column verbatim; do not drop, merge or
-      paraphrase cell contents.
-    - If a table uses colspan or rowspan, or has nested <ul>/<li> inside
-      cells, output the entire table as HTML (<table>, <thead>, <tbody>,
-      <tr>, <th>, <td colspan="N">, <td rowspan="N">). Keep <ul>/<li>,
-      <strong>, <sup>, <br> and inline <a href="..."> inside cells verbatim.
-    - Only if a table is simple (no colspan/rowspan, single-line cells)
-      may you use a Markdown pipe table.
-    - Never wrap tables in code fences.
-    - Never include style, class, align, cellpadding, cellspacing, border,
-      width or bgcolor attributes on table elements — only colspan, rowspan
-      and scope carry meaning.
+    - Every table in the page has been replaced by a placeholder token of
+      the form CKBTABLEPLACEHOLDER...ENDCKBTABLE. The original table is put
+      back in place of the token after you answer.
+    - Copy each token that belongs to the main content exactly as it
+      appears, on a line of its own, where the table sits in the content.
+      Omit tokens that sit in navigation, footers or other boilerplate.
+    - Never write a table yourself — no Markdown pipe tables and no HTML
+      tables.
 """).strip()
 
 
@@ -710,7 +960,9 @@ def _llm_evaluate(
         return False, f"LLM returned non-JSON: {raw[:120]}"
 
 
-def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
+def _llm_extract(
+    client: AzureOpenAI, deployment: str, html: str, url: str | None = None
+) -> str:
     """
     Ask the LLM to re-extract the main content from raw HTML.
 
@@ -721,10 +973,21 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
     stripped HTML is still oversized, skips the LLM call and returns an
     empty string so the caller falls back to BeautifulSoup.
 
-    Returns the extracted Markdown, or empty string on any error or
-    oversized input, so the caller can fall back gracefully.
+    Link and image URLs are made absolute first (see _resolve_page_urls) so
+    the model copies usable URLs rather than page-relative ones.
+
+    Tables are swapped for placeholders before the HTML is stripped and sent,
+    and the original HTML is restored afterwards, the same two-pass strategy
+    as _trafilatura_extract: left to itself the model rewrites tables as
+    Markdown pipe tables and garbles colspan/rowspan headers.
+
+    Returns the extracted Markdown, or empty string on any error, truncation
+    or oversized input, so the caller can fall back gracefully.
     """
-    stripped = _prestrip_html_for_llm(html)
+    soup = BeautifulSoup(html, _PAGE_PARSER)
+    _resolve_page_urls(soup, url)
+    tables, markers = _swap_tables_for_placeholders(soup)
+    stripped = _prestrip_html_for_llm(str(soup))
     approx_tokens = _estimate_tokens(stripped)
     if approx_tokens > _LLM_INPUT_TOKEN_CEILING:
         logger.warning(
@@ -752,13 +1015,22 @@ def _llm_extract(client: AzureOpenAI, deployment: str, html: str) -> str:
                 "LLM re-extraction hit the output token limit and was truncated"
             )
             return ""
-        return (choice.message.content or "").strip()
+        content = (choice.message.content or "").strip()
     except APIError as e:
         logger.error(f"LLM API error during re-extraction: {e}")
         return ""
     except Exception as e:
         logger.error(f"Unexpected error during LLM re-extraction: {e}")
         return ""
+
+    content, missing = _restore_tables(content, tables, markers)
+    if missing and _dropped_main_content(content, missing):
+        logger.error(
+            f"LLM re-extraction dropped {len(missing)} table(s) carrying more "
+            "text than it kept; treating it as failed"
+        )
+        return ""
+    return content
 
 
 # ---------------------------------------------------------------------------
@@ -807,7 +1079,7 @@ def clean_html(
         logger.warning(
             f"[html] trafilatura empty, falling back to BeautifulSoup for {entity.url}"
         )
-        return _beautifulsoup_extract(html)
+        return _beautifulsoup_extract(html, url=entity.url)
 
     # LLM paths — entity.use_llm is True here, so the caller must have provided
     # an Azure OpenAI client + deployment; assert to narrow the optional types.
@@ -820,7 +1092,7 @@ def clean_html(
         logger.warning(
             f"[html] trafilatura empty for {entity.url}; using BeautifulSoup before LLM eval"
         )
-        extracted = _beautifulsoup_extract(html)
+        extracted = _beautifulsoup_extract(html, url=entity.url)
 
     logger.info(f"[html] running LLM evaluation for {entity.url}")
     passed, reason = _llm_evaluate(client, deployment, extracted)
@@ -835,17 +1107,17 @@ def clean_html(
         logger.warning(
             f"[html] LLM eval failed, falling back to BeautifulSoup for {entity.url}"
         )
-        return _beautifulsoup_extract(html)
+        return _beautifulsoup_extract(html, url=entity.url)
 
     logger.info(f"[html] LLM correction: re-extracting from raw HTML for {entity.url}")
-    corrected = _llm_extract(client, deployment, html)
+    corrected = _llm_extract(client, deployment, html, url=entity.url)
     if corrected:
         return corrected
 
     logger.warning(
         f"[html] LLM re-extraction empty; falling back to BeautifulSoup for {entity.url}"
     )
-    return _beautifulsoup_extract(html)
+    return _beautifulsoup_extract(html, url=entity.url)
 
 
 # ---------------------------------------------------------------------------
@@ -1464,13 +1736,15 @@ def clean_file_task(entity: EntityToClean) -> None:
                 f"Cleaned as unstructured file for {entity.file_path.as_posix()}"
             )
 
-        # Normalise excessive whitespace and strip presentational cruft from
-        # any embedded HTML tables produced by trafilatura/BS/LLM/Unstructured.
-        # Plain-text sources are passed through verbatim: the file *is* the
-        # text, so rewriting HTML the author wrote by hand is not ours to do.
+        # Normalise excessive whitespace, turn any Markdown pipe tables
+        # (pymupdf4llm, a stray LLM answer) into HTML, and strip presentational
+        # cruft from embedded HTML tables produced by
+        # trafilatura/BS/LLM/Unstructured. Plain-text sources are passed
+        # through verbatim: the file *is* the text, so rewriting what the
+        # author wrote by hand is not ours to do.
         cleaned_text = normalize_newlines(cleaned_text)
         if file_type not in _PLAIN_TEXT_TYPES:
-            cleaned_text = clean_html_tables(cleaned_text)
+            cleaned_text = clean_html_tables(markdown_tables_to_html(cleaned_text))
 
         # Detect language
         detected_language = None
