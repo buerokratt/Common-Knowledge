@@ -700,6 +700,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     noise. Links are kept so the knowledge base retains their targets.
     """
     soup = _prepare_html(html)
+    _drop_page_tools(soup)
     header = _page_header(soup)
     for tag in soup.find_all(_INLINE_FORMATTING_TAGS):
         tag.unwrap()
@@ -738,6 +739,10 @@ _MAIN_DROP_TAGS = ["script", "style", "noscript", "template", "form", "nav",
 _MAIN_DROP_CLASS_RE = re.compile(
     r"(^|[-_])(breadcrumbs?|share|social-share|feedback|visually-hidden|skip-to-content)([-_]|$)"
 )
+# Teaser lists of other articles appended below the page body (PRIA:
+# "Viimased uudised" = Drupal view display "news_bottom").
+_TEASER_CLASS_RE = re.compile(r"^view-display-id-\w*(bottom|related)$")
+_PRINT_LINK_RE = re.compile(r"^(prindi|print|trüki)$", re.IGNORECASE)
 
 # Gate thresholds, fitted on the 5-agency benchmark (id.ee, EMTA, PPA,
 # Tervisekassa, tallinn.ee; 500 pages, gpt-5 usability labels).
@@ -760,6 +765,29 @@ def _strip_main_furniture(main: Tag) -> None:
             continue
         if any(_MAIN_DROP_CLASS_RE.search(c) for c in tag.get("class") or []):
             tag.decompose()
+
+
+def _drop_page_tools(root: Tag) -> None:
+    """
+    Drop page tools and teasers that some templates put inside the content
+    area (PRIA): the accessibility-settings link, script-driven "Print" links
+    (href="#") next to the dates, and the "latest news" teaser list below the
+    article. Runs before _page_header so the tools do not end up in the date
+    line, and on both extract paths.
+    """
+    for tag in root.find_all(True):
+        if tag.decomposed:
+            continue
+        if any(_TEASER_CLASS_RE.match(c) for c in tag.get("class") or []):
+            tag.decompose()
+        elif tag.name == "a" and (
+            "accessibility" in (tag.get("class") or [])
+            or (tag.get("href") == "#" and _PRINT_LINK_RE.match(tag.get_text(strip=True)))
+        ):
+            parent = tag.parent
+            tag.decompose()
+            if parent is not None and parent.name == "li" and not parent.get_text(strip=True):
+                parent.decompose()
 
 
 def _drop_site_footer(main: Tag) -> None:
@@ -788,6 +816,7 @@ def _main_region_extract(html: str) -> str | None:
     main = _main_region(soup)
     if main is None:
         return None
+    _drop_page_tools(main)
     header = _page_header(main)
     _strip_main_furniture(main)
     _drop_site_footer(main)

@@ -422,6 +422,37 @@ class TestMainRegionExtract:
         assert "Registry code" not in result
         assert "Author: Mari" in result
 
+    def test_teasers_and_page_tools_inside_main_dropped(self) -> None:
+        from worker.tasks import _main_region_extract
+
+        html = f"""<html><body><main>
+          <div class="content"><a class="accessibility" href="/juurdepaasetavus">Juurdepääsetavus</a></div>
+          <h1>T</h1><ul><li>Lisatud: 28.04.2024</li><li><a href="#">Prindi</a></li></ul>
+          <p>{_LONG_PARA}</p><p><a href="#osa2">Osa 2</a></p>
+          <section class="news-section"><div class="view view-news view-display-id-news_bottom">
+            <h2>Viimased uudised</h2><a href="/uudised/x">Other news</a></div></section>
+          </main></body></html>"""
+        result = _main_region_extract(html) or ""
+        assert "Juurdepääsetavus" not in result
+        assert "Prindi" not in result
+        assert "Viimased uudised" not in result
+        assert "Lisatud: 28.04.2024" in result
+        assert "Osa 2" in result
+
+    def test_news_teasers_dropped_on_trafilatura_path(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><main><article><h1>T</h1>
+          <ul><li>Lisatud: 28.04.2024</li><li><a href="#">Prindi</a></li></ul>
+          <p>{_LONG_PARA}</p><p>{_LONG_PARA}</p></article>
+          <section class="news-section"><div class="view view-news view-display-id-news_bottom">
+            <h2>Viimased uudised</h2><p><a href="/uudised/x">Other news headline</a></p></div></section>
+          </main></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "Viimased uudised" not in result
+        assert "Prindi" not in result
+        assert "\n*\n" not in f"\n{result}\n"
+
     def test_good_trafilatura_extract_kept(self) -> None:
         from worker.tasks import _prefer_main_region
 
