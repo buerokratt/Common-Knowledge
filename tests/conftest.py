@@ -17,7 +17,7 @@ via hvac and writes the token as the host user.
 Required environment variables (set in GitHub Secrets or a local .env):
   AZURE_OPENAI_API_KEY        real Azure OpenAI key
   AZURE_OPENAI_ENDPOINT       e.g. https://my-resource.openai.azure.com/
-  AZURE_OPENAI_DEPLOYMENT     deployment name (default: gpt-4o-mini)
+  AZURE_OPENAI_DEPLOYMENT     deployment name (default: gpt-5-mini)
   AZURE_OPENAI_API_VERSION    API version   (default: 2024-02-01)
 
 If credentials are absent the stack still starts; LLM tests skip via
@@ -167,7 +167,7 @@ path "auth/token/lookup-self"            { capabilities = ["read"] }
             secret={
                 "api_key": "REPLACE_ME",
                 "endpoint": "https://REPLACE_ME.openai.azure.com/",
-                "deployment": "gpt-4o-mini",
+                "deployment": "gpt-5-mini",
                 "api_version": "2024-02-01",
             },
         )
@@ -326,7 +326,7 @@ def cleaning_stack() -> Generator[CleaningTestStack, None, None]:
     """
     api_key = os.environ.get("AZURE_OPENAI_API_KEY", "")
     endpoint = os.environ.get("AZURE_OPENAI_ENDPOINT", "")
-    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-4o-mini")
+    deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "gpt-5-mini")
     api_version = os.environ.get("AZURE_OPENAI_API_VERSION", "2024-02-01")
 
     stack = CleaningTestStack()

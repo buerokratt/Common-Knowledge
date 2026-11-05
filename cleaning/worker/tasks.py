@@ -1287,10 +1287,18 @@ _EVAL_SYSTEM = textwrap.dedent("""
 _EXTRACT_SYSTEM = textwrap.dedent("""
     You are an expert web-page content extractor.
     You will receive raw HTML of a web page.
-    Extract ONLY the main body content (article text, tables, documentation).
-    Ignore navigation, sidebars, footers, cookie notices, and ads.
-    Return clean Markdown for prose (headings, lists, bold/italic where
-    appropriate). Do not add any commentary of your own.
+    Extract ONLY the main body content (article text, tables, documentation),
+    including the page title (<h1>), the lead/intro paragraph, the publication
+    date if shown, and the content of tabs and accordions.
+    Ignore navigation, sidebars, footers, cookie notices, ads, share/feedback
+    widgets, and teasers or cards linking to other articles.
+
+    Copy the text VERBATIM in the page's own language: never summarise,
+    paraphrase, translate or shorten it, and never add labels, notes or text
+    that is not on the page.
+
+    Return clean Markdown for prose (headings, lists, bold/italic where the
+    page has them). Do not add any commentary of your own.
 
     Links and images:
     - Keep every link in the main content as a Markdown link [text](url)
