@@ -435,11 +435,27 @@ def markdown_tables_to_html(text: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-# Whole pages are parsed the way a browser parses them. lxml recovers from
-# unclosed tags differently: on ilmateenistus.ee an unclosed <li> in the
-# dropdown menu makes lxml nest the entire page body, tables included,
-# inside <nav>, which every extractor then strips as boilerplate.
-_PAGE_PARSER = "html5lib"
+# Elements that never sit inside a real site menu. Finding one inside <nav>
+# means lxml has nested the page body into the menu (see _parse_page).
+_NOT_IN_MENU_TAGS = ["main", "article", "table", "h1"]
+
+
+def _parse_page(html: str) -> BeautifulSoup:
+    """
+    Parse a whole page with lxml, or with html5lib when lxml mis-nests it.
+
+    lxml recovers from unclosed tags differently from a browser: on
+    ilmateenistus.ee an unclosed <li> in the dropdown menu makes it nest the
+    entire page body, tables included, inside <nav>, which every extractor
+    then strips as boilerplate. html5lib parses like a browser, but on other
+    sites (tooelu.ee, rara.ee, sais.ee) trafilatura kept a fraction of the
+    text from its tree, so it is used only when lxml put content in a menu.
+    """
+    soup = BeautifulSoup(html, "lxml")
+    for nav in soup.find_all("nav"):
+        if isinstance(nav, Tag) and nav.find(_NOT_IN_MENU_TAGS) is not None:
+            return BeautifulSoup(html, "html5lib")
+    return soup
 
 # Placeholder tokens are deliberately alphanumeric: Markdown writers escape
 # punctuation (markdownify turns "@@CKB_TABLE_1@@" into "@@CKB\\_TABLE\\_1@@"),
@@ -654,7 +670,7 @@ def _beautifulsoup_extract(html: str, url: str | None = None) -> str:
          renders them itself.
       4. Put the original table HTML back.
     """
-    soup = BeautifulSoup(html, _PAGE_PARSER)
+    soup = _parse_page(html)
     _decode_cf_emails(soup)
     for tag in soup(["header", "footer", "nav", "script", "style", "aside", "form"]):
         tag.decompose()
@@ -781,7 +797,7 @@ def _unwrap_layout_tables(soup: BeautifulSoup) -> None:
 
 def _prepare_html(html: str, url: str | None = None) -> BeautifulSoup:
     """Parse *html* and apply the clean-ups both deterministic extractors need."""
-    soup = BeautifulSoup(html, _PAGE_PARSER)
+    soup = _parse_page(html)
     _decode_cf_emails(soup)
     _resolve_page_urls(soup, url)
     _unwrap_layout_tables(soup)
@@ -908,6 +924,35 @@ def _restore_inline_spaces(md: str) -> str:
 
 _GRAPHIC_TAG_RE = re.compile(r"<graphic\b")
 
+# Not <li>: moving a list item's icon out leaves a <p> inside the list,
+# and trafilatura then drops the item text (Moodle file trees).
+_TEXT_BLOCK_TAGS = ["p", "dd", "dt", "blockquote", "h1", "h2", "h3", "h4", "h5", "h6"]
+
+
+def _hoist_inline_images(soup: BeautifulSoup) -> None:
+    """
+    Move each image that shares a text block with text into its own <p>
+    just before that block.
+
+    With include_images, trafilatura keeps such an image but drops the rest
+    of the paragraph's text (integratsioon.ee: a partner logo at the start
+    of a paragraph cost the whole paragraph). An image wrapped in a link
+    with no text of its own moves together with the link.
+    """
+    for img in soup.find_all("img"):
+        if not isinstance(img, Tag) or img.parent is None:
+            continue
+        block = img.find_parent(_TEXT_BLOCK_TAGS)
+        if block is None or not block.get_text(strip=True):
+            continue
+        moved: Tag = img
+        link = img.find_parent("a")
+        if link is not None and block in link.parents and not link.get_text(strip=True):
+            moved = link
+        holder = soup.new_tag("p")
+        block.insert_before(holder)
+        holder.append(moved.extract())
+
 
 def _html_to_markdown(html: str) -> str:
     md = markdownify(html, heading_style="ATX")
@@ -942,6 +987,7 @@ def _trafilatura_extract(html: str, url: str | None = None) -> str | None:
     for tag in soup.find_all(_INLINE_FORMATTING_TAGS):
         tag.unwrap()
     tables, markers = _swap_tables_for_placeholders(soup)
+    _hoist_inline_images(soup)
     _protect_inline_spaces(soup)
 
     result = trafilatura.extract(
@@ -1376,7 +1422,7 @@ def _llm_extract(
     Returns the extracted Markdown, or empty string on any error, truncation
     or oversized input, so the caller can fall back gracefully.
     """
-    soup = BeautifulSoup(html, _PAGE_PARSER)
+    soup = _parse_page(html)
     _resolve_page_urls(soup, url)
     tables, markers = _swap_tables_for_placeholders(soup)
     stripped = _prestrip_html_for_llm(str(soup))

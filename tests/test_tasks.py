@@ -1040,6 +1040,20 @@ class TestLinksAndImages:
     """Cleaned text is read away from its page: link and image targets must
     survive extraction, as absolute URLs."""
 
+    def test_inline_image_does_not_cost_its_paragraph(self) -> None:
+        """trafilatura drops a paragraph's text when an image sits inside it."""
+        from worker.tasks import _trafilatura_extract
+
+        html = (
+            f"<html><body><main><h1>T</h1><p>{_LONG_PARA}</p>"
+            "<p><img src='/logo.png' alt='Kokkuleppe logo'> Liitusime "
+            f"<strong>mitmekesisuse kokkuleppega</strong>. {_LONG_PARA}</p>"
+            f"<p>{_LONG_PARA}</p></main></body></html>"
+        )
+        result = _trafilatura_extract(html, _PAGE_URL) or ""
+        assert "Liitusime" in result
+        assert "![Kokkuleppe logo](https://www.example.ee/logo.png)" in result
+
     def test_resolve_page_urls(self) -> None:
         from bs4 import BeautifulSoup
 
