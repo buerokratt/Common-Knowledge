@@ -185,6 +185,288 @@ class TestTrafilaturaExtract:
 
 
 # ---------------------------------------------------------------------------
+# trafilatura output formatting, Cloudflare emails, layout tables
+# ---------------------------------------------------------------------------
+
+_LONG_PARA = (
+    "This paragraph carries enough ordinary prose for trafilatura to treat the "
+    "article as real content rather than boilerplate around it."
+)
+
+
+class TestTrafilaturaFormatting:
+    def test_list_items_stay_separate_with_bold_and_links(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Snow</h1><p>{_LONG_PARA}</p>
+          <ul>
+            <li><strong>Call:</strong> <a href="tel:14410">14410</a> around the clock,
+              the preferred channel when the pavement is icy or blocked.</li>
+            <li><strong>Call</strong> <a href="tel:6619860">661 9860</a> free of charge
+              during office hours to ask about snow clearing.</li>
+          </ul><p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        lines = [l for l in result.splitlines() if "Call" in l]
+        assert len(lines) == 2
+        assert all(l.lstrip().startswith(("*", "-")) for l in lines)
+
+    def test_space_kept_around_bold_and_links(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Admission</h1><p>{_LONG_PARA}</p>
+          <p>Submit an <strong>admission application</strong> based on the
+          <a href="/form">application form</a> must include it.</p>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "an **admission application** based" in result
+        assert "the [application form](/form) must" in result
+
+    def test_space_kept_around_bold_and_links_in_list_items(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Snow</h1><p>{_LONG_PARA}</p>
+          <ul>
+            <li><strong>Call:</strong> <a href="tel:14410">14410</a> around the clock,
+              the preferred channel when the pavement is icy or blocked.</li>
+            <li>Or <b>write</b> to the city at any time using the feedback form
+              on the website, answered within five working days.</li>
+          </ul><p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "**Call:** [14410](tel:14410) around" in result
+        assert "Or **write** to the city" in result
+        assert "\ue000" not in result
+
+    def test_space_inside_bold_moves_outside(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Rent</h1><p>{_LONG_PARA}</p>
+          <p>The committee settles <strong>housing&nbsp;</strong>lease disputes
+          and parking is<strong> free</strong> on public holidays.</p>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "settles **housing** lease" in result
+        assert "is **free** on" in result
+
+    def test_line_break_between_link_and_bold_kept(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Contacts</h1><p>{_LONG_PARA}</p>
+          <p>Architect: <a href="/people/karro">Martin Karro</a><br><br><strong>Communication</strong>:
+          development department of the city planning office</p>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "[Martin Karro](/people/karro)**" not in result
+        assert "**Communication**" in result
+        assert "\ue000" not in result
+
+    def test_bold_only_heading_stays_a_heading(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Plans</h1><p>{_LONG_PARA}</p>
+          <h4>Culture</h4><ul><li><p>Philharmonic development plan for the city</p></li></ul>
+          <h4><strong>Environment</strong></h4><ul><li><p>Environmental development plan</p></li></ul>
+          <p>{_LONG_PARA}</p></article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "#### Environment" in result
+
+    def test_heading_with_only_button_text_dropped(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Screening</h1><p>{_LONG_PARA}</p>
+          <h3><button type="button">What is it?</button></h3><p>{_LONG_PARA}</p>
+          </article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert not any(l.strip("# ") == "" and l.startswith("#") for l in result.splitlines())
+
+    def test_bold_section_headings_kept(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><article><h1>Events</h1><p>{_LONG_PARA}</p>
+          <p><strong>Northern prefecture</strong></p><p>{_LONG_PARA}</p>
+          </article></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "**Northern prefecture**" in result
+
+    def test_page_title_prepended_when_missing(self) -> None:
+        from worker.tasks import _ensure_page_title
+
+        assert _ensure_page_title("Page", "Body").startswith("# Page\n\nBody")
+        assert _ensure_page_title("Page", "# Page\n\nBody") == "# Page\n\nBody"
+
+    def test_news_date_and_lead_kept(self) -> None:
+        from worker.tasks import _deterministic_extract
+
+        lead = "The agency will be at the fair on all three days and focuses on plant protection this year."
+        html = f"""<html><body><main><div class="card-body"><h1>Fair news</h1>
+          <p class="card-text vp-date">22.04.2022 | 13:39</p></div>
+          <div class="block-lead-text"><div class="lead">{lead}</div></div>
+          <article><p>{_LONG_PARA}</p><p>{_LONG_PARA}</p></article></main></body></html>"""
+        result = _deterministic_extract(html) or ""
+        assert result.startswith(f"# Fair news\n\n22.04.2022 | 13:39\n\n{lead}")
+        assert result.count(lead) == 1
+
+    def test_header_not_duplicated(self) -> None:
+        from worker.tasks import _ensure_page_header
+
+        md = "# T\n\n01.02.2024\n\nLead"
+        assert _ensure_page_header(("T", "01.02.2024", ""), md) == md
+
+
+class TestCloudflareEmails:
+    def test_decodes_protected_link(self) -> None:
+        from bs4 import BeautifulSoup
+        from worker.tasks import _decode_cf_emails
+
+        key = 0x42
+        encoded = f"{key:02x}" + "".join(f"{ord(c) ^ key:02x}" for c in "a@b.ee")
+        soup = BeautifulSoup(
+            f'<p><a href="/cdn-cgi/l/email-protection#{encoded}">[email&#160;protected]</a>'
+            f'<span data-cfemail="{encoded}">[email&#160;protected]</span></p>',
+            "lxml",
+        )
+        _decode_cf_emails(soup)
+        assert soup.a["href"] == "mailto:a@b.ee"
+        assert soup.get_text() == "a@b.eea@b.ee"
+
+    def test_fallback_and_llm_input_see_real_address(self) -> None:
+        from worker.tasks import _beautifulsoup_extract, _prestrip_html_for_llm
+
+        key = 0x42
+        encoded = f"{key:02x}" + "".join(f"{ord(c) ^ key:02x}" for c in "a@b.ee")
+        html = (
+            f'<html><body><main><p>Mail <a href="/cdn-cgi/l/email-protection#{encoded}">'
+            "[email&#160;protected]</a></p></main></body></html>"
+        )
+        assert "a@b.ee" in _beautifulsoup_extract(html)
+        assert "a@b.ee" in _prestrip_html_for_llm(html)
+        assert "protected" not in _prestrip_html_for_llm(html)
+
+    def test_malformed_hex_left_alone(self) -> None:
+        from bs4 import BeautifulSoup
+        from worker.tasks import _decode_cf_emails
+
+        soup = BeautifulSoup('<span data-cfemail="zz">x</span>', "lxml")
+        _decode_cf_emails(soup)
+        assert soup.span.get_text() == "x"
+
+
+class TestLayoutTables:
+    def test_single_column_table_becomes_blocks(self) -> None:
+        from bs4 import BeautifulSoup
+        from worker.tasks import _unwrap_layout_tables
+
+        soup = BeautifulSoup(
+            "<table><tr><td>Phone 116 006</td></tr><tr><td>Mail x@y.ee</td></tr></table>",
+            "lxml",
+        )
+        _unwrap_layout_tables(soup)
+        assert soup.find("table") is None
+        assert "Phone 116 006" in soup.get_text() and "Mail x@y.ee" in soup.get_text()
+
+    def test_data_table_kept(self) -> None:
+        from bs4 import BeautifulSoup
+        from worker.tasks import _unwrap_layout_tables
+
+        soup = BeautifulSoup("<table><tr><td>a</td><td>b</td></tr></table>", "lxml")
+        _unwrap_layout_tables(soup)
+        assert soup.find("table") is not None
+
+
+# ---------------------------------------------------------------------------
+# <main>-region extraction and the gate that chooses it
+# ---------------------------------------------------------------------------
+
+_SITE_MENU = "".join(
+    f'<li><a href="/section-{i}">Site section number {i} with a long menu label</a></li>'
+    for i in range(40)
+)
+
+
+class TestMainRegionExtract:
+    def test_link_hub_returns_link_list_not_menus(self) -> None:
+        from worker.tasks import _deterministic_extract
+
+        hub = "".join(f'<li><a href="/inst/{i}">Institution {i}</a></li>' for i in range(6))
+        html = f"""<html><body><header><ul>{_SITE_MENU}</ul></header>
+          <main><nav class="breadcrumb"><a href="/">Home</a></nav>
+          <h1>Institutions</h1><ul>{hub}</ul>
+          <div class="node__social-share-links">Share in social media</div></main>
+          <footer><ul>{_SITE_MENU}</ul></footer></body></html>"""
+        result = _deterministic_extract(html) or ""
+        assert "[Institution 3](/inst/3)" in result
+        assert "Site section number" not in result
+        assert "Share in social media" not in result
+        assert result.startswith("# Institutions")
+
+    def test_sidebar_template_section_kept(self) -> None:
+        from worker.tasks import _deterministic_extract
+
+        section = (
+            "Legal counselling for low-income residents is provided by phone "
+            "on weekdays and the answer arrives within forty-eight hours."
+        )
+        html = f"""<html><body><main><h1>Legal counselling</h1><p>{_LONG_PARA}</p>
+          <section><div class="template template--content-with-sidebar">
+          <div class="template__content"><h2>Low income</h2><p>{section}</p></div>
+          <div class="template__sidebar"></div></div></section>
+          </main></body></html>"""
+        assert section in (_deterministic_extract(html) or "")
+
+    def test_site_footer_inside_main_dropped(self) -> None:
+        from worker.tasks import _main_region_extract
+
+        html = f"""<html><body><main><h1>T</h1><p>{_LONG_PARA}</p>
+          <article><p>{_LONG_PARA}</p><footer>Author: Mari</footer></article>
+          <footer class="site-footer-vp">Registry code 77001458</footer></main></body></html>"""
+        result = _main_region_extract(html) or ""
+        assert "Registry code" not in result
+        assert "Author: Mari" in result
+
+    def test_teasers_and_page_tools_inside_main_dropped(self) -> None:
+        from worker.tasks import _main_region_extract
+
+        html = f"""<html><body><main>
+          <div class="content"><a class="accessibility" href="/juurdepaasetavus">Juurdepääsetavus</a></div>
+          <h1>T</h1><ul><li>Lisatud: 28.04.2024</li><li><a href="#">Prindi</a></li></ul>
+          <p>{_LONG_PARA}</p><p><a href="#osa2">Osa 2</a></p>
+          <section class="news-section"><div class="view view-news view-display-id-news_bottom">
+            <h2>Viimased uudised</h2><a href="/uudised/x">Other news</a></div></section>
+          </main></body></html>"""
+        result = _main_region_extract(html) or ""
+        assert "Juurdepääsetavus" not in result
+        assert "Prindi" not in result
+        assert "Viimased uudised" not in result
+        assert "Lisatud: 28.04.2024" in result
+        assert "Osa 2" in result
+
+    def test_news_teasers_dropped_on_trafilatura_path(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        html = f"""<html><body><main><article><h1>T</h1>
+          <ul><li>Lisatud: 28.04.2024</li><li><a href="#">Prindi</a></li></ul>
+          <p>{_LONG_PARA}</p><p>{_LONG_PARA}</p></article>
+          <section class="news-section"><div class="view view-news view-display-id-news_bottom">
+            <h2>Viimased uudised</h2><p><a href="/uudised/x">Other news headline</a></p></div></section>
+          </main></body></html>"""
+        result = _trafilatura_extract(html) or ""
+        assert "Viimased uudised" not in result
+        assert "Prindi" not in result
+        assert "\n*\n" not in f"\n{result}\n"
+
+    def test_good_trafilatura_extract_kept(self) -> None:
+        from worker.tasks import _prefer_main_region
+
+        html = f"<html><body><main><h1>T</h1><p>{_LONG_PARA}</p></main></body></html>"
+        assert _prefer_main_region(html, f"# T\n\n{_LONG_PARA}") is False
+
+    def test_no_main_element_never_switches(self) -> None:
+        from worker.tasks import _prefer_main_region
+
+        html = f"<html><body><div><p>{_LONG_PARA}</p></div></body></html>"
+        assert _prefer_main_region(html, "x") is False
+
+
+# ---------------------------------------------------------------------------
 # HTML table preservation — trafilatura placeholder pass + cleanup
 # ---------------------------------------------------------------------------
 
@@ -636,7 +918,7 @@ class TestRestoreTables:
         table = "<table><tr><td>T</td></tr></table>"
         for decoration in ("## ", "- ", "> ", "1. "):
             result, missing = _restore_tables(f"{decoration}@@M@@", [table], ["@@M@@"])
-            assert missing == 0
+            assert missing == []
             assert result.strip() == table
 
     def test_table_html_with_backslashes_is_not_mangled(self) -> None:
@@ -645,14 +927,14 @@ class TestRestoreTables:
 
         table = r"<table><tr><td>C:\path \g<1> \1</td></tr></table>"
         result, missing = _restore_tables("@@M@@", [table], ["@@M@@"])
-        assert missing == 0
+        assert missing == []
         assert result == table
 
     def test_counts_dropped_placeholders(self) -> None:
         from worker.tasks import _restore_tables
 
         result, missing = _restore_tables("no marker here", ["<table/>"], ["@@M@@"])
-        assert missing == 1
+        assert missing == ["<table/>"]
         assert result == "no marker here"
 
     def test_replaces_decorated_and_bare_occurrences(self) -> None:
@@ -665,7 +947,339 @@ class TestRestoreTables:
         )
         assert "@@M@@" not in result
         assert result.count("<T/>") == 2
-        assert missing == 0
+        assert missing == []
+
+
+# ---------------------------------------------------------------------------
+# Pages that are mostly one table
+# ---------------------------------------------------------------------------
+
+# A data page whose only real content is a table, wrapped in a nav menu with
+# an unclosed <div> inside an <li> (the ilmateenistus.ee "andmed tabelis"
+# pages). lxml nests everything after that menu inside <nav>; html5lib, like
+# a browser, does not.
+_TABLE_PAGE = (
+    "<html><body>"
+    '<a class="skip-link" href="#main">Skip to content</a>'
+    "<nav><ul><li><div>Menu</li></ul></nav>"
+    "<section><h2>Coast</h2><table>"
+    '<thead><tr><th rowspan="2">Station</th><th colspan="2">10 min mean</th></tr>'
+    "<tr><th>Direction</th><th>Speed</th></tr></thead>"
+    "<tbody><tr><td>Kihnu</td><td>279</td><td>2,2</td></tr>"
+    "<tr><td>Vilsandi</td><td>335</td><td>6,7</td></tr>"
+    "<tr><td>Dirhami</td><td>324</td><td>7,6</td></tr></tbody>"
+    "</table></section></body></html>"
+)
+
+
+class TestTableOnlyPages:
+    def test_malformed_menu_does_not_swallow_the_table(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", _TABLE_PAGE, use_llm=False)
+        result = clean_html(entity, None, None)
+        assert 'colspan="2"' in result and 'rowspan="2"' in result
+        assert "Vilsandi" in result
+        assert "|" not in result
+
+    def test_bs_does_not_strip_table_nested_into_nav_by_parser(self) -> None:
+        """Under lxml the table lands inside <nav>, which the fallback
+        decomposes as boilerplate along with the table."""
+        from worker.tasks import _beautifulsoup_extract
+
+        assert "Vilsandi" in _beautifulsoup_extract(_TABLE_PAGE)
+
+    def test_trafilatura_dropping_the_main_table_counts_as_failure(self) -> None:
+        """Leftovers smaller than the dropped table (a lone skip link) must
+        return None so clean_html falls back instead of saving them."""
+        from worker.tasks import _trafilatura_extract
+
+        with patch("worker.tasks.trafilatura.extract", return_value="Skip to content"):
+            assert _trafilatura_extract(_TABLE_PAGE) is None
+
+    def test_trafilatura_pruning_a_small_table_is_still_accepted(self) -> None:
+        from worker.tasks import _trafilatura_extract
+
+        prose = "A long article paragraph about the coast. " * 20
+        with patch("worker.tasks.trafilatura.extract", return_value=prose):
+            # markdownify (which writes the Markdown) trims the trailing space.
+            assert _trafilatura_extract(_TABLE_PAGE) == prose.strip()
+
+    def test_bs_falls_back_to_markdownify_when_partition_drops_table(self) -> None:
+        from unstructured.documents.elements import Text
+
+        from worker.tasks import _beautifulsoup_extract
+
+        with patch(
+            "worker.tasks.partition_html", return_value=[Text("Skip to content")]
+        ):
+            result = _beautifulsoup_extract(_TABLE_PAGE)
+        assert 'colspan="2"' in result
+        assert "Dirhami" in result
+
+
+_PAGE_URL = "https://www.example.ee/et/pere/toetused"
+_LINK_PAGE = (
+    "<html><body><nav><a href='/'>Avaleht</a></nav><main>"
+    "<h1>Peretoetused</h1>"
+    "<p>Peretoetuste kohta loe lähemalt <a href='/toetused/lapsetoetus'>"
+    "lapsetoetuse lehelt</a> ja vaata ka <a href='https://www.ska.ee/pere'>"
+    "SKA kodulehte</a>. See lõik on piisavalt pikk, et seda peetaks "
+    "põhisisuks, sest siin on mitu lauset teksti.</p>"
+    "<p><img src='/files/skeem.png' alt='Toetuste skeem'></p>"
+    "<p><img src='data:image/gif;base64,R0lGOD' data-src='lazy.jpg' alt='Laisk'></p>"
+    "<p>Teine lõik selgitab taotlemise korda pikemalt ja sisaldab samuti "
+    "olulist infot inimestele, kes soovivad toetust taotleda.</p>"
+    "<table><tr><th>Toetus</th><th>Summa</th></tr>"
+    "<tr><td><a href='vorm.pdf'>Lapsetoetus</a></td><td>80 €</td></tr></table>"
+    "</main></body></html>"
+)
+
+
+class TestLinksAndImages:
+    """Cleaned text is read away from its page: link and image targets must
+    survive extraction, as absolute URLs."""
+
+    def test_inline_image_does_not_cost_its_paragraph(self) -> None:
+        """trafilatura drops a paragraph's text when an image sits inside it."""
+        from worker.tasks import _trafilatura_extract
+
+        html = (
+            f"<html><body><main><h1>T</h1><p>{_LONG_PARA}</p>"
+            "<p><img src='/logo.png' alt='Kokkuleppe logo'> Liitusime "
+            f"<strong>mitmekesisuse kokkuleppega</strong>. {_LONG_PARA}</p>"
+            f"<p>{_LONG_PARA}</p></main></body></html>"
+        )
+        result = _trafilatura_extract(html, _PAGE_URL) or ""
+        assert "Liitusime" in result
+        assert "![Kokkuleppe logo](https://www.example.ee/logo.png)" in result
+
+    def test_resolve_page_urls(self) -> None:
+        from bs4 import BeautifulSoup
+
+        from worker.tasks import _resolve_page_urls
+
+        soup = BeautifulSoup(
+            "<a href='a/b'>x</a><a href='#top'>t</a><a href='mailto:x@y.ee'>m</a>"
+            "<a href='javascript:void(0)'>js</a>"
+            "<img src='i.png'><img data-lazy-src='/l.png'>",
+            "html.parser",
+        )
+        _resolve_page_urls(soup, _PAGE_URL)
+        hrefs = [a["href"] for a in soup.find_all("a")]
+        assert hrefs == [
+            "https://www.example.ee/et/pere/a/b",
+            "#top",
+            "mailto:x@y.ee",
+        ]
+        assert "js" in soup.get_text()
+        assert [i["src"] for i in soup.find_all("img")] == [
+            "https://www.example.ee/et/pere/i.png",
+            "https://www.example.ee/l.png",
+        ]
+
+    def test_base_href_wins_over_page_url(self) -> None:
+        from bs4 import BeautifulSoup
+
+        from worker.tasks import _resolve_page_urls
+
+        soup = BeautifulSoup(
+            "<head><base href='/sisu/'></head><a href='x.pdf'>x</a>", "html.parser"
+        )
+        _resolve_page_urls(soup, _PAGE_URL)
+        assert soup.a["href"] == "https://www.example.ee/sisu/x.pdf"
+
+    def test_relative_urls_kept_without_page_url(self) -> None:
+        from bs4 import BeautifulSoup
+
+        from worker.tasks import _resolve_page_urls
+
+        soup = BeautifulSoup("<a href='/x'>x</a>", "html.parser")
+        _resolve_page_urls(soup, None)
+        assert soup.a["href"] == "/x"
+
+    @pytest.mark.parametrize("extractor", ["trafilatura", "beautifulsoup"])
+    def test_extractors_keep_links_and_images(self, extractor: str) -> None:
+        from worker.tasks import _beautifulsoup_extract, _trafilatura_extract
+
+        fn = _trafilatura_extract if extractor == "trafilatura" else _beautifulsoup_extract
+        result = fn(_LINK_PAGE, url=_PAGE_URL) or ""
+        assert "[lapsetoetuse lehelt](https://www.example.ee/toetused/lapsetoetus)" in result
+        assert "[SKA kodulehte](https://www.ska.ee/pere)" in result
+        assert "![Toetuste skeem](https://www.example.ee/files/skeem.png)" in result
+        assert "https://www.example.ee/et/pere/lazy.jpg" in result
+        assert 'href="https://www.example.ee/et/pere/vorm.pdf"' in result
+        assert "Avaleht" not in result
+
+    def test_bs_partition_path_keeps_links(self) -> None:
+        """partition_html keeps text only; links must reach it pre-rendered."""
+        from unstructured.documents.elements import NarrativeText
+
+        from worker.tasks import _beautifulsoup_extract
+
+        seen: list[str] = []
+
+        def fake_partition(*, text: str, **_: object) -> list:
+            seen.append(text)
+            return [NarrativeText("x " * 400)]
+
+        with patch("worker.tasks.partition_html", side_effect=fake_partition):
+            _beautifulsoup_extract(_LINK_PAGE, url=_PAGE_URL)
+        assert "[SKA kodulehte](https://www.ska.ee/pere)" in seen[0]
+        assert "<table" not in seen[0]
+
+    def test_link_urls_do_not_count_as_kept_text(self) -> None:
+        from worker.tasks import _visible_text_len
+
+        assert _visible_text_len("[abc](https://example.ee/very/long/path)") == len(
+            "[abc]"
+        )
+
+    def test_llm_receives_absolute_urls_and_is_told_to_keep_them(self) -> None:
+        from worker.tasks import _EXTRACT_SYSTEM, _llm_extract
+
+        client = MagicMock()
+        client.chat.completions.create.return_value.choices[0].finish_reason = "stop"
+        client.chat.completions.create.return_value.choices[
+            0
+        ].message.content = "x " * 400
+        _llm_extract(client, "dep", _LINK_PAGE, url=_PAGE_URL)
+        sent = client.chat.completions.create.call_args.kwargs["messages"][-1]
+        assert 'href="https://www.example.ee/toetused/lapsetoetus"' in sent["content"]
+        assert 'src="https://www.example.ee/files/skeem.png"' in sent["content"]
+        assert "[text](url)" in _EXTRACT_SYSTEM
+
+    def test_clean_html_passes_page_url(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_html
+
+        entity = _make_entity(tmp_path, ".html", _LINK_PAGE, use_llm=False)
+        entity.url = _PAGE_URL
+        result = clean_html(entity, None, None)
+        assert "https://www.example.ee/files/skeem.png" in result
+
+
+class TestLLMExtractTables:
+    """The LLM never sees or writes table markup: tables go out as
+    placeholders and the original HTML is restored into its answer."""
+
+    @staticmethod
+    def _client_echoing_placeholders(answer_template: str) -> MagicMock:
+        client = MagicMock()
+
+        def reply(*, model: str, messages: list[dict]) -> MagicMock:
+            from worker.tasks import _TABLE_PLACEHOLDER_PREFIX
+
+            sent = messages[-1]["content"]
+            marker = next(
+                word
+                for word in sent.replace("<", " ").replace(">", " ").split()
+                if word.startswith(_TABLE_PLACEHOLDER_PREFIX)
+            )
+            response = MagicMock()
+            response.choices[0].finish_reason = "stop"
+            response.choices[0].message.content = answer_template.format(marker)
+            return response
+
+        client.chat.completions.create.side_effect = reply
+        return client
+
+    def test_tables_are_sent_as_placeholders_and_restored(self) -> None:
+        from worker.tasks import _llm_extract
+
+        client = self._client_echoing_placeholders("## Coast\n\n{}\n")
+        result = _llm_extract(client, "dep", _TABLE_PAGE)
+
+        sent = client.chat.completions.create.call_args.kwargs["messages"][-1]
+        assert "<table" not in sent["content"]
+        assert 'colspan="2"' in result and "Kihnu" in result
+
+    def test_answer_that_drops_the_main_table_is_rejected(self) -> None:
+        from worker.tasks import _llm_extract
+
+        client = self._client_echoing_placeholders("Skip to content")
+        assert _llm_extract(client, "dep", _TABLE_PAGE) == ""
+
+    def test_prompt_forbids_pipe_tables(self) -> None:
+        from worker.tasks import _EXTRACT_SYSTEM
+
+        assert "Never write a table yourself" in _EXTRACT_SYSTEM
+        assert "may you use a Markdown pipe table" not in _EXTRACT_SYSTEM
+
+
+# ---------------------------------------------------------------------------
+# Markdown pipe tables -> HTML (PDF via pymupdf4llm, stray LLM output)
+# ---------------------------------------------------------------------------
+
+
+class TestMarkdownTablesToHtml:
+    def test_pymupdf4llm_table_becomes_html(self) -> None:
+        from worker.tasks import markdown_tables_to_html
+
+        text = (
+            "Intro.\n\n"
+            "|Name|Rate|Due|\n|---|---|---|\n"
+            "|Income tax|22%|15 Mar|\n|Social tax|33%|10th|\n\n"
+            "After."
+        )
+        result = markdown_tables_to_html(text)
+        assert "|" not in result
+        assert "<th>Name</th>" in result
+        assert "<td>Social tax</td><td>33%</td><td>10th</td>" in result
+        assert result.startswith("Intro.\n\n<table>")
+        assert result.endswith("</table>\n\nAfter.")
+
+    def test_cells_are_escaped_but_br_survives(self) -> None:
+        from worker.tasks import markdown_tables_to_html
+
+        text = "| A | B |\n| :-- | --: |\n| x<br>y | a \\| b & <c> |\n"
+        result = markdown_tables_to_html(text)
+        assert "<td>x<br/>y</td>" in result
+        assert "<td>a | b &amp; &lt;c&gt;</td>" in result
+
+    def test_short_rows_are_padded_long_rows_truncated(self) -> None:
+        from worker.tasks import markdown_tables_to_html
+
+        text = "| A | B |\n|---|---|\n| 1 |\n| 1 | 2 | 3 |\n"
+        result = markdown_tables_to_html(text)
+        assert "<tr><td>1</td><td></td></tr>" in result
+        assert "<td>3</td>" not in result
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Heading\n---\n\nprose | with a pipe\n",  # setext heading
+            "a | b\n\n---\n",  # thematic break, blank line between
+            "| A | B |\n|---|---|---|\n| 1 | 2 |\n",  # delimiter width mismatch
+            "```\n| A | B |\n|---|---|\n```\n",  # fenced code
+        ],
+    )
+    def test_non_tables_are_left_alone(self, text: str) -> None:
+        from worker.tasks import markdown_tables_to_html
+
+        assert markdown_tables_to_html(text) == text
+
+    def test_pdf_route_writes_html_tables(self, tmp_path: Path) -> None:
+        from worker.tasks import clean_file_task
+
+        entity = _make_entity(tmp_path, ".pdf", "unused", use_llm=False)
+        pipe_table = "# Report\n\n| A | B |\n|---|---|\n| 1 | 2 |\n"
+
+        with (
+            patch("worker.tasks.requests.post") as mock_post,
+            patch("worker.tasks.cleanup_directory"),
+            patch("worker.tasks.clean_pdf", return_value=pipe_table),
+            patch("worker.tasks.extract_images", return_value=[]),
+        ):
+            mock_resp = MagicMock()
+            mock_resp.json.return_value = {"response": "http://mock/file"}
+            mock_resp.raise_for_status.return_value = None
+            mock_post.return_value = mock_resp
+
+            clean_file_task(entity)
+
+        cleaned = (tmp_path / "cleaned.txt").read_text(encoding="utf-8")
+        assert "<table>" in cleaned and "<td>2</td>" in cleaned
+        assert "|---|" not in cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -753,9 +1367,7 @@ class TestOfficeTableMerges:
         assert 'colspan="3"' in result
         assert result.count("Merged across") == 1
 
-    def test_pptx_tables_paired_by_position_not_z_order(
-        self, tmp_path: Path
-    ) -> None:
+    def test_pptx_tables_paired_by_position_not_z_order(self, tmp_path: Path) -> None:
         """When two tables are added in a z-order that differs from their
         visual (top, left) order, the source-side loader must sort by
         position so it lines up with Unstructured. Otherwise the count
@@ -961,12 +1573,12 @@ class TestCleanHtmlRouting:
         entity = _make_entity(tmp_path, ".html", html, use_llm=False)
 
         with patch(
-            "worker.tasks._trafilatura_extract",
+            "worker.tasks._deterministic_extract",
             return_value="# Extracted\n\nGood content.",
-        ) as mock_traf:
+        ) as mock_extract:
             result = clean_html(entity, client=None, deployment=None)
 
-        mock_traf.assert_called_once()
+        mock_extract.assert_called_once()
         assert result == "# Extracted\n\nGood content."
 
     def test_no_llm_falls_back_to_beautifulsoup_when_trafilatura_empty(
@@ -979,7 +1591,7 @@ class TestCleanHtmlRouting:
         )
 
         with (
-            patch("worker.tasks._trafilatura_extract", return_value=None),
+            patch("worker.tasks._deterministic_extract", return_value=None),
             patch(
                 "worker.tasks._beautifulsoup_extract", return_value="BS result"
             ) as mock_bs,
@@ -1002,7 +1614,7 @@ class TestCleanHtmlRouting:
         client = MagicMock()
 
         with (
-            patch("worker.tasks._trafilatura_extract", return_value="Good extraction"),
+            patch("worker.tasks._deterministic_extract", return_value="Good extraction"),
             patch("worker.tasks._llm_evaluate", return_value=(True, "looks good")),
         ):
             result = clean_html(entity, client=client, deployment="dep")
@@ -1024,7 +1636,7 @@ class TestCleanHtmlRouting:
         client = MagicMock()
 
         with (
-            patch("worker.tasks._trafilatura_extract", return_value="Bad extraction"),
+            patch("worker.tasks._deterministic_extract", return_value="Bad extraction"),
             patch("worker.tasks._llm_evaluate", return_value=(False, "too noisy")),
             patch(
                 "worker.tasks._beautifulsoup_extract", return_value="BS fallback"
@@ -1050,7 +1662,7 @@ class TestCleanHtmlRouting:
         client = MagicMock()
 
         with (
-            patch("worker.tasks._trafilatura_extract", return_value="Bad extraction"),
+            patch("worker.tasks._deterministic_extract", return_value="Bad extraction"),
             patch("worker.tasks._llm_evaluate", return_value=(False, "too noisy")),
             patch(
                 "worker.tasks._llm_extract", return_value="LLM corrected content"
@@ -1076,7 +1688,7 @@ class TestCleanHtmlRouting:
         client = MagicMock()
 
         with (
-            patch("worker.tasks._trafilatura_extract", return_value="Bad extraction"),
+            patch("worker.tasks._deterministic_extract", return_value="Bad extraction"),
             patch("worker.tasks._llm_evaluate", return_value=(False, "too noisy")),
             patch("worker.tasks._llm_extract", return_value=""),
             patch(
@@ -1102,7 +1714,7 @@ class TestCleanHtmlRouting:
         )
 
         with (
-            patch("worker.tasks._trafilatura_extract", return_value="Traf result"),
+            patch("worker.tasks._deterministic_extract", return_value="Traf result"),
             caplog.at_level(logging.WARNING, logger="worker.tasks"),
         ):
             result = clean_html(entity, client=None, deployment=None)
