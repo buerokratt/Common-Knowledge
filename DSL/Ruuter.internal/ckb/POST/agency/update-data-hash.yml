@@ -60,6 +60,20 @@ scheduleSource:
   args:
     url: "[#CKB_RUUTER_INTERNAL]/pipeline/scheduler-check-for-unscheduled-records"
   result: res
+  next: reportToCentops
+
+reportToCentops:
+  call: http.post
+  args:
+    url: "[#CKB_RUUTER_INTERNAL]/agency/report-to-centops"
+    headers:
+      type: json
+    body:
+      agencyId: ${incoming.body.agency_id}
+  timeout: 25000
+  result: centopsReportRes
+  error: returnSuccess
+  next: returnSuccess
 
 returnSuccess:
   return: "OK"

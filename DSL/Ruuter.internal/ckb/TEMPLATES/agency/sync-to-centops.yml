@@ -1,0 +1,77 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Send this CKB's presigned zip url and datahash to CentOps"
+  method: post
+  accepts: json
+  returns: json
+  namespace: agency
+  allowlist:
+    body:
+      - field: presigned_url
+        type: string
+        description: "Fresh presigned link to the agency zip"
+      - field: data_hash
+        type: string
+        description: "Checksum of the zip (SHA-1 data_hash)"
+
+extractRequestData:
+  assign:
+    presigned_url: ${incoming.body.presigned_url}
+    data_hash: ${incoming.body.data_hash}
+
+validateInput:
+  switch:
+    - condition: ${!presigned_url || !data_hash}
+      next: returnMissingInput
+  next: buildAuthHeader
+
+buildAuthHeader:
+  call: http.post
+  args:
+    url: "[#CKB_DMAPPER]/encryption/base64"
+    body:
+      content: "[#CENTOPS_API_KEY]:[#CENTOPS_API_SECRET]"
+  result: encodedAuthHeader
+  logging:
+    request: false
+    response: false
+  error: returnAuthHeaderFailed
+  next: checkAuthHeader
+
+checkAuthHeader:
+  switch:
+    - condition: ${200 <= encodedAuthHeader.response.statusCodeValue && encodedAuthHeader.response.statusCodeValue < 300 && !!encodedAuthHeader.response.body.cipher}
+      next: sendToCentops
+  next: returnAuthHeaderFailed
+
+sendToCentops:
+  call: http.put
+  args:
+    url: "[#CENTOPS_URL]/integration/common-knowledge-bases"
+    query:
+      client_id: "[#CENTOPS_CLIENT_ID]"
+    headers:
+      authorization: ${encodedAuthHeader.response.body.cipher}
+    body:
+      presigned_url: ${presigned_url}
+      presigned_url_data_hash: ${data_hash}
+  result: centopsRes
+  timeout: 10000
+  logging:
+    request: false
+    response: false
+  error: returnCentopsStatus
+  next: returnCentopsStatus
+
+returnCentopsStatus:
+  return: ${centopsRes.response.statusCodeValue}
+  next: end
+
+returnMissingInput:
+  return: 400
+  next: end
+
+returnAuthHeaderFailed:
+  return: 500
+  next: end
