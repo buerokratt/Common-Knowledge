@@ -16,8 +16,7 @@ carried forward. It was built with different chunk geometry, without NFC
 normalisation, and with points keyed on `document_hash` instead of our
 coordinate `chunk_id`. **No id mapping exists, and none can.** So this is a
 re-index, not a migration, and the only real question is how to run it
-safely. The reasoning is in the task breakdown,
-[Chunking consolidates into this pipeline](../../content-external-pipeline-task-breakdown.md#chunking-consolidates-into-this-pipeline).
+safely.
 
 ## 1. The order (L21)
 
@@ -274,10 +273,10 @@ action with a named owner**, as a separate change:
 | Dropped on | |
 
 Nothing in the exporter will ever do this, and that is deliberate. The old
-collection is not in any manifest this pipeline wrote, so `run_purge` and
-the stale sweep know nothing about it. The exporter cannot even be pointed
-at it, because startup refuses `contextual_chunks_*` and anything in
-`LLM_MODULE_PROTECTED_COLLECTIONS`. If nobody owns the
+collection is not in any manifest this pipeline wrote, so `run_ops purge`
+and the stale sweep know nothing about it. The exporter cannot even be
+pointed at it, because startup refuses `contextual_chunks_azure`,
+`contextual_chunks_aws` and anything in `LLM_MODULE_PROTECTED_COLLECTIONS`. If nobody owns the
 drop, the old collection becomes permanent double storage that no one is
 sure is safe to remove.
 
@@ -298,10 +297,20 @@ indefinitely, with no error anywhere. `tests/test_classifier_safety.py`
 fails if the job disappears from `DSL/CronManager/scheduler.yml` or changes
 schedule.
 
-**Re-run [Verification 14–17](../../content-external-pipeline.md#integration--global-classifier-regression)
-after the swap (step 5).** The ZIP must still build hourly, `data_hash` must
-still move, and `client/data/import` must still resolve to a byte-identical
-file set.
+**Re-run the four Classifier regression checks after the swap (step 5).**
+Each must give the same answer as before the cutover:
+
+1. `GET /ckb/client/data/new?clientIds=<agency>` → `client_data_hash` is
+   unaffected by an export run.
+2. `GET /ckb/client/data/exist?clientIds=<agency>` → `is_data_available` is
+   still true; `GET /ckb/client/data/import` → the signed URL resolves and the
+   ZIP's file list is byte-identical to the previous run's.
+3. After a full export, nothing this service wrote appears under
+   `uploads/scrapped-data/{agency}/`, and `zipped/{agency}.zip` is untouched.
+4. Forcing the hourly zip while an export runs → both complete, `is_zipping`
+   is never held by this service, and the resulting ZIP is correct.
+
+The ZIP must still build hourly and `data_hash` must still move.
 
 ## 8. Metadata-merge atomicity (L25)
 
@@ -324,9 +333,6 @@ all-or-nothing. Before switching it on, check on staging that a metadata-only
 edit shows up in the collection.
 
 ## Gate checklist — before the swap (step 5)
-
-This mirrors the production-readiness checklist,
-[Before the llm-module cutover swap](../../content-external-pipeline-production-readiness.md).
 
 - [x] Contract agreed: `AGREED_TERMS.status = "agreed"`, §13 q2, 4, 10 and 15 answered (recorded 2026-10-28 on an assumption; **written sign-off pending**)
 - [ ] §13 q1 answered, `CHUNK_PROFILE` pinned from it and confirmed in `LLM_MODULE_CHUNK_PROFILE_CONFIRMED`; q7 and q8 recorded (§5, §2)
