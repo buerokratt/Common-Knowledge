@@ -350,6 +350,7 @@ source = { virtual = "." }
 cleaning = [
     { name = "beautifulsoup4" },
     { name = "fastapi" },
+    { name = "html5lib" },
     { name = "hvac" },
     { name = "langdetect" },
     { name = "markdownify" },
@@ -437,6 +438,7 @@ requires-dist = [
     { name = "fastapi", marker = "extra == 'file-processing'", specifier = "==0.115.12" },
     { name = "fastapi", marker = "extra == 'scheduler'", specifier = "==0.115.12" },
     { name = "fastapi", marker = "extra == 'scrapper'", specifier = "==0.115.12" },
+    { name = "html5lib", marker = "extra == 'cleaning'", specifier = "==1.1" },
     { name = "hvac", marker = "extra == 'cleaning'", specifier = "==2.3.0" },
     { name = "hvac", marker = "extra == 'content-external'", specifier = "==2.3.0" },
     { name = "langdetect", marker = "extra == 'cleaning'", specifier = "==1.0.9" },

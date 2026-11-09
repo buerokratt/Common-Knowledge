@@ -315,7 +315,7 @@ Tests that exercise the `use_llm` and `use_llm_correction` paths are automatical
 ```bash
 export AZURE_OPENAI_API_KEY=...
 export AZURE_OPENAI_ENDPOINT=...
-export AZURE_OPENAI_DEPLOYMENT=gpt-4o-mini   # optional, this is the default
+export AZURE_OPENAI_DEPLOYMENT=gpt-5-mini   # optional, this is the default
 export AZURE_OPENAI_API_VERSION=2024-02-01   # optional, this is the default
 ```
 

@@ -36,7 +36,7 @@ class Settings(BaseSettings):
 
     # Defaults — overridden at call time by get_vault_secrets()
     azure_openai_api_version: str = "2024-02-01"
-    azure_openai_deployment: str = "gpt-4o-mini"
+    azure_openai_deployment: str = "gpt-5-mini"
 
 
 # Singleton for non-secret config; secrets are never stored here

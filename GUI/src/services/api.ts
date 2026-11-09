@@ -96,8 +96,30 @@ api.interceptors.request.use(
   handleRequestError
 );
 
+const BACKOFFICE_ROUTES = [
+  'accounts/user-role',
+  'accounts/customer-support-activity',
+  'accounts/settings',
+  'accounts/logout',
+  'accounts/admin/',
+  'auth/jwt/',
+  'agents/chats/',
+  'chats/',
+  'comments/',
+  'configs/bot-config',
+];
+
+const isBackofficeRoute = (url = '') =>
+  BACKOFFICE_ROUTES.some((route) => url.replace(/^\/+/, '').startsWith(route));
+
 apiDev.interceptors.request.use(
-  (axiosRequest) => axiosRequest,
+  (axiosRequest) => {
+    if (isBackofficeRoute(axiosRequest.url)) {
+      axiosRequest.baseURL =
+        import.meta.env.REACT_APP_RUUTER_PRIVATE_API_URL ?? axiosRequest.baseURL;
+    }
+    return axiosRequest;
+  },
   handleRequestError
 );
 
