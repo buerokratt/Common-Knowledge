@@ -1053,7 +1053,7 @@ const Agency: FC = () => {
                     }))
                   }
                 />
-                <Tooltip content="Tooltip to be implemented">
+                <Tooltip content={t('knowledgeBase.comprehensiveQualityControlTooltip') as string}>
                   <button
                     type="button"
                     className="quality-control-options__info-btn"
@@ -1251,7 +1251,7 @@ const Agency: FC = () => {
                     }))
                   }
                 />
-                <Tooltip content="Tooltip to be implemented">
+                <Tooltip content={t('knowledgeBase.comprehensiveQualityControlTooltip') as string}>
                   <button
                     type="button"
                     className="quality-control-options__info-btn"

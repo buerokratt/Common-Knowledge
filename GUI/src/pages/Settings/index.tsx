@@ -1004,7 +1004,7 @@ const SourceSettings: FC = () => {
 
           <div className="quality-control-standalone">
             <span className="quality-control-standalone__title">
-              Content extraction quality control options:
+              {t('knowledgeBase.contentExtractionQualityControlOptions')}
             </span>
             <div className="quality-control-standalone__options">
               <div className="quality-control-standalone__item">
@@ -1012,7 +1012,7 @@ const SourceSettings: FC = () => {
                   label=""
                   name="qualityControl"
                   item={{
-                    label: 'Comprehensive quality control',
+                    label: t('knowledgeBase.comprehensiveQualityControl'),
                     value: 'comprehensive',
                   }}
                   checked={settings.qualityControlLevel === 'comprehensive'}
@@ -1023,11 +1023,11 @@ const SourceSettings: FC = () => {
                     }))
                   }
                 />
-                <Tooltip content="Tooltip to be implemented">
+                <Tooltip content={t('knowledgeBase.comprehensiveQualityControlTooltip') as string}>
                   <button
                     type="button"
                     className="quality-control-standalone__info-btn"
-                    aria-label="Comprehensive quality control info"
+                    aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
                   >
                     <Icon icon={<MdInfoOutline fontSize={18} color="#005AA3" />} size="medium" />
                   </button>
