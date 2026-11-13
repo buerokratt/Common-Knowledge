@@ -1,7 +1,7 @@
 check_for_cookie:
   switch:
     - condition: ${incoming.headers == null || incoming.headers.cookie == null}
-      next: guard_fail
+      next: guard_unauthorized
   next: authenticate
 
 authenticate:
@@ -10,19 +10,29 @@ authenticate:
   headers:
     cookie: ${incoming.headers.cookie}
   result: authority_result
+  next: check_authority_result
 
+# check-user-authority returns "false" (no/empty/invalid session), "forbidden"
+# (user without a required role) or the user info (success).
 check_authority_result:
   switch:
-    - condition: ${authority_result !== "false"}
-      next: guard_success
-  next: guard_fail
+    - condition: ${authority_result === "false" || authority_result === false}
+      next: guard_unauthorized
+    - condition: ${authority_result === "forbidden"}
+      next: guard_forbidden
+  next: guard_success
 
 guard_success:
   return: "success"
   status: 200
   next: end
 
-guard_fail:
+guard_unauthorized:
   return: "unauthorized"
+  status: 401
+  next: end
+
+guard_forbidden:
+  return: "forbidden"
   status: 403
   next: end

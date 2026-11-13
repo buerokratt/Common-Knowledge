@@ -6,6 +6,7 @@
     "saving": "Saving",
     "edit": "Edit",
     "loading": "Loading...",
+    "forbidden": "You do not have permission to access this page.",
     "delete": "Delete",
     "deleting": "Deleting",
     "refresh": "Refresh",
