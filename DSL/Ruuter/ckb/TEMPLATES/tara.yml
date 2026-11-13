@@ -31,7 +31,10 @@ get_cookie_info:
 
 check_cookie_info_response:
   switch:
-    - condition: ${200 <= res.response.statusCodeValue && res.response.statusCodeValue < 300}
+
+    # TIM answers 200 with an empty body for an expired/blacklisted/invalid token,
+    # so a 2xx alone does not mean there is a user.
+    - condition: ${200 <= res.response.statusCodeValue && res.response.statusCodeValue < 300 && res.response.body != null}
       next: return_auth_result
   next: return_bad_request
 

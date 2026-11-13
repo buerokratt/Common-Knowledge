@@ -331,6 +331,9 @@ gui:
       value: http://localhost:8080/ckb
     - name: REACT_APP_RUUTER_API_URL
       value: http://localhost:8086/ckb
+    # Back-office login page; the GUI redirects here when the session is missing or expired (401).
+    - name: REACT_APP_CUSTOMER_SERVICE_LOGIN
+      value: http://localhost:3004/et/dev-auth
     - name: REACT_APP_CSP
       value: "upgrade-insecure-requests; default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
     - name: DEBUG_ENABLED
