@@ -249,6 +249,15 @@
     span {
       font-size: 14px;
     }
+
+    // FormCheckbox stretches to full width by default; keep the info icon next to its label.
+    .checkbox {
+      width: auto;
+    }
+
+    .checkbox__item label {
+      font-size: 14px;
+    }
   }
 
   &__info-btn {

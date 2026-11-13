@@ -15,6 +15,7 @@ import {
   Card,
   DataTable,
   Dialog,
+  FormCheckbox,
   FormInput,
   Icon,
   Track,
@@ -56,7 +57,7 @@ interface KnowledgeBaseFormData {
   files: FileItem[];
   apiUrl?: string;
   websiteUrl?: string;
-  qualityControlLevel: '' | 'basic' | 'comprehensive';
+  qualityControlLevel: '' | 'comprehensive';
   csvFile?: File | null;
   urlList?: { url: string }[];
   extractImages: boolean;
@@ -1037,56 +1038,22 @@ const Agency: FC = () => {
                 {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
               <div className="quality-control-options__row">
-                <label className="quality-control-options__item">
-                  <input
-                    type="radio"
-                    name="qualityControlLevel"
-                    checked={formData.qualityControlLevel === 'basic'}
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        qualityControlLevel:
-                          prev.qualityControlLevel === 'basic' ? '' : 'basic',
-                      }))
-                    }
-                    onChange={() => {}}
-                  />
-                  <span>{t('knowledgeBase.basicQualityControl')}</span>
-                </label>
-                <Tooltip content="Tooltip to be implemented">
-                  <button
-                    type="button"
-                    className="quality-control-options__info-btn"
-                    aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
-                  >
-                    <Icon
-                      className="quality-control-options__info"
-                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
-                      size="medium"
-                    />
-                  </button>
-                </Tooltip>
-              </div>
-              <div className="quality-control-options__row">
-                <label className="quality-control-options__item">
-                  <input
-                    type="radio"
-                    name="qualityControlLevel"
-                    checked={formData.qualityControlLevel === 'comprehensive'}
-                    onClick={() =>
-                      setFormData((prev) => ({
-                        ...prev,
-                        qualityControlLevel:
-                          prev.qualityControlLevel === 'comprehensive'
-                            ? ''
-                            : 'comprehensive',
-                      }))
-                    }
-                    onChange={() => {}}
-                  />
-                  <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
-                </label>
-                <Tooltip content="Tooltip to be implemented">
+                <FormCheckbox
+                  label=""
+                  name="qualityControlLevel"
+                  item={{
+                    label: t('knowledgeBase.comprehensiveQualityControl'),
+                    value: 'comprehensive',
+                  }}
+                  checked={formData.qualityControlLevel === 'comprehensive'}
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      qualityControlLevel: e.target.checked ? 'comprehensive' : '',
+                    }))
+                  }
+                />
+                <Tooltip content={t('knowledgeBase.comprehensiveQualityControlTooltip') as string}>
                   <button
                     type="button"
                     className="quality-control-options__info-btn"
@@ -1268,73 +1235,35 @@ const Agency: FC = () => {
               <span className="quality-control-options__title">
                 {t('knowledgeBase.contentExtractionQualityControlOptions')}
               </span>
-              <div
-                style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: '8px', width: '100%' }}
-              >
-                <div className="quality-control-options__row">
-                  <label className="quality-control-options__item">
-                    <input
-                      type="radio"
-                      name="qualityControlLevelUrlList"
-                      checked={formData.qualityControlLevel === 'basic'}
-                      onClick={() =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          qualityControlLevel:
-                            prev.qualityControlLevel === 'basic' ? '' : 'basic',
-                        }))
-                      }
-                      onChange={() => {}}
+              <div className="quality-control-options__row">
+                <FormCheckbox
+                  label=""
+                  name="qualityControlLevelUrlList"
+                  item={{
+                    label: t('knowledgeBase.comprehensiveQualityControl'),
+                    value: 'comprehensive',
+                  }}
+                  checked={formData.qualityControlLevel === 'comprehensive'}
+                  onChange={(e) =>
+                    setFormData((prev) => ({
+                      ...prev,
+                      qualityControlLevel: e.target.checked ? 'comprehensive' : '',
+                    }))
+                  }
+                />
+                <Tooltip content={t('knowledgeBase.comprehensiveQualityControlTooltip') as string}>
+                  <button
+                    type="button"
+                    className="quality-control-options__info-btn"
+                    aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
+                  >
+                    <Icon
+                      className="quality-control-options__info"
+                      icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
+                      size="medium"
                     />
-                    <span>{t('knowledgeBase.basicQualityControl')}</span>
-                  </label>
-                  <Tooltip content="Tooltip to be implemented">
-                    <button
-                      type="button"
-                      className="quality-control-options__info-btn"
-                      aria-label={t('knowledgeBase.basicQualityControlInfo') as string}
-                    >
-                      <Icon
-                        className="quality-control-options__info"
-                        icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
-                        size="medium"
-                      />
-                    </button>
-                  </Tooltip>
-                </div>
-                <div className="quality-control-options__row">
-                  <label className="quality-control-options__item">
-                    <input
-                      type="radio"
-                      name="qualityControlLevelUrlList"
-                      checked={formData.qualityControlLevel === 'comprehensive'}
-                      onClick={() =>
-                        setFormData((prev) => ({
-                          ...prev,
-                          qualityControlLevel:
-                            prev.qualityControlLevel === 'comprehensive'
-                              ? ''
-                              : 'comprehensive',
-                        }))
-                      }
-                      onChange={() => {}}
-                    />
-                    <span>{t('knowledgeBase.comprehensiveQualityControl')}</span>
-                  </label>
-                  <Tooltip content="Tooltip to be implemented">
-                    <button
-                      type="button"
-                      className="quality-control-options__info-btn"
-                      aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
-                    >
-                      <Icon
-                        className="quality-control-options__info"
-                        icon={<MdInfoOutline fontSize={18} color="#005AA3" />}
-                        size="medium"
-                      />
-                    </button>
-                  </Tooltip>
-                </div>
+                  </button>
+                </Tooltip>
               </div>
             </div>
           </Track>
