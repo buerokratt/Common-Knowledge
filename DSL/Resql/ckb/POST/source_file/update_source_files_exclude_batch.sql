@@ -73,21 +73,6 @@ updated_files AS (
                                 ELSE sf.cleaned_data_url
                             END
                     END::TEXT,
-                'edited_data_url', '::TEXT',
-                    CASE 
-                        WHEN :excluded::BOOLEAN = TRUE THEN 
-                            CASE 
-                                WHEN sf.edited_data_url IS NULL THEN NULL
-                                WHEN sf.edited_data_url LIKE 'excluded/%' THEN sf.edited_data_url
-                                ELSE 'excluded/' || sf.edited_data_url
-                            END
-                        ELSE 
-                            CASE 
-                                WHEN sf.edited_data_url IS NULL THEN NULL
-                                WHEN sf.edited_data_url LIKE 'excluded/%' THEN SUBSTRING(sf.edited_data_url FROM 10)
-                                ELSE sf.edited_data_url
-                            END
-                    END::TEXT,
                 'original_metadata_url', '::TEXT',
                     CASE 
                         WHEN :excluded::BOOLEAN = TRUE THEN 
@@ -116,21 +101,6 @@ updated_files AS (
                                 WHEN sf.cleaned_metadata_url IS NULL THEN NULL
                                 WHEN sf.cleaned_metadata_url LIKE 'excluded/%' THEN SUBSTRING(sf.cleaned_metadata_url FROM 10)
                                 ELSE sf.cleaned_metadata_url
-                            END
-                    END::TEXT,
-                'edited_metadata_url', '::TEXT',
-                    CASE 
-                        WHEN :excluded::BOOLEAN = TRUE THEN 
-                            CASE 
-                                WHEN sf.edited_metadata_url IS NULL THEN NULL
-                                WHEN sf.edited_metadata_url LIKE 'excluded/%' THEN sf.edited_metadata_url
-                                ELSE 'excluded/' || sf.edited_metadata_url
-                            END
-                        ELSE 
-                            CASE 
-                                WHEN sf.edited_metadata_url IS NULL THEN NULL
-                                WHEN sf.edited_metadata_url LIKE 'excluded/%' THEN SUBSTRING(sf.edited_metadata_url FROM 10)
-                                ELSE sf.edited_metadata_url
                             END
                     END::TEXT
             ]::VARCHAR[]

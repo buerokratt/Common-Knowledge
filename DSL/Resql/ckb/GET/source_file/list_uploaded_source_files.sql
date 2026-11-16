@@ -49,9 +49,6 @@ declaration:
       - field: cleaned_data_url
         type: string
         description: "URL to the cleaned data"
-      - field: edited_data_url
-        type: string
-        description: "URL to the edited data"
       - field: is_excluded
         type: boolean
         description: "Whether the file is excluded"
@@ -78,7 +75,7 @@ declaration:
 WITH latest_files AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, source_base_id, file_name, subsector, original_data_url, cleaned_data_url, 
-        edited_data_url, is_excluded, created_at, updated_at, is_deleted, status
+        is_excluded, created_at, updated_at, is_deleted, status
     FROM data_collection.source_file 
     WHERE type = 'uploaded_file'
       AND (:source_id IS NULL OR source_base_id = :source_id::UUID)
@@ -86,7 +83,7 @@ WITH latest_files AS (
 )
 SELECT 
     id, base_id, source_base_id, file_name, subsector, original_data_url, cleaned_data_url, 
-    edited_data_url, is_excluded, created_at, updated_at, status,
+    is_excluded, created_at, updated_at, status,
     :page as page_num,
     CEIL(COUNT(*) OVER () / :page_size::DECIMAL) AS total_pages,
     (COUNT(*) OVER ()) AS total
