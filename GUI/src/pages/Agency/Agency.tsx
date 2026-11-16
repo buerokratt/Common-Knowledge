@@ -788,7 +788,7 @@ const Agency: FC = () => {
             {t('global.edit')}
           </Button>
           <Button
-            disabled={row.original.status === 'running'}
+            disabled={row.original.status === 'running' && !row.original.isStopping}
             appearance="text"
             className="agencies__action-btn"
             onClick={() => setDeleteModal(row.original)}
