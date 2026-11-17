@@ -54,7 +54,7 @@ and `/health` does not move. Act on the `reason`:
 | `reason` | What to do |
 |---|---|
 | `llm_module_active` | Nothing. The chatbot uses the LLM module; flip the toggle OFF in Chatbot settings to resume exporting, which the next poll picks up. A tick or poll that meets this stops the export timer. |
-| `chatbot_domain_not_configured` | content-external logs one WARNING, `no export will run: BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID is empty`. Set `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in `constants.ini` to the chatbot widget domain UUID and restart ruuter-internal. The next poll re-reads it; call `pipeline/content-export-sync` to do so at once. |
+| `chatbot_domain_not_configured` | content-external logs one WARNING, `no export will run: BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID is empty`. Set `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in `constants.ini` to the chatbot widget domain UUID and restart ruuter-internal (Helm: redeploy with `--set ruuterInternal.chatbotWidgetDomainId=<uuid>`, which restarts it). The next poll re-reads it; call `pipeline/content-export-sync` to do so at once. |
 | `chatbot_domain_unknown` | content-external logs one WARNING naming the value: `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID=<value> is not an active chatbot widget domain`. The UUID is not an active row in the chatbot's `widget_domains`. Check it for typos and confirm the domain is active. |
 | `toggle_unreadable` | `resql-users` failed or is down. Check its log and its connection to the chatbot's `byk` database. |
 
@@ -85,8 +85,8 @@ environment. Replace `<agency_base_id>` with the agency's base id. Flag
 semantics and first-run safeguards are in
 [Running an export](README.md#running-an-export).
 
-1. Keep `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty in [constants.ini](../constants.ini).
-   The gate then skips with `chatbot_domain_not_configured`, so the export
+1. Keep `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty in [constants.ini](../constants.ini)
+   (Helm: leave `ruuterInternal.chatbotWidgetDomainId` unset). The gate then skips with `chatbot_domain_not_configured`, so the export
    timer settles `inactive` and nothing fires, whatever the chatbot's toggle
    says. `/health`'s `export_schedule.state` shows it.
 2. Confirm the exporter container is up, the destination is accessible, and
@@ -125,7 +125,8 @@ semantics and first-run safeguards are in
    document ids, metadata and chunk counts should agree.
 7. Set `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in `constants.ini` to the chatbot widget
    domain whose **LLM module active** toggle governs this deployment, and
-   restart ruuter-internal
+   restart ruuter-internal (Helm: redeploy with
+   `--set ruuterInternal.chatbotWidgetDomainId=<uuid>`, which restarts it)
    ([toggle gate](README.md#the-chatbots-llm-module-toggle-gates-all-three-jobs)).
    Nothing is set on the chatbot side. Then call
    `curl -fsS '<ruuter-internal>/ckb/pipeline/content-export-sync'`, or wait

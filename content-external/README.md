@@ -684,7 +684,8 @@ BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID is empty ...`, or `... is not an active
 chatbot widget domain` naming the value), again only if that changes, and an
 INFO line once it is fixed; never one per poll. Set it only after the
 [bootstrap](RUNBOOK.md#first-deployment-bootstrap), then restart
-ruuter-internal. The next poll picks it up; call `pipeline/content-export-sync`
+ruuter-internal; on Helm, set `ruuterInternal.chatbotWidgetDomainId` instead,
+which renders the line and restarts ruuter-internal. The next poll picks it up; call `pipeline/content-export-sync`
 to have it picked up at once. Nothing is configured on the chatbot side:
 `resql-users` must reach the chatbot's `byk` database, and that is all.
 

@@ -480,7 +480,7 @@ environment: prefix each command with `docker compose exec content-external`
 (Helm).
 
 1. **Keep the deployment unarmed:** leave `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty in
-   `constants.ini`. The export timer then stays `inactive` and nothing fires,
+   `constants.ini` (Helm: leave `ruuterInternal.chatbotWidgetDomainId` unset). The export timer then stays `inactive` and nothing fires,
    whatever the chatbot's toggle says, until Step 7 sets it.
 2. **Sample of 25** proves CKB access, Vault and Azure end to end:
 
@@ -539,9 +539,12 @@ value is per deployment:
 
 - **Compose:** edit the checkout's `constants.ini`, then
   `docker compose restart ruuter-internal`.
-- **Helm:** the chart embeds `constants.ini` through the
-  `charts/ckb/constants.ini` link, so commit the value on the deployed branch,
-  redeploy, then `kubectl -n <namespace> rollout restart deploy/ruuter-internal`.
+- **Helm:** add `--set ruuterInternal.chatbotWidgetDomainId=<uuid>` to the
+  deploy job and redeploy. The chart writes it into ruuter-internal's
+  `constants.ini` and restarts ruuter-internal itself (a `checksum/constants`
+  pod annotation); nothing is committed. The render fails on a value that is
+  not a UUID, and on a Windows checkout, where the `charts/ckb/constants.ini`
+  link is a text file.
 
 Check the gate. With the toggle ON the answer must be `"run":false` with
 `"reason":"llm_module_active"`; with it OFF, `"run":true`:
@@ -672,8 +675,9 @@ export adds a `content-external error` line with the sanitised cause.
   the configured domain. At the next poll the export timer stops and nothing
   fires; switching it OFF starts an export at the next poll, which catches
   up, and the hourly ticks resume.
-- **Stop exports regardless of the toggle:** empty `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID`,
-  restart ruuter-internal, then call `pipeline/content-export-sync`. The gate
+- **Stop exports regardless of the toggle:** empty `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID`
+  and restart ruuter-internal (Helm: redeploy with
+  `ruuterInternal.chatbotWidgetDomainId` empty), then call `pipeline/content-export-sync`. The gate
   skips with `chatbot_domain_not_configured` and the timer stops.
 - **Empty the destination:** with exports stopped,
   `python -m exporter.run_ops purge --agency-id <id> --confirm <id>`. The
