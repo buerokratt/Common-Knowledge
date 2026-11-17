@@ -409,7 +409,7 @@ itself, and use the target deployment's Postgres settings.
    WITH page AS (
        SELECT DISTINCT ON (base_id)
            base_id, source_base_id, url, page_title, subsector, status,
-           cleaned_data_url, cleaned_metadata_url, edited_data_url, edited_metadata_url,
+           cleaned_data_url, cleaned_metadata_url,
            file_size, is_excluded, is_deleted, type, updated_at
        FROM data_collection.source_file
        WHERE agency_base_id = $1::UUID AND base_id > $2::UUID

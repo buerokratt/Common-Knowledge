@@ -155,18 +155,6 @@ Process uploaded files by converting them to scraping tasks.
 }
 ```
 
-### POST /generate-edited-metadata
-Generate metadata for edited files.
-
-**Request Body:**
-```json
-{
-  "download_url": "string",
-  "source_file_id": "string", 
-  "source_file_path": "string"
-}
-```
-
 ## Configuration
 
 Service endpoints are read from the repo-root `constants.ini` (shared with Ruuter, CronManager and the cleaning service), not from environment variables. docker-compose mounts it at `/constants.ini` (because `./scrapper` is bind-mounted over `/app`); Helm mounts the `scrapper-config` ConfigMap at `/app/constants.ini`, rendered from the same file via the `charts/ckb/constants.ini` symlink. When running locally from the repo, the root `constants.ini` is picked up automatically. An environment variable with the same name overrides the file value.
