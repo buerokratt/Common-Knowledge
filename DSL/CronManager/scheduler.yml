@@ -13,12 +13,10 @@ trigger_zipping:
   type: exec
   command: "/bin/bash ../app/scripts/trigger_zipping.sh"
 
-# Disabled: CronManager registers a job whose trigger is "false" but never schedules it.
-# Enable by replacing "false" with "0 17 */1 * * ?".
-trigger_content_export:
-  trigger: "false"
-  type: exec
-  command: "/bin/bash ../app/scripts/trigger_content_export.sh"
+# The content-external export is NOT a CronManager job: content-external runs
+# its own hourly timer, started and stopped by the chatbot's LLM module toggle,
+# which it polls (pipeline/content-export-status), so nothing fires while ON.
+# CronManager cannot pause a job. See content-external/README.md, "Schedule".
 
 # Disabled: enable by replacing "false" with "0 47 */1 * * ?".
 trigger_content_drain:

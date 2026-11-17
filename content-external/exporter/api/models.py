@@ -67,6 +67,28 @@ class LastRunSummary(BaseModel):
     rechunk: str | None = None
 
 
+class ExportScheduleSummary(BaseModel):
+    """The export timer (services/export_schedule.py): `unknown` until CKB
+    has said whether the chatbot's LLM module toggle is OFF, `active` while
+    it is (exporting every interval_seconds), `inactive` while it is ON.
+
+    The rendering at the API boundary of the service's ScheduleStatus, kept
+    apart from it for the same reason LastRunSummary is."""
+
+    state: Literal["unknown", "active", "inactive"]
+    interval_seconds: float
+    changed_at: str | None = None
+    change_reason: str | None = None
+    last_tick_at: str | None = None
+    last_tick_result: str | None = None
+    poll_interval_seconds: float
+    # The last read of the toggle, at startup or by a poll: the gate's reason
+    # (llm_module_inactive, llm_module_active, ...), or `unreachable`. While
+    # the state is `unknown` it says why.
+    last_poll_at: str | None = None
+    last_poll_result: str | None = None
+
+
 class HealthResponse(BaseModel):
     """Liveness plus configuration identity.
 
@@ -92,6 +114,8 @@ class HealthResponse(BaseModel):
     # has run. Kept apart from last_run, whose streaks A15's alert reads.
     last_drain: dict[str, str | int | float | bool | None] | None = None
     last_reconcile: dict[str, str | int | float | bool | None] | None = None
+    # Additive: the export timer, which runs only while the toggle is OFF.
+    export_schedule: ExportScheduleSummary | None = None
 
 
 class ExportRequest(BaseModel):

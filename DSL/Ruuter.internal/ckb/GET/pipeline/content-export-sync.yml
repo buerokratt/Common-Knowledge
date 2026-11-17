@@ -1,0 +1,70 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Start or stop content-external's export timer from the chatbot's LLM module toggle"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body: []
+
+# A manual re-check: content-external already polls the toggle every
+# EXPORT_SCHEDULE_POLL_SECONDS (pipeline/content-export-status), and nothing
+# calls this on a schedule. Call it to apply a change to the toggle or to
+# BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID at once instead of at the next poll. The
+# gate reads the toggle for the chatbot widget domain that constant names:
+#
+#   run (toggle OFF)  -> POST /schedule/start: export now, then every hour
+#   skip (any reason) -> POST /schedule/stop:  nothing fires until started
+#
+# content-external owns the hourly timer because CronManager cannot pause a
+# job; while it is stopped, no hourly job runs at all. Starting it when it is
+# already running changes nothing, so calling this again is harmless.
+#
+# If content-external cannot be reached, Ruuter fails this flow (HTTP 500);
+# its own poll still follows the toggle.
+#
+# Returns the gate's answer, { status, run, reason, operation, domain }.
+
+checkContentExportGate:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/content-export-gate"
+  requestType: templates
+  body:
+    operation: "sync"
+  result: gate
+  next: checkGate
+
+checkGate:
+  switch:
+    - condition: ${gate.run === true}
+      next: startSchedule
+  next: stopSchedule
+
+startSchedule:
+  call: http.post
+  args:
+    url: "[#CKB_CONTENT_EXTERNAL]/schedule/start"
+    contentType: json
+    body: {}
+  result: scheduleRes
+  error: logScheduleRefused
+  next: returnGate
+
+stopSchedule:
+  call: http.post
+  args:
+    url: "[#CKB_CONTENT_EXTERNAL]/schedule/stop"
+    contentType: json
+    body: {}
+  result: scheduleRes
+  error: logScheduleRefused
+  next: returnGate
+
+logScheduleRefused:
+  log: "content-external schedule call answered with an error status; its next toggle poll settles it"
+  next: returnGate
+
+returnGate:
+  return: ${gate}
+  next: end

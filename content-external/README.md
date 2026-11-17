@@ -64,6 +64,9 @@ it — see the note in the table below.
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
 | `EXPORT_PAGE_SIZE` | no (default `1000`, minimum `1`) | Documents per Resql keyset page. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
 | `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit). For the same reason a read timeout is never retried, while connection errors, 429 and 5xx are (F8) |
+| `RUUTER_INTERNAL` | no (default `http://ruuter-internal:8089`) | CKB's internal Ruuter. The export timer calls its `/ckb/pipeline/content-export` on each tick and `/ckb/pipeline/content-export-status` at startup and every poll ([Schedule](#schedule)) |
+| `EXPORT_SCHEDULE_INTERVAL_SECONDS` | no (default `3600`, at least `60`) | Seconds between scheduled exports while the chatbot's LLM module toggle is OFF. The first fires as soon as the toggle is seen OFF ([Schedule](#schedule)) |
+| `EXPORT_SCHEDULE_POLL_SECONDS` | no (default `300`, at least `60`) | Seconds between reads of the toggle. The longest a switch takes to start or stop exports; each read is one query on the chatbot database ([Schedule](#schedule)) |
 | `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each attempt to read from CKB's own bucket. Throttles, 5xx, connection errors and timeouts are retried by botocore's standard mode, up to 3 attempts in all (F8); a read that still fails fails the run, and the next tick is the retry |
 | `CHUNK_PROFILE` | required for `llm_module`; optional for `object_store` (default `azure_native`) | Chunk geometry preset: `azure_native` (target 1200 / overlap 200 / min 200 / max 2000 chars) or `compact` (450 / 80 / 120 / 700). Overlap is capped at min − 1 so no chunk can fall wholly inside the one before it, which makes `azure_native`'s effective overlap 199. Pinned per deployment alongside the sink, because whoever embeds the chunks decides what fits: on `llm_module` a chunk over the embedder's token budget is silently truncated. An unknown name is refused at startup. Changing it re-chunks the whole corpus on the next run via the chunker fingerprint — and on `llm_module` re-embeds it, so do it as an announced, operator-driven run. A new preset is a reviewed row in `exporter/core/constants.py`, never four separate settings |
 | `CONTENT_EXTERNAL_STORE_BACKEND` | no (default `s3`) | `s3` \| `azure_blob` — backend beneath the `object_store` sink |
@@ -314,7 +317,12 @@ Stable prefix, sorted `key=value` fields, every bucket present even at zero —
 so an alert rule is a log query and not a code change, and two runs diff
 line-for-line. `failed` lands at `ERROR` and everything else at `INFO`,
 including `busy`, which is by design not an error. The startup config echo
-follows the same convention under `content-external config`.
+follows the same convention under `content-external config`. On the
+`object_store` sink, a `WARNING` under the same prefix follows it when the
+selected backend's destination variables are empty (`EXTERNAL_S3_*`, or
+`AZURE_STORAGE_CONTAINER` / `VAULT_SECRET_PATH`). Startup still succeeds, so
+`/health` stays up, but every export, drain and reconcile fails with
+`ConfigurationError` until they are set.
 
 A run that fails **before** the export can report itself — a configuration
 refusal, the agency check, a factory error — adds one more line, under
@@ -353,8 +361,8 @@ colliding with an export) becomes indistinguishable from normal operation.
 > needs `CKB_RESQL` reachable and the `AWS_*` / `S3_*` read keys set, as well
 > as a configured destination.
 
-**The production surface is the HTTP endpoint**, which CronManager calls
-through Ruuter ([Schedule](#schedule)):
+**The production surface is the HTTP endpoint**, which this service's export
+timer reaches through CKB's Ruuter ([Schedule](#schedule)):
 
 ```bash
 curl -s -X POST localhost:8125/export_agency_async \
@@ -368,7 +376,7 @@ generated when omitted. The outcome is not in the response: read it from
 `/health` or the `content-external run` line. A second export while one is
 running reports `busy`. If the export this service started last is still
 alive, the response itself says `{"status":"busy",…}` and no process starts,
-so a misfiring cron cannot pile up children; otherwise the run lock in the
+so a retry storm cannot pile up children; otherwise the run lock in the
 child decides, and the `busy` shows up in `/health`. Either way it is
 recorded and counted in `consecutive_busy`.
 `POST /drain_deletions` and `POST /reconcile_async` start the Stage J
@@ -580,37 +588,188 @@ except the internal one.
 
 ## Schedule
 
-The scheduled call path is
-[`DSL/CronManager/scheduler.yml`](../DSL/CronManager/scheduler.yml) →
-[`DSL/CronManagerScripts/trigger_content_export.sh`](../DSL/CronManagerScripts/trigger_content_export.sh) →
-[`DSL/Ruuter.internal/ckb/GET/pipeline/content-export.yml`](../DSL/Ruuter.internal/ckb/GET/pipeline/content-export.yml) →
-`POST /export_agency_async`. The script calls
-`GET $CKB_RUUTER_INTERNAL/pipeline/content-export`.
+**The hourly export is this service's own timer**
+([`exporter/services/export_schedule.py`](exporter/services/export_schedule.py)),
+not a CronManager job. It must not fire at all while the chatbot's LLM module
+toggle is ON, and CronManager cannot do that: it has no pause or unschedule
+endpoint, its `/reload` adds or replaces jobs but never removes one, and on
+Kubernetes its job files are re-cloned from git whenever its pod starts.
 
-`trigger_content_export` ships disabled with `trigger: "false"`: the job is
-registered but never scheduled. After [bootstrap](RUNBOOK.md#first-deployment-bootstrap),
-enable it by changing that line to `trigger: "0 17 */1 * * ?"`; revert the
-same line to `trigger: "false"` to stop scheduled invocations. Keep the value
-quoted. The enabled schedule polls hourly at :17. The top of the hour
-already carries `trigger_zipping`, and every multiple of five minutes
-carries `trigger_scheduler` and `trigger_pipeline_for_scheduled_entities`.
-:17 shares none of those start times.
+**CKB only reads the toggle; the chatbot is not changed.** The chatbot calls
+nothing when its settings are saved and its database has no trigger, so
+nothing tells CKB that the toggle changed. The timer polls it instead:
 
-The drain and reconcile follow the same path through their own script and
-Ruuter step, `pipeline/content-drain` and `pipeline/content-reconcile`, to
+```
+every EXPORT_SCHEDULE_POLL_SECONDS ──► CKB pipeline/content-export-status
+                                          │ gate reads llm_module_active
+                                          │ from the chatbot's byk database
+                          OFF ────────────┴──────────── ON
+                           ▼                              ▼
+                  timer active                    timer inactive
+                  export now, then hourly         nothing fires
+
+every tick ──► CKB pipeline/content-export ──► gate ──► POST /export_agency_async
+```
+
+The timer has three states, shown in `/health` as `export_schedule.state`:
+
+| State | When | What fires |
+|---|---|---|
+| `unknown` | From startup until CKB answers `pipeline/content-export-status` | Nothing. Asked again every 60 s while CKB cannot answer |
+| `active` | The toggle is OFF | One export at once, then one every `EXPORT_SCHEDULE_INTERVAL_SECONDS` (default 3600), measured from that first one. The toggle is still polled |
+| `inactive` | The toggle is ON, or the gate skipped for a settled reason (no domain configured, unknown domain) | No export. Only the toggle poll runs |
+
+What moves it:
+
+- **This service starts.** The timer asks CKB's
+  [`pipeline/content-export-status`](../DSL/Ruuter.internal/ckb/GET/pipeline/content-export-status.yml),
+  which returns the [gate's](#the-chatbots-llm-module-toggle-gates-all-three-jobs)
+  answer and calls nothing back, and settles from it. With the toggle OFF that
+  means an export at once, catching up whatever changed while it was down. A
+  `toggle_unreadable` answer, or no answer, is asked again a minute later.
+- **The poll.** Every `EXPORT_SCHEDULE_POLL_SECONDS` (default 300, at least
+  60) the timer asks `content-export-status` again. OFF makes it `active` and
+  exports at once; ON, or another settled skip, makes it `inactive`. So a
+  toggle switched OFF starts an export within one poll interval, and one
+  switched ON stops the timer within one. An unsettled answer
+  (`toggle_unreadable`, CKB not answering) keeps the current state, so a brief
+  outage never starts or stops exports. Each poll is one gate query on the
+  chatbot database; the last one is in `/health` as
+  `export_schedule.last_poll_at` and `last_poll_result`. The startup read is
+  recorded there too, so a timer stuck in `unknown` shows why
+  (`unreachable`, `toggle_unreadable`).
+- **A tick finds the toggle ON.** If the toggle went ON after the last poll,
+  the tick's gate skips with `llm_module_active` and the timer stops itself.
+  That tick exports nothing.
+- **Forcing a re-check.** CKB's
+  [`pipeline/content-export-sync`](../DSL/Ruuter.internal/ckb/GET/pipeline/content-export-sync.yml)
+  reads the toggle now and POSTs `/schedule/start` (run) or `/schedule/stop`
+  (skip), without waiting for the next poll. Nothing calls it on a schedule;
+  it is for an operator, e.g. right after setting `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID`.
+
+Each tick calls CKB's
+[`pipeline/content-export`](../DSL/Ruuter.internal/ckb/GET/pipeline/content-export.yml)
+at `RUUTER_INTERNAL`, which reads the toggle again and, only while it is OFF,
+POSTs `/export_agency_async` back here. The gate stays the one judge of
+whether an export runs; the timer only decides when CKB is asked. A tick's
+result is in `/health` as `export_schedule.last_tick_result`: `started` or
+`busy`, the gate's skip reason, or `unreachable`. An export already running
+when the toggle is switched ON is not cancelled.
+
+`POST /schedule/start` cannot cause an export while the toggle is ON: its
+tick meets the gate, which skips and stops the timer again, and the next poll
+would stop it anyway. A poll answer that was in flight when a `/schedule`
+call changed the state is dropped, so it never undoes that call; the next
+poll reads the toggle afresh.
+
+**`/schedule/start` and `/schedule/stop` are unauthenticated**, like every
+endpoint here, and rely on 8125 being reachable only on the internal network
+(see the same note under [Deletion operations](#deletion-operations-stage-j)).
+The worst a caller can do is delay
+exports: `/schedule/stop` holds them back until the next poll (at most
+`EXPORT_SCHEDULE_POLL_SECONDS`), and `/schedule/start` cannot export while
+the toggle is ON.
+
+**One process per deployment.** The timer lives in the service process, so
+each process polls and ticks on its own. The image runs one uvicorn worker
+and the chart one replica; adding `--workers` or replicas would multiply the
+polls and the export ticks. Exports would still not overlap — the run lock
+refuses a second one as `busy` — but keep it at one.
+
+**Arming a deployment.** With `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty (the repo default)
+the gate skips with `chatbot_domain_not_configured`, so the timer settles
+`inactive` and nothing ever fires. content-external logs one WARNING when a
+toggle read first sees an unusable domain (`no export will run:
+BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID is empty ...`, or `... is not an active
+chatbot widget domain` naming the value), again only if that changes, and an
+INFO line once it is fixed; never one per poll. Set it only after the
+[bootstrap](RUNBOOK.md#first-deployment-bootstrap), then restart
+ruuter-internal. The next poll picks it up; call `pipeline/content-export-sync`
+to have it picked up at once. Nothing is configured on the chatbot side:
+`resql-users` must reach the chatbot's `byk` database, and that is all.
+
+**When something is down.** Nothing changes state on a failure; the timer
+keeps doing what it was doing and asks again:
+
+| Down | Effect |
+|---|---|
+| CKB's ruuter-internal or the chatbot database, at this service's startup | The timer stays `unknown` and asks again every minute |
+| Either, at a poll | `last_poll_result: unreachable` or `toggle_unreadable`; the state is kept and the next poll is the retry |
+| CKB's ruuter-internal, at a tick | `last_tick_result: unreachable`; the timer keeps its schedule, so the next tick is the retry |
+
+The drain and reconcile are still CronManager jobs, through their own script
+and Ruuter step, `pipeline/content-drain` and `pipeline/content-reconcile`, to
 `POST /drain_deletions` and `POST /reconcile_async`. Both ship disabled with
-`trigger: "false"` and are enabled the same way:
+`trigger: "false"`; enable each by replacing that value. Both pass the gate,
+so neither runs while the toggle is ON, though CronManager still fires them:
 
 | Job | Enabled trigger | Why then |
 |---|---|---|
-| `trigger_content_drain` | `"0 47 */1 * * ?"` — hourly at :47 | Half an hour from the export, so it rarely meets the export's lock and reports `busy`. No faster: the journal only has work after an export failed a delete (J3) |
-| `trigger_content_reconcile` | `"0 35 3 * * ?"` — daily at 03:35 | Off-peak, clear of the export (:17) and the drain (:47), since it takes the same lock (J6) |
+| `trigger_content_drain` | `"0 47 */1 * * ?"` — hourly at :47 | No faster: the journal only has work after an export failed a delete (J3). It may meet a running export's lock and report `busy`; the next hour retries |
+| `trigger_content_reconcile` | `"0 35 3 * * ?"` — daily at 03:35 | Off-peak; it takes the same lock as the export (J6) |
 
-Enable them after the export, and the drain only after one full cycle of
-dry reports ([Draining deferred deletes](RUNBOOK.md#draining-deferred-deletes-j1-j2)).
+Enable them after the export has run, and the drain only after one full cycle
+of dry reports ([Draining deferred deletes](RUNBOOK.md#draining-deferred-deletes-j1-j2)).
 Enabling a schedule never makes either operation destructive: the drain
 deletes only with `DRAIN_DELETES_ENABLED=true`, and reconcile repairs only
 with `RECONCILE_REPAIR_ENABLED=true`. The purge is never scheduled (J8).
+
+### The chatbot's LLM module toggle gates all three jobs
+
+The Chatbot settings page has an **LLM module active** toggle (the latest
+`public.configuration` row with `key = 'llm_module_active'` for the widget
+domain, in the chatbot's `byk` database). It decides
+where the bot's knowledge comes from, and therefore whether this pipeline
+should run:
+
+- **OFF:** the bot answers through Azure, so CKB exports to Azure Blob: once
+  straight away, then hourly ([Schedule](#schedule)).
+- **ON:** the bot uses the LLM module, which reads CKB's data itself through
+  the hourly ZIP. That path is never gated. The export timer is stopped, and
+  the drain and reconcile skip.
+
+Before anything else, each of `pipeline/content-export`, `pipeline/content-drain`,
+`pipeline/content-reconcile`, `pipeline/content-export-sync` and
+`pipeline/content-export-status` calls the template
+[`TEMPLATES/pipeline/content-export-gate.yml`](../DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml).
+The template reads the toggle through `resql-users`
+([`config/get_domain_configuration`](../DSL/Resql/users/GET/config/get_domain_configuration.sql))
+for the one chatbot widget domain named by `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in
+[`constants.ini`](../constants.ini). If the gate says skip, the export, drain
+and reconcile flows return without calling this service:
+
+| Situation | Decision | `reason` |
+|---|---|---|
+| `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty (the repo default) | skip | `chatbot_domain_not_configured` |
+| The domain is not an active widget domain (typo, removed) | skip | `chatbot_domain_unknown` |
+| `resql-users` answers with an error status | skip | `toggle_unreadable` |
+| `resql-users` cannot be reached | the flow fails (HTTP 500); nothing runs | — |
+| Latest value for the domain is `'true'` | skip | `llm_module_active` |
+| Latest value is `'false'`, or the domain has no row | **run** | `llm_module_inactive` |
+
+No row counts as OFF, as it does in the chatbot's own `message-to-bot.yml`.
+Every other uncertain case skips, so a misconfiguration never exports.
+
+A skipped call returns, wrapped by Ruuter as `{"response": …}`,
+`{"status":"skipped","run":false,"reason":"…","operation":"export","domain":"…"}`.
+Ruuter-internal also logs `content-external export skipped: <reason>`.
+A call that runs returns this service's usual `started` or `busy` answer.
+
+Flipping the toggle needs no restart. **ON → OFF:** an export starts at once.
+It is an ordinary incremental run against the manifest, so it catches up
+everything that changed while the toggle was ON, and the next drain clears
+the journals. **OFF → ON:** the timer stops; nothing fires. Azure Blob keeps
+the last exported state, and deletion journals stay open.
+
+`python -m exporter.run_sync` and `run_ops` do **not** consult the gate. They
+are operator actions.
+
+The gate assumes `CONTENT_SINK=object_store`. With `CONTENT_SINK=llm_module`
+([cutover](docs/llm-module-cutover.md)), toggle ON would stop the pushes to
+the LLM module, which is the opposite of what that deployment wants. Revisit
+the gate before that cutover.
+
+### Why polling
 
 Polling avoids adding a dirty flag and a claim loop like `pipeline/zip.yml`:
 
@@ -623,9 +782,10 @@ Polling avoids adding a dirty flag and a claim loop like `pipeline/zip.yml`:
   Claiming `is_zipping` silently stops the Classifier's ZIP from staying
   current (Global Classifier safety rule 5).
 
-A quiet tick costs three Resql queries and one manifest GET: Ruuter's
-`list_agencies`, the exporter's single-agency check and the watermark. That
-is 72 Resql queries and 24 manifest GETs per day.
+A quiet tick while the toggle is OFF costs four queries and one manifest GET:
+the gate's toggle read, Ruuter's `list_agencies`, the exporter's
+single-agency check and the watermark. That is 96 queries and 24 manifest
+GETs per day. While the toggle is ON it costs nothing: no tick fires.
 The trade-off is up to one hour to detect a publish, edit or deletion, so
 the destination can run an hour behind CKB's GUI and OpenSearch. A document
 parked in `in_review` is not published until a curator starts cleaning it
@@ -645,7 +805,8 @@ and no write to any agency column.
 The export takes **one whole-run lock** on `CONTENT_WORK_DIR`, and
 `drain_deletions` takes the same one. That lock is the only thing preventing a
 drain from deleting a key an export has just re-published, and it is an
-`flock` — **sound only within one kernel**.
+`flock` — **sound only within one kernel**. The export timer is per process
+too: each replica would run its own, and each would tick.
 
 Three facts follow, asserted in three places because one is easy to bypass:
 

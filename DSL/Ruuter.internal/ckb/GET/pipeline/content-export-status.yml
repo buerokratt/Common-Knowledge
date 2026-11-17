@@ -1,0 +1,30 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Report whether the content-external export may run, from the chatbot's LLM module toggle"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body: []
+
+# content-external calls this when it starts and then every
+# EXPORT_SCHEDULE_POLL_SECONDS, to decide whether its hourly export timer runs
+# (run: true, toggle OFF) or stays stopped. This poll is how a toggle change
+# reaches CKB: the chatbot is never changed and never calls CKB. Read-only: it
+# calls nothing back, because content-external is not yet listening at startup.
+#
+# Returns the gate's answer, { status, run, reason, operation, domain }.
+
+checkContentExportGate:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/content-export-gate"
+  requestType: templates
+  body:
+    operation: "status"
+  result: gate
+  next: returnGate
+
+returnGate:
+  return: ${gate}
+  next: end

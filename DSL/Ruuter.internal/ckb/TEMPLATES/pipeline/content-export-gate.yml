@@ -1,0 +1,105 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "Decide whether a content-external operation may run, from the chatbot's LLM module toggle"
+  method: post
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    body:
+      - field: operation
+        type: string
+        description: "export, drain, reconcile, sync or status; echoed back for the log"
+
+# The chatbot's "LLM module active" toggle (Chatbot settings) decides where the
+# bot's knowledge comes from. OFF: Azure, so CKB exports to Azure Blob through
+# content-external. ON: the LLM module, which reads CKB's data itself (ZIP path,
+# not gated here), so the content-external pipeline stays idle.
+#
+# The toggle lives in the chatbot's byk database, read through resql-users for
+# the one widget domain named by BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID.
+#
+#   the domain constant empty            -> skip  chatbot_domain_not_configured
+#   domain not an active widget domain   -> skip  chatbot_domain_unknown
+#   resql-users answers with an error    -> skip  toggle_unreadable
+#   resql-users unreachable              -> the calling flow fails (HTTP 500):
+#                                           Ruuter aborts on a call that
+#                                           cannot connect, so nothing runs
+#   latest value 'true'                  -> skip  llm_module_active
+#   latest value 'false', or no row      -> run   llm_module_inactive
+#
+# No row reads as OFF, as in the chatbot's message-to-bot.yml. Every other
+# uncertain case skips: a misconfiguration never causes an export.
+#
+# Returns { status, run, reason, operation, domain }; callers switch on run.
+
+extractRequestData:
+  assign:
+    operation: ${incoming.body.operation}
+    chatbotDomain: "[#BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID]"
+  next: checkChatbotDomainConfigured
+
+checkChatbotDomainConfigured:
+  switch:
+    - condition: ${!chatbotDomain || chatbotDomain.trim() === ''}
+      next: assignDomainNotConfigured
+  next: getLlmModuleActive
+
+getLlmModuleActive:
+  call: http.get
+  args:
+    url: "[#CKB_USERS_RESQL]/config/get_domain_configuration"
+    query:
+      key: "llm_module_active"
+      domain: ${chatbotDomain.trim()}
+  result: toggleRes
+  error: assignToggleUnreadable
+  next: checkToggleReadable
+
+checkToggleReadable:
+  switch:
+    - condition: ${200 <= toggleRes.response.statusCodeValue && toggleRes.response.statusCodeValue < 300 && toggleRes.response.body.length === 1}
+      next: checkDomainKnown
+  next: assignToggleUnreadable
+
+checkDomainKnown:
+  switch:
+    - condition: ${String(toggleRes.response.body[0].domainKnown) === 'true'}
+      next: checkLlmModuleActive
+  next: assignDomainUnknown
+
+checkLlmModuleActive:
+  switch:
+    - condition: ${toggleRes.response.body[0].value === 'true'}
+      next: assignLlmModuleActive
+  next: assignLlmModuleInactive
+
+assignLlmModuleInactive:
+  assign:
+    gate: { "status": "allowed", "run": true, "reason": "llm_module_inactive", "operation": "${operation}", "domain": "${chatbotDomain}" }
+  next: returnGate
+
+assignLlmModuleActive:
+  assign:
+    gate: { "status": "skipped", "run": false, "reason": "llm_module_active", "operation": "${operation}", "domain": "${chatbotDomain}" }
+  next: returnGate
+
+assignDomainNotConfigured:
+  assign:
+    gate: { "status": "skipped", "run": false, "reason": "chatbot_domain_not_configured", "operation": "${operation}", "domain": "" }
+  next: returnGate
+
+assignDomainUnknown:
+  assign:
+    gate: { "status": "skipped", "run": false, "reason": "chatbot_domain_unknown", "operation": "${operation}", "domain": "${chatbotDomain}" }
+  next: returnGate
+
+assignToggleUnreadable:
+  assign:
+    gate: { "status": "skipped", "run": false, "reason": "toggle_unreadable", "operation": "${operation}", "domain": "${chatbotDomain}" }
+  next: returnGate
+
+returnGate:
+  return: ${gate}
+  next: end

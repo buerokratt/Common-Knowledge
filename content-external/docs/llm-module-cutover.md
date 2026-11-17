@@ -110,7 +110,7 @@ DIFF_ON_MISSING_MANIFEST=first_run \
 python -m exporter.run_sync --agency-id <agency> --output-json bootstrap.json
 ```
 
-Then enable the cron.
+Then arm the export schedule ([Schedule](../README.md#schedule)), after revisiting the toggle gate for this sink.
 
 **Check that the live collection is unchanged.** Record the point count and
 a snapshot id of the live collection before step 2 and after it. They must
