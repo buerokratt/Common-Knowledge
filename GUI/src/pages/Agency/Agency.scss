@@ -37,6 +37,11 @@
     justify-content: flex-start;
     gap: 8px;
     width: 100%;
+
+    // FormCheckbox stretches to full width by default; keep the info icon next to its label.
+    .checkbox {
+      width: auto;
+    }
   }
 
 }

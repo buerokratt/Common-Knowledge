@@ -17,8 +17,22 @@
   }
 
   &__item {
+    position: relative;
+
     input[type=checkbox] {
-      display: none;
+      // Visually hidden but still focusable (Tab) and toggleable (Space); the label's ::before draws the box.
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 1px;
+      height: 1px;
+      margin: 0;
+      opacity: 0;
+
+      &:focus-visible + label::before {
+        outline: 2px solid get-color(sapphire-blue-10);
+        outline-offset: 2px;
+      }
 
       + label {
         display: block;

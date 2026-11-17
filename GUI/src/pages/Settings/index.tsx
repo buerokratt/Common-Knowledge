@@ -5,6 +5,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { MdOutlineSchedule,MdInfoOutline } from 'react-icons/md';
 import {
   Button,
+  FormCheckbox,
   FormInput,
   FormSelect,
   SwitchBox,
@@ -34,7 +35,7 @@ interface UpdateSettings {
   monthlyType?: 'dayOfMonth' | 'weekPosition';
   yearlyType?: 'dayOfMonth' | 'weekPosition';
   timeOfUpdate: string;
-  qualityControlLevel?: '' | 'basic' | 'comprehensive';
+  qualityControlLevel?: '' | 'comprehensive';
   extractImages?: boolean;
 }
 
@@ -242,7 +243,8 @@ const SourceSettings: FC = () => {
         ...prev,
         url: sourceData.url,
         updateAutomatically: sourceData.updateAutomatically || false,
-        qualityControlLevel: sourceData.qualityControl || '',
+        // 'basic' is no longer offered in the UI, so a source saved with it shows as unchecked.
+        qualityControlLevel: sourceData.qualityControl === 'comprehensive' ? 'comprehensive' : '',
         extractImages: sourceData.extractImages ?? false,
         ...parsedSettings,
       }));
@@ -1002,61 +1004,35 @@ const SourceSettings: FC = () => {
 
           <div className="quality-control-standalone">
             <span className="quality-control-standalone__title">
-              Content extraction quality control options:
+              {t('knowledgeBase.contentExtractionQualityControlOptions')}
             </span>
             <div className="quality-control-standalone__options">
-              <label className="quality-control-standalone__item">
-                <input
-                  type="radio"
+              <div className="quality-control-standalone__item">
+                <FormCheckbox
+                  label=""
                   name="qualityControl"
-                  checked={settings.qualityControlLevel === 'basic'}
-                  onClick={() =>
-                    setSettings((prev) => ({
-                      ...prev,
-                      qualityControlLevel:
-                        prev.qualityControlLevel === 'basic' ? '' : 'basic',
-                    }))
-                  }
-                  onChange={() => {}}
-                />
-                <span>Basic quality control</span>
-                <Tooltip content="Tooltip to be implemented">
-                  <button
-                    type="button"
-                    className="quality-control-standalone__info-btn"
-                    aria-label="Basic quality control info"
-                  >
-                    <Icon icon={<MdInfoOutline fontSize={18} color="#005AA3" />} size="medium" />
-                  </button>
-                </Tooltip>
-              </label>
-              <label className="quality-control-standalone__item">
-                <input
-                  type="radio"
-                  name="qualityControl"
+                  item={{
+                    label: t('knowledgeBase.comprehensiveQualityControl'),
+                    value: 'comprehensive',
+                  }}
                   checked={settings.qualityControlLevel === 'comprehensive'}
-                  onClick={() =>
+                  onChange={(e) =>
                     setSettings((prev) => ({
                       ...prev,
-                      qualityControlLevel:
-                        prev.qualityControlLevel === 'comprehensive'
-                          ? ''
-                          : 'comprehensive',
+                      qualityControlLevel: e.target.checked ? 'comprehensive' : '',
                     }))
                   }
-                  onChange={() => {}}
                 />
-                <span>Comprehensive quality control</span>
-                <Tooltip content="Tooltip to be implemented">
+                <Tooltip content={t('knowledgeBase.comprehensiveQualityControlTooltip') as string}>
                   <button
                     type="button"
                     className="quality-control-standalone__info-btn"
-                    aria-label="Comprehensive quality control info"
+                    aria-label={t('knowledgeBase.comprehensiveQualityControlInfo') as string}
                   >
                     <Icon icon={<MdInfoOutline fontSize={18} color="#005AA3" />} size="medium" />
                   </button>
                 </Tooltip>
-              </label>
+              </div>
             </div>
           </div>
 
