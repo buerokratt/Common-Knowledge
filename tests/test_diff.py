@@ -385,13 +385,25 @@ def test_only_the_metadata_moving_is_metadata_changed() -> None:
     assert only(result).bucket is Bucket.METADATA_CHANGED
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [{"content_origin": "edited"}, {"source_base_id": "another-source"}],
+# content_origin: a document published as "edited" before manual editing was
+# removed (#472) is now "cleaned", so its record must be published again.
+MOVED_RECORD_FIELDS = pytest.mark.parametrize(
+    "published_overrides, row_overrides",
+    [
+        ({"content_origin": "edited"}, {}),
+        ({}, {"source_base_id": "another-source"}),
+    ],
     ids=["content_origin", "source_base_id"],
 )
-def test_a_moved_record_field_is_metadata_changed(overrides: dict[str, str]) -> None:
-    result = classify(published(1), [ref(1, **overrides)], FP)
+
+
+@MOVED_RECORD_FIELDS
+def test_a_moved_record_field_is_metadata_changed(
+    published_overrides: dict[str, str], row_overrides: dict[str, str]
+) -> None:
+    result = classify(
+        published(1, **published_overrides), [ref(1, **row_overrides)], FP
+    )
     assert only(result).bucket is Bucket.METADATA_CHANGED
 
 
@@ -435,22 +447,20 @@ def test_a_read_row_is_compared_even_if_it_never_moved() -> None:
     assert only(classify(published(1), [row], FP)).bucket is Bucket.CONTENT_CHANGED
 
 
-@pytest.mark.parametrize(
-    "overrides",
-    [{"content_origin": "edited"}, {"source_base_id": "another-source"}],
-    ids=["content_origin", "source_base_id"],
-)
+@MOVED_RECORD_FIELDS
 def test_gate_2_does_not_spare_a_row_whose_published_fields_moved(
-    overrides: dict[str, str],
+    published_overrides: dict[str, str], row_overrides: dict[str, str]
 ) -> None:
     """updated_at alone is not enough: a row whose content_origin or
     source_base_id moved must be read, even if updated_at did not."""
-    row = unread(1, **overrides)
-    assert needs_read(entry(), row, chunker_fingerprint=FP)
+    manifest_entry = entry(**published_overrides)
+    row = unread(1, **row_overrides)
+    assert needs_read(manifest_entry, row, chunker_fingerprint=FP)
     with pytest.raises(ValueError, match="row moved"):
-        classify(published(1), [row], FP)
-    read = ref(1, updated_at=PUBLISHED_AT, **overrides)
-    assert only(classify(published(1), [read], FP)).bucket is Bucket.METADATA_CHANGED
+        classify(published(1, **published_overrides), [row], FP)
+    read = ref(1, updated_at=PUBLISHED_AT, **row_overrides)
+    result = classify(published(1, **published_overrides), [read], FP)
+    assert only(result).bucket is Bucket.METADATA_CHANGED
 
 
 NEEDS_READ_CASES = [

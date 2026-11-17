@@ -94,7 +94,7 @@ class SkipReason(StrEnum):
     # readiness: after the first clean it is always populated (Finding 11).
     NOT_READY = "not_ready"
     NO_CONTENT = "no_content"  # scraped, never cleaned
-    # A content object with no recorded origin (edited or cleaned). The
+    # A content object with no recorded origin ("cleaned"). The
     # published record must say which it is, so the document is held here,
     # before anything is published, rather than failing the run in record().
     NO_CONTENT_ORIGIN = "no_content_origin"

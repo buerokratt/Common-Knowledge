@@ -129,7 +129,7 @@ One request carries **one document**: its record and some or all of its chunks.
 | `agency_id` | The CKB agency. **Must be stored on every point as a filterable field** — see [§4](#4-point-identity-and-payload) |
 | `document_id` | CKB's `source_file.base_id`. Stable for the life of the document |
 | `source_base_id` | The CKB source the document belongs to |
-| `content_origin` | `edited` (a human-edited version) or `cleaned` |
+| `content_origin` | Always `cleaned` (the cleaned version of the source file). Manual editing was removed from CKB (#472), so `edited` is no longer sent |
 | `source_url` | The citation a retrieval answer should link to |
 | `raw_sha256`, `content_sha256`, `metadata_sha256` | Hashes the exporter's diff uses. Informational for the llm-module — **never use them as point ids** |
 | `chunk_count` | How many chunks the document has in total, across all parts |
@@ -320,7 +320,7 @@ When only a document's metadata changed, the exporter can send the record with
   "agency_id": "agency-1",
   "document_id": "6f1c2c1e-1f7a-4a36-9a51-2d3b8c4e7f10",
   "source_base_id": "0b8a7d0e-5c1d-4f0e-8b2a-9a1c3e5d7f21",
-  "content_origin": "edited",
+  "content_origin": "cleaned",
   "source_url": "https://www.eesti.ee/et/haridus/oppetoetus",
   "raw_sha256": "9f2b5c6d8e1a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4",
   "content_sha256": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",

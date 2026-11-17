@@ -29,8 +29,6 @@ DOCUMENT_COLUMNS = [
     "status",
     "cleaned_data_url",
     "cleaned_metadata_url",
-    "edited_data_url",
-    "edited_metadata_url",
     "file_size",
     "is_excluded",
     "is_deleted",
