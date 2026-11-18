@@ -886,16 +886,18 @@ What the llm-module sink does on delete and sweep:
 
 `tests/test_store_conformance.py` asserts the store contract, and
 `tests/test_sink_conformance.py` the sink contract. Both always run against
-in-memory fakes. Point them at a real S3-compatible endpoint, with an
-existing bucket, to accept a new store:
+in-memory fakes. Point them at a real S3-compatible endpoint to accept a new
+store. The bucket and the keys must exist first. The compose stack's SeaweedFS
+is the quickest: it runs with `-s3.config`, so it takes its keys from the root
+`.env` and refuses anonymous requests.
 
 ```bash
-docker run -d -p 9000:9000 minio/minio server /data          # or:
-docker run -d -p 8333:8333 chrislusf/seaweedfs server -s3
-export CONFORMANCE_S3_ENDPOINT_URL=http://localhost:9000
+docker compose up -d seaweedfs
+docker compose run --rm seaweedfs-init mkdir seaweedfs:conformance   # creates the bucket
+export CONFORMANCE_S3_ENDPOINT_URL=http://localhost:8334
 export CONFORMANCE_S3_BUCKET=conformance
-export CONFORMANCE_S3_ACCESS_KEY_ID=...
-export CONFORMANCE_S3_SECRET_ACCESS_KEY=...
+export CONFORMANCE_S3_ACCESS_KEY_ID=...         # AWS_ACCESS_KEY_ID from the root .env
+export CONFORMANCE_S3_SECRET_ACCESS_KEY=...     # AWS_SECRET_ACCESS_KEY from the root .env
 uv run pytest tests/test_store_conformance.py tests/test_sink_conformance.py -v
 ```
 

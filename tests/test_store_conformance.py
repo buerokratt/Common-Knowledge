@@ -2,15 +2,16 @@
 
 This is what makes "does SeaweedFS work?" a fifteen-minute question. The
 in-memory fake always runs; the live variants run against whatever
-S3-compatible endpoint CONFORMANCE_S3_* names, and skip when it is unset:
+S3-compatible endpoint CONFORMANCE_S3_* names, and skip when it is unset.
+The bucket and keys must exist first; the compose stack's SeaweedFS (run with
+-s3.config, keys from the root .env) is the quickest:
 
-    docker run -d -p 9000:9000 minio/minio server /data
-    #   or: docker run -d -p 8333:8333 chrislusf/seaweedfs server -s3
-    # create a bucket, then:
-    export CONFORMANCE_S3_ENDPOINT_URL=http://localhost:9000
+    docker compose up -d seaweedfs
+    docker compose run --rm seaweedfs-init mkdir seaweedfs:conformance
+    export CONFORMANCE_S3_ENDPOINT_URL=http://localhost:8334
     export CONFORMANCE_S3_BUCKET=conformance
-    export CONFORMANCE_S3_ACCESS_KEY_ID=...
-    export CONFORMANCE_S3_SECRET_ACCESS_KEY=...
+    export CONFORMANCE_S3_ACCESS_KEY_ID=...       # AWS_ACCESS_KEY_ID from .env
+    export CONFORMANCE_S3_SECRET_ACCESS_KEY=...   # AWS_SECRET_ACCESS_KEY from .env
     pytest tests/test_store_conformance.py tests/test_sink_conformance.py -v
 
 `s3-batch` and `s3-per-key` are the same endpoint with and without

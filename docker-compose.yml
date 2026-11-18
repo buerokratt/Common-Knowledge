@@ -135,8 +135,62 @@ services:
     networks:
       - bykstack
 
+  # ─────────────────────────────────────────────
+  # SEAWEEDFS — CKB's S3-compatible object store. Replaces MinIO, whose image
+  # can no longer be pulled publicly. S3 API on 8333, published on the host as
+  # 8334 so it can run beside GC's stack on one machine. Credentials come from
+  # the seaweedfs_s3 config below; without it the S3 gateway allows anonymous
+  # access and presigned URLs have nothing to sign with.
+  # ─────────────────────────────────────────────
+  seaweedfs:
+    image: chrislusf/seaweedfs:4.50@sha256:c2658820e763294a9e9de7b36c81e59b879e3459148351aee4e31a126ca64860
+    container_name: ckb-seaweedfs
+    restart: unless-stopped
+    command: server -dir=/data -filer -s3 -s3.port=8333 -s3.config=/etc/seaweedfs/s3.json
+    configs:
+      - source: seaweedfs_s3
+        target: /etc/seaweedfs/s3.json
+    volumes:
+      - seaweedfs_data:/data
+    ports:
+      - "8334:8333"
+    networks:
+      - bykstack
+    healthcheck:
+      # 127.0.0.1, not localhost: in this image localhost resolves to ::1, and
+      # SeaweedFS listens on IPv4 only.
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:9333/cluster/status && wget -q -O /dev/null http://127.0.0.1:8333/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  # ─────────────────────────────────────────────
+  # SEAWEEDFS INIT — creates CKB's bucket once SeaweedFS is healthy, then
+  # exits. Safe to re-run: an existing bucket is left as it is.
+  # ─────────────────────────────────────────────
+  seaweedfs-init:
+    image: rclone/rclone:1.69.1
+    container_name: ckb-seaweedfs-init
+    restart: "no"
+    environment:
+      RCLONE_CONFIG_SEAWEEDFS_TYPE: s3
+      RCLONE_CONFIG_SEAWEEDFS_PROVIDER: SeaweedFS
+      RCLONE_CONFIG_SEAWEEDFS_ENDPOINT: http://seaweedfs:8333
+      RCLONE_CONFIG_SEAWEEDFS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}
+      RCLONE_CONFIG_SEAWEEDFS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}
+    command: ["mkdir", "seaweedfs:${S3_BUCKET_NAME:?set S3_BUCKET_NAME in .env}"]
+    networks:
+      - bykstack
+    depends_on:
+      seaweedfs:
+        condition: service_healthy
+
   file-processing-api:
     container_name: file-processing-api
+    depends_on:
+      seaweedfs-init:
+        condition: service_completed_successfully
     build:
       context: .
       dockerfile: file-processing/Dockerfile
@@ -639,6 +693,9 @@ volumes:
   # Recreate, and a ReadWriteOnce PVC; the service itself refuses to start if
   # it cannot take an exclusive lock here.
   content-external-work:
+  # SeaweedFS's master, volume and filer data: every object in CKB's bucket.
+  # `docker compose down -v` deletes it.
+  seaweedfs_data:
   opensearch-data:
   vault-data:
   vault-init-data:      # separate from vault-data — stores unseal keys and init flag only
@@ -647,6 +704,28 @@ volumes:
   vault-agent-token:
   vault-agent-content-token:
   # vault-agent-cleaner-token removed — was unused (agent writes to vault-agent-token)
+
+configs:
+  # SeaweedFS's S3 identity, built from CKB's existing AWS_* keys in .env.
+  # Admin is needed for seaweedfs-init to create the bucket; Read, Write and
+  # List for file-processing and content-external (content-external HEADs a
+  # key before deleting it, and without List a missing key answers 403).
+  seaweedfs_s3:
+    content: |
+      {
+        "identities": [
+          {
+            "name": "ckb",
+            "credentials": [
+              {
+                "accessKey": "${AWS_ACCESS_KEY_ID:?set AWS_ACCESS_KEY_ID in .env}",
+                "secretKey": "${AWS_SECRET_ACCESS_KEY:?set AWS_SECRET_ACCESS_KEY in .env}"
+              }
+            ],
+            "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+          }
+        ]
+      }
 
 networks:
   # vault-network removed — was declared but never attached to any service
