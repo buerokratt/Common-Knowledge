@@ -109,7 +109,6 @@ AWS_ACCESS_KEY_ID=ckb-local
 AWS_SECRET_ACCESS_KEY=ckb-local-secret
 AWS_REGION=us-east-1
 S3_BUCKET_NAME=ckb-storage
-# localhost: SeaweedFS's S3 port as published on your machine.
 S3_ENDPOINT_URL=http://localhost:8334
 
 # Optional file-processing tunables (compose supplies these defaults if omitted):
