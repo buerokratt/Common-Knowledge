@@ -785,7 +785,7 @@ with the export.
 
 | Field | Meaning | Action |
 |---|---|---|
-| `missing_documents` | In the manifest, absent from the destination | the manifest believes it is published, so no export, not even `--force`, re-sends it until its row moves (Gate 2). Re-clean or edit the document in CKB. If many are missing, re-bootstrap. Reconcile does not repair this category |
+| `missing_documents` | In the manifest, absent from the destination | the manifest believes it is published, so no export, not even `--force`, re-sends it until its row moves (Gate 2). Re-clean the document in CKB. If many are missing, re-bootstrap. Reconcile does not repair this category |
 | `record_missing` | Chunks with no record (an F3 breach) | escalate: the publish order was violated |
 | `chunk_gaps` | An ordinal below the manifest's count is absent | as `missing_documents` |
 | `orphan_tail_documents` / `orphan_tail_chunks` | Chunks at or past the count | `--repair`, or `RECONCILE_REPAIR_ENABLED=true` |
