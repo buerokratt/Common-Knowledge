@@ -37,8 +37,6 @@ scripts need the Docker network that `docker-compose up` creates).
 - S3 storage is included: the stack runs its own SeaweedFS, and the bucket is created on
   first start (step 3). To use another S3-compatible store instead (AWS S3, MinIO, …), point
   `S3_ENDPOINT_URL`, `S3_BUCKET_NAME` and the `AWS_*` keys at it.
-- Your machine (and its browser) must resolve `host.docker.internal`. Docker Desktop adds it
-  to the hosts file; on Linux add `127.0.0.1 host.docker.internal` to `/etc/hosts`. See step 3.
 
 > **Note:** PostgreSQL, OpenSearch, RabbitMQ, HashiCorp Vault and the S3 object store
 > (SeaweedFS) all run as containers from `docker-compose.yml` — you do **not** need to install
@@ -124,15 +122,6 @@ S3_ENDPOINT_URL=http://host.docker.internal:8334
 
 Database connection and inter-service URLs are already wired in `docker-compose.yml` and
 `constants.ini` — you do not set `DATABASE_URL` or the Ruuter URLs by hand for the local stack.
-
-Check that your machine resolves `host.docker.internal` to itself. On Windows, Docker Desktop
-writes it to `C:\Windows\System32\drivers\etc\hosts` with the machine's IP at that time, and the
-entry goes stale when your network changes; `127.0.0.1 host.docker.internal` avoids that. Once the
-stack is up (step 4), this should print `200`:
-
-```bash
-curl -s -o /dev/null -w "%{http_code}\n" http://host.docker.internal:8334/healthz
-```
 
 ### Step 4 — Start the stack
 

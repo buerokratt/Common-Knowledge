@@ -191,12 +191,6 @@ services:
     depends_on:
       seaweedfs-init:
         condition: service_completed_successfully
-    # S3_ENDPOINT_URL is host.docker.internal:<port>: the one name that the
-    # browser, CKB's containers and GC's cron-manager can all reach, because
-    # every presigned URL is signed for that host and cannot be rewritten.
-    # Docker Desktop resolves it already; this makes it resolve on Linux too.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: file-processing/Dockerfile
@@ -358,11 +352,7 @@ services:
       REACT_APP_RUUTER_API_URL: http://localhost:8086/ckb
       REACT_APP_RUUTER_PRIVATE_API_URL: http://localhost:8086/ckb
       REACT_APP_LOCAL: "true"
-      # connect-src includes the S3 endpoint: the browser uploads and downloads
-      # straight to it with presigned URLs. No upgrade-insecure-requests here:
-      # it would turn those http:// requests into https://, which the local
-      # SeaweedFS does not serve.
-      REACT_APP_CSP: "default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 http://host.docker.internal:8334 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
+      REACT_APP_CSP: "upgrade-insecure-requests; default-src 'self'; font-src 'self' data:; img-src * data:; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; object-src 'none'; connect-src 'self' http://localhost:8086 http://localhost:8085 http://localhost:4040 https://admin.dev.buerokratt.ee/chat/menu.json https://*.s3.amazonaws.com;"
       DEBUG_ENABLED: true
       CHOKIDAR_USEPOLLING: true
       PORT: 3001
@@ -480,9 +470,6 @@ services:
 
   scrapper-server:
     container_name: scrapper-server
-    # Fetches presigned URLs (host.docker.internal:<port>); see file-processing-api.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     build:
       context: ./scrapper
       target: server
@@ -501,9 +488,6 @@ services:
 
   scrapper-celery:
     container_name: scrapper-celery
-    # Fetches presigned URLs (host.docker.internal:<port>); see file-processing-api.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     build:
       context: ./scrapper
       target: celery
@@ -546,9 +530,6 @@ services:
   # content-external/exporter/api/config.py.
   content-external:
     container_name: content-external
-    # Reads CKB's bucket at S3_ENDPOINT_URL (host.docker.internal:<port>); see file-processing-api.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
     build:
       context: .
       dockerfile: content-external/Dockerfile
