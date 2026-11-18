@@ -275,9 +275,10 @@ def live_s3_store_or_skip(
 ) -> S3Store:
     """An S3Store on the CONFORMANCE_S3_* endpoint, or skip the calling test.
 
-    Point it at any S3-compatible store with an existing bucket, e.g.:
-        docker run -p 9000:9000 minio/minio server /data
-        docker run -p 8333:8333 chrislusf/seaweedfs server -s3
+    Point it at any S3-compatible store with an existing bucket and keys, e.g.
+    the compose stack's SeaweedFS (see tests/test_store_conformance.py):
+        docker compose up -d seaweedfs
+        docker compose run --rm seaweedfs-init mkdir seaweedfs:conformance
     """
     values = {name: os.environ.get(name, "") for name in CONFORMANCE_ENV}
     missing = [name for name, value in values.items() if not value]

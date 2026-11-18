@@ -25,7 +25,9 @@ class S3Provider(BlobStorageProvider):
             aws_secret_access_key=settings.aws_secret_access_key,
             region_name=settings.aws_region,
             endpoint_url=settings.s3_endpoint_url,
-            config=Config(signature_version="s3v4"),
+            # Path-style, as content-external does: S3-compatible stores such as
+            # SeaweedFS serve virtual-host-style requests only with a configured domain.
+            config=Config(signature_version="s3v4", s3={"addressing_style": "path"}),
         )
         self.bucket_name = settings.s3_bucket_name
 
