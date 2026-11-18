@@ -14,6 +14,11 @@ spec:
     metadata:
       labels:
         app: {{ .Values.ruuterInternal.nameOverride | default "ruuter-internal" }}
+      annotations:
+        # Ruuter reads constants.ini only at startup, and a subPath mount never
+        # sees a ConfigMap update: a changed file (e.g. chatbotWidgetDomainId)
+        # must restart the pod, and nothing else would.
+        checksum/constants: {{ include "ckb.ruuterInternal.constantsIni" . | sha256sum }}
     spec:
       initContainers:
         - name: git-clone

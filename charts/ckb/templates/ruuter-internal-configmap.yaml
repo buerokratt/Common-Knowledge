@@ -3,5 +3,6 @@ kind: ConfigMap
 metadata:
   name: {{ .Values.ruuterInternal.nameOverride | default "ruuter-internal" }}-config
 data:
+  # constants.ini, plus ruuterInternal.chatbotWidgetDomainId (see _helpers.tpl).
   constants.ini: |-
-{{ .Files.Get "constants.ini" | indent 4 }}
+{{ include "ckb.ruuterInternal.constantsIni" . | indent 4 }}

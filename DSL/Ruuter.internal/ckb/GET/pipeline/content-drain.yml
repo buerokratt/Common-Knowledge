@@ -9,6 +9,30 @@ declaration:
   allowlist:
     body: []
 
+# The chatbot's LLM module toggle decides whether this runs; see the template.
+# While it skips, deletion journals stay open and drain on the next allowed tick.
+checkContentExportGate:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/content-export-gate"
+  requestType: templates
+  body:
+    operation: "drain"
+  result: gate
+  next: checkGate
+
+checkGate:
+  switch:
+    - condition: ${gate.run === true}
+      next: getAgency
+  next: logSkipped
+
+logSkipped:
+  log: "content-external drain skipped: ${gate.reason}"
+  next: returnSkipped
+
+returnSkipped:
+  return: ${gate}
+  next: end
+
 getAgency:
   call: http.get
   args:

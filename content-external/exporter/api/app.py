@@ -17,6 +17,13 @@ export. Both default to their non-destructive form — a dry drain, a
 report-only reconcile — until DRAIN_DELETES_ENABLED / RECONCILE_REPAIR_ENABLED
 say otherwise. A purge has no route at all (J8); it is
 `python -m exporter.run_ops purge`, an operator's act.
+
+The hourly export is this service's own timer (services/export_schedule.py),
+started in the lifespan, not a CronManager job: it must not fire at all while
+the chatbot's LLM module toggle is ON, and CronManager cannot pause a job.
+The timer follows the toggle by polling CKB's pipeline/content-export-status.
+POST /schedule/start and /schedule/stop are a manual re-check only, called by
+CKB's pipeline/content-export-sync when an operator runs it.
 """
 
 import multiprocessing
@@ -37,10 +44,12 @@ from exporter.api.config import (
     assert_work_dir_usable,
     load_settings,
     log_redacted_config,
+    warn_on_unconfigured_destination,
 )
 from exporter.api.models import (
     DrainRequest,
     ExportRequest,
+    ExportScheduleSummary,
     ExportStarted,
     HealthResponse,
     LastRunSummary,
@@ -57,6 +66,11 @@ from exporter.services.operations import (
     OperationStateStore,
     ReconcileReport,
     log_operation_outcome,
+)
+from exporter.services.export_schedule import (
+    ExportSchedule,
+    RuuterScheduleClient,
+    ScheduleStatus,
 )
 from exporter.services.run_log import log_run_outcome
 from exporter.services.run_state import RunStateStore, utc_now_iso
@@ -91,6 +105,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # merely trips over it.
     settings = load_settings()  # A12's sink/manifest-store matrix
     log_redacted_config(settings)
+    warn_on_unconfigured_destination(settings)  # warns only; runs refuse later
     work_dir = assert_work_dir_usable(settings)  # A14's exclusive-flock self-test
     assert_memory_budget(settings)  # A16
 
@@ -111,7 +126,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.run_state = RunStateStore(work_dir)
     # The export child gets the same resolved path, for the same reason.
     app.state.work_dir = work_dir
-    yield
+
+    # Last, once everything it may call back into is in place. It asks CKB
+    # for the toggle on its own thread, so startup never waits on Ruuter.
+    schedule = build_export_schedule(settings)
+    app.state.export_schedule = schedule
+    schedule.start()
+    try:
+        yield
+    finally:
+        schedule.shutdown()
+
+
+def build_export_schedule(settings: Settings) -> ExportSchedule:
+    """The export timer, over CKB's Ruuter-internal. A function so tests can
+    put a fake CKB behind it."""
+    return ExportSchedule(
+        RuuterScheduleClient(settings.ruuter_internal),
+        interval_seconds=settings.export_schedule_interval_seconds,
+        poll_seconds=settings.export_schedule_poll_seconds,
+    )
 
 
 app = FastAPI(title="Content External Exporter", version="0.1.0", lifespan=lifespan)
@@ -141,6 +175,38 @@ def get_run_state(request: Request) -> RunStateStore:
 def get_work_dir(request: Request) -> Path:
     work_dir: Path = request.app.state.work_dir
     return work_dir
+
+
+def get_export_schedule(request: Request) -> ExportSchedule:
+    schedule: ExportSchedule = request.app.state.export_schedule
+    return schedule
+
+
+def _schedule_summary(status: ScheduleStatus) -> ExportScheduleSummary:
+    return ExportScheduleSummary(**asdict(status))
+
+
+@app.post("/schedule/start")
+def schedule_start(
+    schedule: Annotated[ExportSchedule, Depends(get_export_schedule)],
+) -> ExportScheduleSummary:
+    """The toggle is OFF: export now, then every interval.
+
+    Called by CKB's pipeline/content-export-sync after its gate said run,
+    when an operator wants a toggle change applied before the next poll.
+    Repeating it while already active changes nothing. It cannot cause an
+    export while the toggle is ON: every tick asks CKB's gate again, and a
+    tick the gate skips with llm_module_active stops the timer."""
+    return _schedule_summary(schedule.activate("ckb_sync"))
+
+
+@app.post("/schedule/stop")
+def schedule_stop(
+    schedule: Annotated[ExportSchedule, Depends(get_export_schedule)],
+) -> ExportScheduleSummary:
+    """The toggle is ON: no more ticks until /schedule/start or a poll that
+    reads it OFF. An export already running finishes; nothing is cancelled."""
+    return _schedule_summary(schedule.deactivate("ckb_sync"))
 
 
 @app.post("/export_agency_async")
@@ -318,6 +384,7 @@ def health(
     settings: Annotated[Settings, Depends(get_settings)],
     run_state: Annotated[RunStateStore, Depends(get_run_state)],
     work_dir: Annotated[Path, Depends(get_work_dir)],
+    schedule: Annotated[ExportSchedule, Depends(get_export_schedule)],
 ) -> HealthResponse:
     """Liveness, configuration identity, and the last run's outcome.
 
@@ -343,4 +410,5 @@ def health(
         last_run=LastRunSummary(**asdict(last_run)) if last_run else None,
         last_drain=OperationStateStore(work_dir, "drain").read(),
         last_reconcile=OperationStateStore(work_dir, "reconcile").read(),
+        export_schedule=_schedule_summary(schedule.status()),
     )

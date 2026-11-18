@@ -31,6 +31,7 @@ from exporter.api.config import (
     ConfigurationError,
     Settings,
     get_vault_secrets,
+    missing_destination_settings,
 )
 from exporter.stores.azure_blob_store import AzureBlobStore
 from exporter.stores.base import ExternalStoreClient
@@ -169,12 +170,8 @@ def build_destination_store(settings: Settings) -> ExternalStoreClient:
     Stage F decides when a run first builds this.
     """
     backend = settings.content_external_store_backend
+    missing = missing_destination_settings(settings)
     if backend == "azure_blob":
-        required = {
-            "AZURE_STORAGE_CONTAINER": settings.azure_storage_container,
-            "VAULT_SECRET_PATH": settings.vault_secret_path,
-        }
-        missing = [name for name, value in required.items() if not value]
         if missing:
             raise ConfigurationError(
                 f"CONTENT_EXTERNAL_STORE_BACKEND={backend} needs "
@@ -182,17 +179,6 @@ def build_destination_store(settings: Settings) -> ExternalStoreClient:
             )
         return _build_azure_from_vault(settings, settings.azure_storage_container)
     if backend == "s3":
-        required = {
-            "EXTERNAL_S3_ENDPOINT_URL": settings.external_s3_endpoint_url,
-            "EXTERNAL_S3_BUCKET_NAME": settings.external_s3_bucket_name,
-            "EXTERNAL_S3_ACCESS_KEY_ID": (
-                settings.external_s3_access_key_id.get_secret_value()
-            ),
-            "EXTERNAL_S3_SECRET_ACCESS_KEY": (
-                settings.external_s3_secret_access_key.get_secret_value()
-            ),
-        }
-        missing = [name for name, value in required.items() if not value]
         if missing:
             raise ConfigurationError(
                 f"CONTENT_EXTERNAL_STORE_BACKEND={backend} needs "

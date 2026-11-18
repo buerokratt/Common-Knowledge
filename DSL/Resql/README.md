@@ -135,6 +135,9 @@ WHERE condition = :parameter_name::TYPE;
 - `get_user_by_login.sql` - Authenticate user by login
 - `get_user_is_allowed_by_user_role.sql` - Check user permissions
 - `get_configuration.sql` - Get system configuration
+- `get_domain_configuration.sql` - Get one key's latest value for one chatbot widget domain, plus whether that domain is active. Always one row; used by the content-external toggle gate for `llm_module_active`
+
+The `users/` queries run on `resql-users`, whose datasource is the chatbot's `byk` database, not CKB's own.
 
 ## Parameter Binding
 

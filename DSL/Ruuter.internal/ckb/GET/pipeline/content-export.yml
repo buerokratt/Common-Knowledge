@@ -9,6 +9,29 @@ declaration:
   allowlist:
     body: []
 
+# The chatbot's LLM module toggle decides whether this runs; see the template.
+checkContentExportGate:
+  template: "[#CKB_PROJECT_LAYER]/pipeline/content-export-gate"
+  requestType: templates
+  body:
+    operation: "export"
+  result: gate
+  next: checkGate
+
+checkGate:
+  switch:
+    - condition: ${gate.run === true}
+      next: getAgency
+  next: logSkipped
+
+logSkipped:
+  log: "content-external export skipped: ${gate.reason}"
+  next: returnSkipped
+
+returnSkipped:
+  return: ${gate}
+  next: end
+
 getAgency:
   call: http.get
   args:

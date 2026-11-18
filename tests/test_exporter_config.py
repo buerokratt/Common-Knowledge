@@ -20,7 +20,9 @@ from exporter.api.config import (
     assert_work_dir_usable,
     load_settings,
     log_redacted_config,
+    missing_destination_settings,
     redacted_settings,
+    warn_on_unconfigured_destination,
 )
 from exporter.core.constants import (
     CHUNK_PROFILES,
@@ -485,6 +487,121 @@ def test_an_explicit_manifest_store_is_never_warned_about(
     with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
         log_redacted_config(_llm_module_settings())
     assert not [r for r in caplog.records if r.levelno == logging.WARNING]
+
+
+# --------------------------------------------------------------------------
+# Startup warning for an unconfigured destination
+# --------------------------------------------------------------------------
+
+_COMPLETE_S3_DESTINATION: dict[str, object] = {
+    "external_s3_endpoint_url": "http://minio:9000",
+    "external_s3_bucket_name": "content-external",
+    "external_s3_access_key_id": SecretStr("writer"),
+    "external_s3_secret_access_key": SecretStr("writer-secret"),
+}
+
+
+def _destination_warnings(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+) -> list[str]:
+    with caplog.at_level(logging.WARNING, logger="exporter.api.config"):
+        warn_on_unconfigured_destination(settings)
+    return [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+
+
+def test_an_empty_s3_destination_is_warned_about_by_name(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The defaults: s3 with nothing set. Startup says so instead of the first
+    sign being a `failed` run an export interval later."""
+    warnings = _destination_warnings(_settings(), caplog)
+
+    assert len(warnings) == 1
+    message = warnings[0]
+    assert message.startswith(CONFIG_LOG_PREFIX)
+    assert "CONTENT_EXTERNAL_STORE_BACKEND=s3" in message
+    for name in (
+        "EXTERNAL_S3_ENDPOINT_URL",
+        "EXTERNAL_S3_BUCKET_NAME",
+        "EXTERNAL_S3_ACCESS_KEY_ID",
+        "EXTERNAL_S3_SECRET_ACCESS_KEY",
+    ):
+        assert name in message
+
+
+def test_an_azure_destination_without_a_container_is_warned_about(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = _settings(
+        content_external_store_backend="azure_blob",
+        vault_secret_path="blob/connections/azure_blob/content",
+    )
+    warnings = _destination_warnings(settings, caplog)
+
+    assert len(warnings) == 1
+    assert "CONTENT_EXTERNAL_STORE_BACKEND=azure_blob" in warnings[0]
+    assert "AZURE_STORAGE_CONTAINER is empty" in warnings[0]
+    assert "VAULT_SECRET_PATH" not in warnings[0]
+
+
+def test_the_destination_warning_never_carries_a_value(
+    clean_env: None, caplog: pytest.LogCaptureFixture
+) -> None:
+    settings = _settings(
+        external_s3_access_key_id=SecretStr("AKIA-never-log-me"),
+        external_s3_secret_access_key=SecretStr("s3cr3t-never-log-me"),
+    )
+    warnings = _destination_warnings(settings, caplog)
+
+    assert len(warnings) == 1
+    assert "never-log-me" not in warnings[0]
+    assert "EXTERNAL_S3_ACCESS_KEY_ID" not in warnings[0]
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        pytest.param(_COMPLETE_S3_DESTINATION, id="complete-s3"),
+        pytest.param(
+            {
+                "content_external_store_backend": "azure_blob",
+                "azure_storage_container": "content",
+                "vault_secret_path": "blob/connections/azure_blob/content",
+            },
+            id="complete-azure",
+        ),
+    ],
+)
+def test_a_complete_destination_is_not_warned_about(
+    clean_env: None, caplog: pytest.LogCaptureFixture, overrides: dict[str, object]
+) -> None:
+    assert not _destination_warnings(_settings(**overrides), caplog)
+
+
+def test_the_llm_module_sink_is_not_warned_about(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """That sink builds no object-store destination, so its empty
+    EXTERNAL_S3_* fields are not a misconfiguration."""
+    assert not _destination_warnings(_llm_module_settings(), caplog)
+
+
+def test_missing_destination_settings_is_what_the_factory_refuses(
+    clean_env: None,
+) -> None:
+    """The warning and the run-time refusal read one list, so they can never
+    name different variables."""
+    from exporter.stores.factory import build_destination_store
+
+    settings = _settings(external_s3_bucket_name="content-external")
+    missing = missing_destination_settings(settings)
+    assert missing == [
+        "EXTERNAL_S3_ENDPOINT_URL",
+        "EXTERNAL_S3_ACCESS_KEY_ID",
+        "EXTERNAL_S3_SECRET_ACCESS_KEY",
+    ]
+    with pytest.raises(ConfigurationError, match=", ".join(missing)):
+        build_destination_store(settings)
 
 
 # --------------------------------------------------------------------------
