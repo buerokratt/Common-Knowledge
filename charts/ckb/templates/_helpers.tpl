@@ -166,3 +166,35 @@ or empty (the namespace default, rendered as no serviceAccountName at all).
 {{- $sa.name | default "" -}}
 {{- end -}}
 {{- end -}}
+
+{{/*
+ruuter-internal's constants.ini: the repo file (charts/ckb/constants.ini, a
+link to the root constants.ini) with BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID set
+from ruuterInternal.chatbotWidgetDomainId when that value is given.
+
+The constant names the chatbot widget domain whose "LLM module active" toggle
+gates the content-external export (TEMPLATES/pipeline/content-export-gate.yml).
+It differs per deployment, so it is a value rather than a line committed to
+constants.ini. Empty leaves the file as it is: the repo ships the constant
+empty, which keeps the export unarmed.
+
+Aborts the render on a value that is not a UUID (it is written into an ini
+line, so nothing else may get in), and on a constants.ini without exactly one
+BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID line, which is also what a Windows checkout
+gives: the link arrives as a text file holding "../../constants.ini".
+*/}}
+{{- define "ckb.ruuterInternal.constantsIni" -}}
+{{- $ini := .Files.Get "constants.ini" -}}
+{{- $domain := .Values.ruuterInternal.chatbotWidgetDomainId | default "" | trim -}}
+{{- if $domain -}}
+{{- if not (regexMatch "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$" $domain) -}}
+{{- fail (printf "ruuterInternal.chatbotWidgetDomainId must be a chatbot widget domain UUID (widget_domains.domain_id), got %q" $domain) -}}
+{{- end -}}
+{{- $line := "(?m)^BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID=.*$" -}}
+{{- if ne (len (regexFindAll $line $ini -1)) 1 -}}
+{{- fail "ruuterInternal.chatbotWidgetDomainId is set, but charts/ckb/constants.ini has no single BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID line to set. On Windows the link checks out as a text file: render from Linux or CI" -}}
+{{- end -}}
+{{- $ini = regexReplaceAll $line $ini (printf "BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID=%s" (lower $domain)) -}}
+{{- end -}}
+{{- $ini -}}
+{{- end -}}

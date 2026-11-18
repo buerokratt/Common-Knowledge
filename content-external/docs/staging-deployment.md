@@ -12,6 +12,11 @@ and the scheduled export in Step 7 all behaved as written. Not verifiable
 there: deletes on real Azure (Step 7.4), service-principal login, and network
 access to a real storage account.
 
+Updated 2026-11-17 on `feat/cep-triggering` for the chatbot toggle gate and
+the polling export timer (Step 7, blockers 4 and 10). That path was run end
+to end on Compose against SeaweedFS and Azurite, reading the toggle from a
+chatbot `byk` database; not yet on Helm.
+
 ## Contents
 
 - [Overview](#overview)
@@ -39,7 +44,9 @@ then writes chunks, per-document metadata and a manifest to Azure.
 
 ```mermaid
 flowchart LR
-    CM[CronManager<br/>trigger_content_export<br/>hourly at :17] --> RI[Ruuter-internal<br/>GET /pipeline/content-export]
+    CE -->|poll every 5 min:<br/>GET /pipeline/content-export-status| RI2[Ruuter-internal<br/>gate]
+    RI2 -->|resql-users: llm_module_active| CB[(Chatbot byk database)]
+    CE -->|timer: at once, then hourly<br/>while the toggle is OFF| RI[Ruuter-internal<br/>GET /pipeline/content-export]
     RI -->|list_agencies| RQ[(Resql / PostgreSQL)]
     RI -->|POST /export_agency_async| CE[content-external]
     CE -->|watermark + document rows| RQ
@@ -48,10 +55,13 @@ flowchart LR
     CE -->|chunks, metadata, manifest| AZ[(Azure Blob container)]
 ```
 
-- **Trigger:** CronManager runs `trigger_content_export` at minute 17 of every
-  hour, once enabled ([Step 7](#step-7--enable-the-schedule)). It calls
-  Ruuter-internal `GET /pipeline/content-export`, which finds the agency and
-  calls content-external `POST /export_agency_async`.
+- **Trigger:** content-external's own timer, not CronManager. While the
+  chatbot's **LLM module active** toggle is OFF it exports at once, then every
+  hour; while it is ON nothing fires. It reads the toggle every 5 minutes
+  and starts or stops itself; the chatbot is not changed
+  ([Step 7](#step-7--enable-the-schedule)). Each tick calls
+  Ruuter-internal `GET /pipeline/content-export`, which reads the toggle,
+  finds the agency and calls content-external `POST /export_agency_async`.
 - **Unchanged hours are cheap:** each run first compares the agency's latest
   `updated_at` and live document count with the last run. If nothing changed
   it stops with `unchanged` in about 2 s.
@@ -96,12 +106,13 @@ chart in minikube on 2026-11-04.
 | 1 | Branch changes not merged. The content-external code, DSL and chart are on `v2.0.0`; the Azure switches in `docker-compose.yml` and in the chart (`contentExternal.storeBackend`, `extraEnv`, the always-rendered `serviceAccountName`), and the image-tag fix, are only on `feat/content-external-pipeline` | Both | Merge them into the branch staging deploys from |
 | 2 | The database lacks the export index (changelog `20261020120000-add-source-file-export-index`) | Both | Run Liquibase from `v2.0.0`; [Step 5](#step-5--verify-the-deployment) checks it |
 | 3 | No content-external image on GHCR. `build-content-external.yml` builds only on a push to `wip`, which exists only on the `rootcodelabs` fork | Helm | Run the workflow in the `buerokratt` repo so `ghcr.io/buerokratt/common-knowledge:content-external-dev-1-1-1` exists |
-| 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh`, `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql` and `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql` | Both | Compose mounts them from the checkout. Helm: row 5 |
+| 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
 | 5 | The chart's init containers run `git clone --branch dev`; upstream `dev` has none of the content-export DSL | Helm | Clone `v2.0.0` (or merge `v2.0.0` into `dev`) in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates |
 | 6 | Ruuter never loads `constants.ini`: the chart mounts it at `/app/config/constants.ini`, Ruuter reads `/app/constants.ini`. Every `[#CKB_RESQL]` placeholder stays unresolved (`Failed to resolve '%5B'`) | Helm | Change the `mountPath` in `ruuter-deployment.yaml` and `ruuter-internal-deployment.yaml` to `/app/constants.ini` |
 | 7 | Resql connects to `database:5432`; the chart's database Service is `<release>-database` | Helm | Set `SQLMS_DATASOURCES_0_JDBCURL` to `jdbc:postgresql://<release>-database:5432/ckb_db` |
 | 8 | The Liquibase job uses `liquibase/liquibase:latest` (5.x, no PostgreSQL driver) and the `varmoh` fork's 2025 `dev` (14 changelogs missing) | Helm | `liquibase.image.tag: "4.33"`, `liquibase.repo: https://github.com/buerokratt/Common-Knowledge.git`, `liquibase.branch: v2.0.0` |
 | 9 | Ruuter has no readiness probe, so Kubernetes reports it available about 10 s before it listens | Helm | Add a readiness probe, or expect the first cron tick after a Ruuter restart to fail |
+| 10 | The chart has no `resql-users`. The gate reads the toggle at `[#CKB_USERS_RESQL]` (`http://resql-users:8087/users`), the same service CKB's login uses, so it must come from the surrounding Bürokratt deployment. That service must be connected to the chatbot's `byk` database and carry `get_domain_configuration.sql`; without it every gate answer is `toggle_unreadable` or an unreachable Ruuter call, and the timer never starts | Helm | Add the file to the DSL that `resql-users` loads, and check `CKB_USERS_RESQL` resolves in the namespace |
 
 Rows 5–9 affect all of CKB on Helm, not only this pipeline. Running `helm`
 from a Windows checkout also breaks `charts/ckb/constants.ini`, a symlink
@@ -303,7 +314,7 @@ says so. This needs blocker 1 merged.
    ```bash
    docker compose up -d --build content-external
    docker compose up -d vault-init vault-agent-content
-   docker compose restart ruuter-internal resql-ckb cron-manager   # pick up the new DSL
+   docker compose restart ruuter-internal resql-ckb resql-users cron-manager   # pick up the new DSL
    ```
 
 5. **Schedule the AppRole renewal** from [Step 2.3](#23-agent-authentication)
@@ -417,8 +428,11 @@ to Azure; the first sample run in Step 6 proves that.
    with secrets masked. Check `content_external_store_backend=azure_blob`,
    `azure_storage_container=<your container>` (`[unset]` means it is empty),
    `vault_secret_path=blob/connections/azure_blob/content`, and the
-   `memory budget … within container limit` line that follows it. An
-   `agency_guard` warning at startup is normal if Resql was still starting.
+   `memory budget … within container limit` line that follows it. A
+   `content-external config CONTENT_EXTERNAL_STORE_BACKEND=azure_blob but …
+   empty` warning names any destination variable still unset; every run
+   fails with `ConfigurationError` until it is fixed. An `agency_guard`
+   warning at startup is normal if Resql was still starting.
 3. **Vault token.** The agent must have written a non-empty token:
 
    ```bash
@@ -437,9 +451,16 @@ to Azure; the first sample run in Step 6 proves that.
      AND indexname = 'idx_source_file_agency_base_updated';
    ```
 
-5. **Cron job registered.** CronManager's log lists `trigger_content_export`
-   with trigger `false` (registered, not scheduled), and the three
-   `trigger_content_*.sh` scripts are present under `/app/scripts`.
+5. **Timer and cron jobs.** `/health` on content-external shows
+   `export_schedule.state` `inactive` (with `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` still
+   empty) or `unknown` (CKB not reachable yet). The empty constant logs one
+   WARNING at startup, `content-external schedule: no export will run:
+   BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID is empty in CKB's constants.ini`; it is
+   expected until Step 7 and not repeated at every poll.
+   `export_schedule.change_reason` is `startup:chatbot_domain_not_configured`.
+   CronManager's log lists
+   `trigger_content_drain` and `trigger_content_reconcile` with trigger
+   `false`, and their two scripts are present under `/app/scripts`.
 6. **Agency id.** Note the agency's `base_id` for Step 6 (one agency per
    deployment):
 
@@ -458,8 +479,9 @@ environment: prefix each command with `docker compose exec content-external`
 (Compose) or `kubectl -n <namespace> exec deploy/content-external -c content-external --`
 (Helm).
 
-1. **Keep the schedule off:** `trigger_content_export` stays
-   `trigger: "false"` in `DSL/CronManager/scheduler.yml`.
+1. **Keep the deployment unarmed:** leave `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty in
+   `constants.ini` (Helm: leave `ruuterInternal.chatbotWidgetDomainId` unset). The export timer then stays `inactive` and nothing fires,
+   whatever the chatbot's toggle says, until Step 7 sets it.
 2. **Sample of 25** proves CKB access, Vault and Azure end to end:
 
    ```bash
@@ -506,15 +528,53 @@ environment: prefix each command with `docker compose exec content-external`
 
 ## Step 7 — Enable the schedule
 
-Schedules live in [`DSL/CronManager/scheduler.yml`](../../DSL/CronManager/scheduler.yml).
-All three content jobs ship as `trigger: "false"`. Enable them in this order,
-keeping the value quoted:
+**First, connect the chatbot's toggle.** The export, drain and reconcile all
+ask the chatbot's **LLM module active** toggle before they run. They run only
+while it is OFF; see the [toggle gate](../README.md#the-chatbots-llm-module-toggle-gates-all-three-jobs)
+and [Schedule](../README.md#schedule).
+Set `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in [`constants.ini`](../../constants.ini) to the
+UUID of the chatbot widget domain whose toggle governs this deployment.
+`resql-users` must reach the chatbot's `byk` database. Like `CENTOPS_*`, the
+value is per deployment:
+
+- **Compose:** edit the checkout's `constants.ini`, then
+  `docker compose restart ruuter-internal`.
+- **Helm:** add `--set ruuterInternal.chatbotWidgetDomainId=<uuid>` to the
+  deploy job and redeploy. The chart writes it into ruuter-internal's
+  `constants.ini` and restarts ruuter-internal itself (a `checksum/constants`
+  pod annotation); nothing is committed. The render fails on a value that is
+  not a UUID, and on a Windows checkout, where the `charts/ckb/constants.ini`
+  link is a text file.
+
+Check the gate. With the toggle ON the answer must be `"run":false` with
+`"reason":"llm_module_active"`; with it OFF, `"run":true`:
+
+```bash
+curl -fsS '<ruuter-internal>/ckb/pipeline/content-export-status'
+```
+
+**Nothing is changed on the chatbot side.** content-external reads the toggle
+itself every `EXPORT_SCHEDULE_POLL_SECONDS` (default 300) through the same
+`content-export-status` flow: toggle OFF starts its export timer (an export at
+once, then hourly), toggle ON stops it (nothing fires). A switch takes effect
+within one poll interval.
+
+**Start the export schedule** by waiting for the next poll, or directly:
+
+```bash
+curl -fsS '<ruuter-internal>/ckb/pipeline/content-export-sync'
+curl -fsS '<content-external>/health'   # export_schedule.state: active with the toggle OFF
+```
+
+The drain and reconcile are CronManager jobs in
+[`DSL/CronManager/scheduler.yml`](../../DSL/CronManager/scheduler.yml) and
+ship as `trigger: "false"`. Enable them in this order, keeping the value
+quoted:
 
 | Order | Job | Set `trigger:` to | When |
 | --- | --- | --- | --- |
-| 1 | `trigger_content_export` | `"0 17 */1 * * ?"` (hourly at :17) | After Step 6 succeeds |
-| 2 | `trigger_content_drain` | `"0 47 */1 * * ?"` (hourly at :47) | Any time; it only reports while `DRAIN_DELETES_ENABLED` is off |
-| 3 | `trigger_content_reconcile` | `"0 35 3 * * ?"` (daily at 03:35) | Any time; it only reports while `RECONCILE_REPAIR_ENABLED` is off |
+| 1 | `trigger_content_drain` | `"0 47 */1 * * ?"` (hourly at :47) | Any time; it only reports while `DRAIN_DELETES_ENABLED` is off |
+| 2 | `trigger_content_reconcile` | `"0 35 3 * * ?"` (daily at 03:35) | Any time; it only reports while `RECONCILE_REPAIR_ENABLED` is off |
 
 How the change reaches CronManager:
 
@@ -559,15 +619,21 @@ entries, since each `--set-json` replaces the list:
 --set-json 'contentExternal.extraEnv=[{"name":"DIFF_ON_MISSING_MANIFEST","value":"fail"},{"name":"DRAIN_DELETES_ENABLED","value":"true"},{"name":"RECONCILE_REPAIR_ENABLED","value":"true"}]'
 ```
 
-To trigger any job by hand, including while it is disabled:
+To run one export through the gate by hand, as a tick does:
 
 ```bash
-curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_export'
+curl -fsS '<ruuter-internal>/ckb/pipeline/content-export'
+```
+
+To run the drain or reconcile job by hand, including while it is disabled:
+
+```bash
+curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_drain'
 ```
 
 Some CronManager versions answer a repeated `POST /execute` with 500
-(`ClassCastException`) although the job ran: check `/health`'s `last_run`
-instead of curl's exit code.
+(`ClassCastException`) although the job ran: check `/health` instead of
+curl's exit code.
 
 ## Step 8 — Day-2 operation and troubleshooting
 
@@ -592,7 +658,12 @@ export adds a `content-external error` line with the sanitised cause.
 | `failed`, `error_type: StoreError` | Vault unreachable or 5xx (retryable), or Azure refused or the container does not exist | Retryable: nothing, the next tick retries. Otherwise check the container name, the credential's role and the network path |
 | `failed` naming `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` | The setting is empty | Set it ([4A](#step-4a--compose-configure-and-deploy) / [4B](#step-4b--helm-configure-and-deploy)) |
 | First run fails with `NonEmptyDestination` | The container already holds objects but no manifest | Use an empty container |
-| Cron job runs but nothing reaches content-external | Ruuter-internal lacks the DSL or `constants.ini` (blockers 4–6), or Ruuter was still starting (blocker 9) | Check Ruuter-internal's log for `pipeline/content-export` and `Failed to resolve` |
+| `export_schedule.state` stays `unknown` | content-external cannot reach Ruuter-internal's `pipeline/content-export-status`, or Ruuter lacks the DSL or `constants.ini` (blockers 4–6) | Check `RUUTER_INTERNAL` and Ruuter-internal's log for `pipeline/content-export-status`; the timer asks again every minute |
+| `export_schedule.state` `inactive` with the toggle OFF | `change_reason` names it: a skip such as `chatbot_domain_not_configured`, or no poll yet since the toggle changed (`last_poll_at`) | Fix the reason, then wait for the next poll or call `pipeline/content-export-sync` |
+| Log `no export will run: BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID ...` (WARNING) | The constant is empty, or names no active chatbot widget domain (the line shows the value). Logged once when first seen, again only if it changes | Set it to the right UUID in `constants.ini` and restart ruuter-internal; the next poll logs `now names an active chatbot widget domain` |
+| `export_schedule.last_poll_result` is `unreachable` or `toggle_unreadable` | The poll could not read the toggle; the timer keeps its state | Check ruuter-internal, `resql-users` and its connection to the chatbot's `byk` database; the next poll retries |
+| `export_schedule.last_tick_result` is a skip reason | The [toggle gate](../README.md#the-chatbots-llm-module-toggle-gates-all-three-jobs) said skip | Act on the `reason`: [RUNBOOK.md — Operating the export](../RUNBOOK.md#operating-the-export) |
+| `export_schedule.last_tick_result: unreachable` | content-external could not reach Ruuter-internal at a tick | Check the network path; the next tick retries |
 | Every tick `busy` | A run, drain or reconcile holds the lock past the next tick | Read `duration_seconds`; lengthen the interval |
 | `document deletes unresolved; journalled for the drain`, and deleted documents still in the container | Azure refused the batch delete. The run still commits; the deletes wait in the journal | Check the credential can delete, and that Blob Batch requests reach the account. The drain retries every hour; `reconcile` shows the leftovers as `unrecorded_documents` |
 | Fewer documents in Azure than in the GUI | Only `finished` rows publish; uploaded files are never published | Compare `skipped_reasons` in the report, not totals |
@@ -600,8 +671,15 @@ export adds a `content-external error` line with the sanitised cause.
 
 **Stopping and undoing:**
 
-- **Stop exports:** set `trigger_content_export` back to `trigger: "false"`.
-- **Empty the destination:** with the schedule off,
+- **Pause exports:** switch **LLM module active** ON in Chatbot settings for
+  the configured domain. At the next poll the export timer stops and nothing
+  fires; switching it OFF starts an export at the next poll, which catches
+  up, and the hourly ticks resume.
+- **Stop exports regardless of the toggle:** empty `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID`
+  and restart ruuter-internal (Helm: redeploy with
+  `ruuterInternal.chatbotWidgetDomainId` empty), then call `pipeline/content-export-sync`. The gate
+  skips with `chatbot_domain_not_configured` and the timer stops.
+- **Empty the destination:** with exports stopped,
   `python -m exporter.run_ops purge --agency-id <id> --confirm <id>`. The
   manifest is kept empty; re-enabling the export republishes everything
   ([RUNBOOK.md — Purging an agency](../RUNBOOK.md#purging-an-agency-j7-j8)).
@@ -648,7 +726,9 @@ line of the `content-external` service; on Helm, add it to
 | `EXPORT_PAGE_SIZE` | `1000` | Rows per Resql page |
 | `CKB_RESQL` | `http://resql-ckb:8090/ckb` | Change only if the Resql service is named differently |
 | `CKB_RESQL_TIMEOUT` | `30` s | A read timeout fails the run; it is not retried |
-| `RUUTER_INTERNAL` | `http://ruuter-internal:8089` | |
+| `RUUTER_INTERNAL` | `http://ruuter-internal:8089` | The timer's toggle polls and ticks go here |
+| `EXPORT_SCHEDULE_INTERVAL_SECONDS` | `3600` | At least 60. Time between exports while the toggle is OFF |
+| `EXPORT_SCHEDULE_POLL_SECONDS` | `300` | At least 60. Time between toggle reads; the longest a switch takes to start or stop exports |
 | `REQUIRE_METADATA_SIDECAR` | `true` | Keep on: documents without metadata cannot be cited |
 | `SINK_FAILURE_ABORT_THRESHOLD` | `25` | Consecutive permanent publish failures before the run aborts |
 | `CONTENT_EXTERNAL_PREFIX` | `content` | Key prefix inside the container |
@@ -680,10 +760,13 @@ above:
   `vaultAgent.enabled: true`.
 - **Bootstrap:** into a new collection beside the live one, as the cutover
   plan describes.
+- **The toggle gate is backwards for this sink.** The gate runs the jobs only
+  while **LLM module active** is OFF, but this sink is wanted while it is ON.
+  Change the gate before scheduling an `llm_module` deployment.
 
 ## Checklist
 
-- [ ] Blockers 1–2 (and 3–9 on Helm) cleared
+- [ ] Blockers 1–2 (and 3–10 on Helm) cleared
 - [ ] Azure container created; credential created and scoped to it
 - [ ] Vault secret written with `kv put`; placeholders gone
 - [ ] Vault policy present; agent login works (daily `vault-init` on Compose, Kubernetes role on Helm)
@@ -693,7 +776,8 @@ above:
 - [ ] Sample of 25 succeeded and objects visible in the container
 - [ ] Full bootstrap succeeded; report read; spot-checked
 - [ ] `DIFF_ON_MISSING_MANIFEST=fail` set
-- [ ] `trigger_content_export` enabled at `:17`; first scheduled run `success` or `unchanged`
+- [ ] `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` set; `pipeline/content-export-status` answers `run:false`/`llm_module_active` with the toggle ON, and `run:true` with it OFF
+- [ ] Within one poll interval of switching the toggle OFF, `export_schedule.state` is `active` and `last_run` shows an export; within one of switching it ON, `inactive` and no further ticks
 - [ ] Drain and reconcile enabled; destructive flags on after a dry cycle
 - [ ] First real delete confirmed in Azure (no unresolved deletes; drain `still_unresolved=0`)
 - [ ] Alerts agreed with ops

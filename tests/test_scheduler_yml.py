@@ -57,7 +57,14 @@ def test_trigger_zipping_is_byte_identical() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["trigger_content_export", "trigger_content_drain", "trigger_content_reconcile"],
+    ["trigger_content_drain", "trigger_content_reconcile"],
 )
 def test_content_external_trigger_exists(name: str) -> None:
     assert name in yaml.safe_load(TEXT)
+
+
+def test_the_content_export_is_not_a_cron_job() -> None:
+    # content-external runs the hourly export itself, stopped while the
+    # chatbot's LLM module toggle is ON; CronManager cannot pause a job.
+    assert "trigger_content_export" not in yaml.safe_load(TEXT)
+    assert not (SCRIPTS_DIR / "trigger_content_export.sh").exists()

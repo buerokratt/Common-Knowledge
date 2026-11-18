@@ -14,6 +14,7 @@ from exporter.api.app import app, get_settings
 from exporter.api.config import ConfigurationError, Settings
 from exporter.services.agency_guard import MultipleAgenciesError
 from exporter.services.run_state import LAST_RUN_FILENAME, RunStateStore
+from exporter_fakes import patch_export_schedule
 
 HEALTH_KEYS = {
     "status",
@@ -26,6 +27,8 @@ HEALTH_KEYS = {
     # Stage J, additive: the last drain's and reconcile's outcome.
     "last_drain",
     "last_reconcile",
+    # Additive: the export timer.
+    "export_schedule",
 }
 
 
@@ -43,6 +46,7 @@ def work_dir_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """
     for name in Settings.model_fields:
         monkeypatch.delenv(name.upper(), raising=False)
+    patch_export_schedule(monkeypatch)
     monkeypatch.setattr(
         "exporter.api.app.check_single_agency_at_startup", lambda _settings: 1
     )

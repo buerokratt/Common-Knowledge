@@ -34,6 +34,9 @@ DSL/Ruuter.internal/ckb/
 - `GET /pipeline/scheduler-check-for-unscheduled-records` - Find sources needing scheduling
 - `GET /pipeline/trigger-pipeline-for-sceduled-sources` - Execute scheduled tasks
 - `GET /pipeline/zip` - Archive processed data
+- `GET /pipeline/content-export`, `/pipeline/content-drain`, `/pipeline/content-reconcile` - Start a content-external operation, only while the chatbot's LLM module toggle is OFF (see `content-export-gate.yml`)
+- `GET /pipeline/content-export-sync` - Manual re-check: starts content-external's hourly export timer while the LLM module toggle is OFF, stops it while ON, without waiting for the next poll
+- `GET /pipeline/content-export-status` - The gate's answer only; content-external reads it at startup and then every `EXPORT_SCHEDULE_POLL_SECONDS` to decide whether its timer runs
 - `POST /pipeline/clean-scraped-file` - Trigger file cleaning
 - `POST /pipeline/upload-file-sync` - Synchronous file upload
 - `POST /pipeline/delete-file-sync` - Synchronous file deletion
@@ -72,6 +75,7 @@ Reusable workflow templates for common operations:
 - `clean-file.yml` - File cleaning workflow
 - `trigger-scrapper-*.yml` - Various scraper trigger workflows
 - `update-next-rendered-timestamp.yml` - Scheduling updates
+- `content-export-gate.yml` - Reads the chatbot's `llm_module_active` toggle for `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` through resql-users, and returns `{status, run, reason, operation, domain}`. The three content-external flows call it first and skip unless `run` is true ([content-external/README.md](../../../content-external/README.md#the-chatbots-llm-module-toggle-gates-all-three-jobs))
 
 ### Agency Templates
 - `zip.yml` - Agency data archival workflow

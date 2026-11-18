@@ -251,6 +251,15 @@ ruuterInternal:
       value: "true"
     - name: server.port
       value: "8089"
+  # The chatbot widget domain UUID (the chatbot's widget_domains.domain_id)
+  # whose "LLM module active" toggle gates the content-external export, drain
+  # and reconcile. Rendered into this pod's constants.ini as
+  # BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID; a change restarts ruuter-internal.
+  # Empty keeps constants.ini's own line, which the repo ships empty: no export
+  # runs (content-external logs chatbot_domain_not_configured). Leave it empty
+  # through the first-deployment bootstrap (content-external/RUNBOOK.md), then:
+  #   --set ruuterInternal.chatbotWidgetDomainId=<uuid>
+  chatbotWidgetDomainId: ""
   config:
     constantsIni: |-
       configmap somehow

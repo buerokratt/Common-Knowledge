@@ -22,6 +22,9 @@ pytest puts it on sys.path.
   exactly what a real read would hand it.
 - patch_wiring points the worker task — and through it the CLI and the
   endpoint's child — at these fakes, with A17's agency check stubbed.
+- FakeCkb stands in for CKB's two Ruuter-internal flows behind the export
+  timer; patch_export_schedule puts it behind the app's lifespan, so no API
+  test reaches for ruuter-internal.
 """
 
 import hashlib
@@ -53,6 +56,7 @@ from exporter.core.schemas import (
 )
 from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
 from exporter.services.document_source import DocumentSource
+from exporter.services.export_schedule import CkbCallError, ExportSchedule
 from exporter.services.manifest_service import ManifestService
 from exporter.services.manifest_store import ManifestStore
 from exporter.services.publish_service import PublishCoordinator
@@ -642,3 +646,58 @@ def patch_wiring(
     monkeypatch.setattr("exporter.worker.tasks.build_coordinator", build)
     monkeypatch.setattr("exporter.worker.tasks.build_deletion_context", build_context)
     monkeypatch.setattr("exporter.worker.tasks.require_single_agency", lambda _s: 1)
+
+
+class FakeCkb:
+    """CKB's pipeline/content-export-status and pipeline/content-export, in
+    memory. An answer that is an exception is raised instead of returned.
+
+    By default the toggle reads ON, so a timer built over it settles
+    `inactive` and never ticks."""
+
+    def __init__(
+        self,
+        *,
+        sync_answer: Mapping[str, object] | CkbCallError | None = None,
+        export_answer: Mapping[str, object] | CkbCallError | None = None,
+    ) -> None:
+        self.sync_answer: Mapping[str, object] | CkbCallError = (
+            sync_answer
+            if sync_answer is not None
+            else {"status": "skipped", "run": False, "reason": "llm_module_active"}
+        )
+        self.export_answer: Mapping[str, object] | CkbCallError = (
+            export_answer if export_answer is not None else {"status": "started"}
+        )
+        self.sync_calls = 0
+        self.export_calls = 0
+        self.exported = threading.Event()
+
+    def content_export_status(self) -> Mapping[str, object]:
+        self.sync_calls += 1
+        if isinstance(self.sync_answer, CkbCallError):
+            raise self.sync_answer
+        return self.sync_answer
+
+    def content_export(self) -> Mapping[str, object]:
+        self.export_calls += 1
+        self.exported.set()
+        if isinstance(self.export_answer, CkbCallError):
+            raise self.export_answer
+        return self.export_answer
+
+
+def patch_export_schedule(
+    monkeypatch: pytest.MonkeyPatch, ckb: FakeCkb | None = None
+) -> FakeCkb:
+    """Build the app's export timer over `ckb` (a fresh FakeCkb by default)."""
+    fake = ckb if ckb is not None else FakeCkb()
+    monkeypatch.setattr(
+        "exporter.api.app.build_export_schedule",
+        lambda settings: ExportSchedule(
+            fake,
+            interval_seconds=settings.export_schedule_interval_seconds,
+            poll_seconds=settings.export_schedule_poll_seconds,
+        ),
+    )
+    return fake

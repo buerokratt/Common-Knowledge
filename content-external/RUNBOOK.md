@@ -6,20 +6,29 @@ Operator notes for running the exporter. Design and configuration are in
 ## Operating the export
 
 For a manual export, use [Running an export](README.md#running-an-export).
-To invoke the registered cron job by hand, including while its schedule is
-disabled, call `POST /execute/scheduler/trigger_content_export`:
+The hourly export is this service's own timer, not a CronManager job
+([Schedule](README.md#schedule)): it runs only while the chatbot's LLM module
+toggle is OFF and nothing fires while it is ON. It reads the toggle itself
+every `EXPORT_SCHEDULE_POLL_SECONDS` (default 300), so a switch takes effect
+within that; nothing on the chatbot side tells it. Its state is `/health`'s
+`export_schedule`. To run one export through the gate now, exactly as a tick
+does, call CKB's flow; to make the timer re-read the toggle without waiting
+for the next poll, call the sync flow, which starts or stops it:
 
 ```bash
-curl -fsS -X POST '<cron-manager>/execute/scheduler/trigger_content_export'
+curl -fsS '<ruuter-internal>/ckb/pipeline/content-export'
+curl -fsS '<ruuter-internal>/ckb/pipeline/content-export-sync'
+curl -fsS '<content-external>/health'   # export_schedule: state, last_tick_result, last_poll_result
 ```
 
-On some CronManager versions a repeated `POST /execute` returns 500
-(`ClassCastException`) although the job ran. Check `/health`'s `last_run`
-rather than trusting curl's exit code, and do not retry on the 500 alone.
-
-CronManager names the job group after the job file, so `scheduler.yml` gives
-the group `scheduler`. In HTTP commands here, `<cron-manager>` and
-`<content-external>` stand for the configured base URLs.
+Ruuter wraps each answer as `{"response": …}`. The drain and reconcile are
+still CronManager jobs: `POST /execute/scheduler/<job>` runs one by hand. On
+some CronManager versions a repeated `POST /execute` returns 500
+(`ClassCastException`) although the job ran; check `/health` rather than
+curl's exit code, and do not retry on the 500 alone. CronManager names the
+job group after the job file, so `scheduler.yml` gives the group
+`scheduler`. In HTTP commands here, `<cron-manager>`, `<ruuter-internal>`
+and `<content-external>` stand for the configured base URLs.
 Submission is not completion. Read the summary in `/health`'s `last_run`,
 the `content-external run` log line, or the full CLI report from
 `--output-json`; see [Observability](README.md#observability--how-to-tell-this-is-working).
@@ -35,6 +44,22 @@ in the `content-external error` log line.
 | `unchanged` | The committed manifest still matches; nothing needed publishing. Wait for the next tick. |
 | `busy` | Another run holds the lock. This invocation did no export work; let the active run finish and watch `consecutive_busy`. |
 | `failed` | Read `error_type` and the error log, then check credentials, connectivity and the destination before retrying. |
+
+A call to CKB's `pipeline/content-export` (a tick, or by hand), or a drain or
+reconcile job, can also answer `{"status":"skipped",…}` without reaching this
+service. That is the
+[LLM module toggle gate](README.md#the-chatbots-llm-module-toggle-gates-all-three-jobs),
+and `/health` does not move. Act on the `reason`:
+
+| `reason` | What to do |
+|---|---|
+| `llm_module_active` | Nothing. The chatbot uses the LLM module; flip the toggle OFF in Chatbot settings to resume exporting, which the next poll picks up. A tick or poll that meets this stops the export timer. |
+| `chatbot_domain_not_configured` | content-external logs one WARNING, `no export will run: BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID is empty`. Set `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in `constants.ini` to the chatbot widget domain UUID and restart ruuter-internal (Helm: redeploy with `--set ruuterInternal.chatbotWidgetDomainId=<uuid>`, which restarts it). The next poll re-reads it; call `pipeline/content-export-sync` to do so at once. |
+| `chatbot_domain_unknown` | content-external logs one WARNING naming the value: `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID=<value> is not an active chatbot widget domain`. The UUID is not an active row in the chatbot's `widget_domains`. Check it for typos and confirm the domain is active. |
+| `toggle_unreadable` | `resql-users` failed or is down. Check its log and its connection to the chatbot's `byk` database. |
+
+The CLI (`run_sync`, `run_ops`) ignores the gate. Check the toggle before
+exporting by hand while it is ON.
 
 The destination holding fewer documents than CKB's GUI is expected: only
 `status = 'finished'` rows are published. Confirm the difference in the
@@ -60,8 +85,10 @@ environment. Replace `<agency_base_id>` with the agency's base id. Flag
 semantics and first-run safeguards are in
 [Running an export](README.md#running-an-export).
 
-1. Keep `trigger_content_export` non-firing with `trigger: "false"` in
-   [scheduler.yml](../DSL/CronManager/scheduler.yml).
+1. Keep `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` empty in [constants.ini](../constants.ini)
+   (Helm: leave `ruuterInternal.chatbotWidgetDomainId` unset). The gate then skips with `chatbot_domain_not_configured`, so the export
+   timer settles `inactive` and nothing fires, whatever the chatbot's toggle
+   says. `/health`'s `export_schedule.state` shows it.
 2. Confirm the exporter container is up, the destination is accessible, and
    both sets of credentials work: CKB's `S3_*` / `AWS_*` read keys, and the
    destination's credentials — the `EXTERNAL_S3_*` keys for `s3`, or for
@@ -93,11 +120,19 @@ semantics and first-run safeguards are in
    ```
 
 5. Read the report: new and skipped document counts, skip reasons, durations
-   and failures. Resolve failures before enabling the schedule.
+   and failures. Resolve failures before arming the schedule (step 7).
 6. Spot-check the destination against the committed manifest: sampled
    document ids, metadata and chunk counts should agree.
-7. Only then enable the cron entry with the one-line change in
-   [Schedule](README.md#schedule).
+7. Set `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` in `constants.ini` to the chatbot widget
+   domain whose **LLM module active** toggle governs this deployment, and
+   restart ruuter-internal (Helm: redeploy with
+   `--set ruuterInternal.chatbotWidgetDomainId=<uuid>`, which restarts it)
+   ([toggle gate](README.md#the-chatbots-llm-module-toggle-gates-all-three-jobs)).
+   Nothing is set on the chatbot side. Then call
+   `curl -fsS '<ruuter-internal>/ckb/pipeline/content-export-sync'`, or wait
+   for the next poll: with the toggle OFF the timer starts, exports at once
+   and hourly after; with it ON it stays stopped. From then on the poll
+   starts or stops it within `EXPORT_SCHEDULE_POLL_SECONDS` of a switch.
 8. Set `DIFF_ON_MISSING_MANIFEST=fail` in the service's configuration; see
    [Environment variables](README.md#environment-variables).
 
@@ -776,10 +811,11 @@ python -m exporter.run_ops reconcile --agency-id <agency>
 record; read-back scope makes one request per manifest document, in
 sequence. Both grow with the corpus, and reconcile holds the run lock
 throughout: one still running at 03:47 makes that drain report `busy`
-(harmless; the next hour retries), and one still running at 04:17 makes that
-export report `busy` too. Watch `duration_seconds` in `last_reconcile`: if it
-nears 40 minutes, move `trigger_content_reconcile` rather than let it collide
-with the export.
+(harmless; the next hour retries), and an export tick that fires while it
+runs reports `busy` too. The export timer's minute is wherever the toggle was
+last switched OFF or the service last started, so it can fall inside the
+reconcile. Watch `duration_seconds` in `last_reconcile` and `consecutive_busy`
+in `last_run`; if exports keep meeting it, move `trigger_content_reconcile`.
 
 **Drift categories, and what to do:**
 

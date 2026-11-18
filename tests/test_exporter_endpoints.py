@@ -22,6 +22,7 @@ from exporter.worker.tasks import (
     run_export_process,
     run_operation_process,
 )
+from exporter_fakes import patch_export_schedule
 
 
 class _RecordedProcess:
@@ -50,6 +51,7 @@ def processes(
     """The health suite's environment, plus a recorded Process."""
     for name in Settings.model_fields:
         monkeypatch.delenv(name.upper(), raising=False)
+    patch_export_schedule(monkeypatch)
     monkeypatch.setattr(
         "exporter.api.app.check_single_agency_at_startup", lambda _settings: 1
     )

@@ -48,9 +48,9 @@ The scheduler manages these recurring tasks (configured in `DSL/CronManager/sche
    - URL: `[CKB_RUUTER_INTERNAL]/pipeline/zip`
    - Purpose: Archives and compresses processed data
 
-4. **Content Export** (ships disabled; hourly at :17 once enabled):
-   - URL: `[CKB_RUUTER_INTERNAL]/pipeline/content-export`
-   - Purpose: Starts the content-external export; see `content-external/README.md`
+4. **Content Export** is not a CronManager job: content-external runs its own
+   hourly timer, which follows the chatbot's LLM module toggle by polling
+   `pipeline/content-export-status`; see `content-external/README.md`, "Schedule"
 
 ## API Endpoints
 

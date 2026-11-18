@@ -440,7 +440,19 @@ class Settings(BaseSettings):
     )
 
     # --- CKB ---------------------------------------------------------------
+    # CKB's internal Ruuter. The export timer (services/export_schedule.py)
+    # calls its pipeline/content-export-status (startup and every poll) and
+    # pipeline/content-export (every tick).
     ruuter_internal: str = "http://ruuter-internal:8089"
+    # Seconds between scheduled exports while the chatbot's LLM module toggle
+    # is OFF; the first fires as soon as it is switched OFF. At least a
+    # minute: a quiet tick is cheap, but each one is a Ruuter call, a gate
+    # query and an export child.
+    export_schedule_interval_seconds: Annotated[int, Field(ge=60)] = 3_600
+    # Seconds between reads of the toggle. The chatbot never tells CKB that
+    # the toggle changed, so this is how long a switch to OFF can take to
+    # start an export. Each poll is one gate query on the chatbot database.
+    export_schedule_poll_seconds: Annotated[int, Field(ge=60)] = 300
     ckb_resql: str = "http://resql-ckb:8090/ckb"
     ckb_resql_timeout: Annotated[float, Field(gt=0)] = 30.0
     export_page_size: Annotated[int, Field(ge=1)] = 1_000
@@ -1235,4 +1247,54 @@ def warn_on_ignored_manifest_store_settings(settings: Settings) -> None:
             ", ".join(ignored),
             "are" if len(ignored) > 1 else "is",
             "they are" if len(ignored) > 1 else "it is",
+        )
+
+
+def missing_destination_settings(settings: Settings) -> list[str]:
+    """The variables CONTENT_EXTERNAL_STORE_BACKEND needs that are empty.
+
+    The one list of what a destination store needs: stores/factory.py refuses
+    a run on it, and warn_on_unconfigured_destination warns at startup from
+    it, so the warning and the refusal always name the same variables.
+    """
+    if settings.content_external_store_backend == "azure_blob":
+        required = {
+            "AZURE_STORAGE_CONTAINER": settings.azure_storage_container,
+            "VAULT_SECRET_PATH": settings.vault_secret_path,
+        }
+    else:
+        required = {
+            "EXTERNAL_S3_ENDPOINT_URL": settings.external_s3_endpoint_url,
+            "EXTERNAL_S3_BUCKET_NAME": settings.external_s3_bucket_name,
+            "EXTERNAL_S3_ACCESS_KEY_ID": (
+                settings.external_s3_access_key_id.get_secret_value()
+            ),
+            "EXTERNAL_S3_SECRET_ACCESS_KEY": (
+                settings.external_s3_secret_access_key.get_secret_value()
+            ),
+        }
+    return [name for name, value in required.items() if not value]
+
+
+def warn_on_unconfigured_destination(settings: Settings) -> None:
+    """Warn, not refuse, when the object-store destination is incomplete.
+
+    Startup deliberately does not require it (stores/factory.py builds the
+    store per run), so /health comes up before a destination is configured.
+    Without this the first sign is a `failed` run, up to an export interval
+    later. Names only which variables are empty, never their values.
+    """
+    if settings.content_sink != "object_store":
+        return
+    missing = missing_destination_settings(settings)
+    if missing:
+        logger.warning(
+            "%s CONTENT_EXTERNAL_STORE_BACKEND=%s but %s %s empty: every "
+            "export, drain and reconcile will fail with ConfigurationError "
+            "until %s set.",
+            CONFIG_LOG_PREFIX,
+            settings.content_external_store_backend,
+            ", ".join(missing),
+            "are" if len(missing) > 1 else "is",
+            "they are" if len(missing) > 1 else "it is",
         )
