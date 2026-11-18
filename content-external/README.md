@@ -614,10 +614,10 @@ with `RECONCILE_REPAIR_ENABLED=true`. The purge is never scheduled (J8).
 
 Polling avoids adding a dirty flag and a claim loop like `pipeline/zip.yml`:
 
-- A flag would require editing the six existing endpoints that call
+- A flag would require editing the five existing endpoints that call
   `agency/update-zip-dirty`: `source/remove`, `source-file/exclude`,
-  `source-file/bulk-exclude`, `source-file/remove`, `source-file/bulk-remove`
-  and `source-file/edit-file`.
+  `source-file/bulk-exclude`, `source-file/remove` and
+  `source-file/bulk-remove`.
 - It would require a Liquibase migration on a live schema.
 - It would naturally reuse or parallel `zip_dirty` / `is_zipping`.
   Claiming `is_zipping` silently stops the Classifier's ZIP from staying

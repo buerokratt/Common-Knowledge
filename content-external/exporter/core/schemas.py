@@ -85,10 +85,10 @@ class DocumentRef:
     is_deleted: bool
     updated_at: str  # ISO 8601, as returned by Resql
 
-    # edited_data_url / edited_metadata_url, falling back to the cleaned_* ones
+    # cleaned_data_url / cleaned_metadata_url
     content_key: str | None
     metadata_key: str | None
-    content_origin: str | None  # "edited" | "cleaned" | None when neither exists
+    content_origin: str | None  # "cleaned" | None when there is no cleaned content
     file_size: int | None
 
     # None until the document has actually been read from S3 and hashed —
@@ -151,7 +151,7 @@ class DocumentRecord:
 
     document_id: str
     source_base_id: str
-    content_origin: str  # "edited" | "cleaned"
+    content_origin: str  # "cleaned"
     # The resolved citation: the sidecar's source_url, or source_file.url
     # when the sidecar's is missing or invalid. Top-level rather than written
     # back into `source`, which stays verbatim.

@@ -437,18 +437,6 @@ Exclude files from processing.
 }
 ```
 
-#### POST /ckb/source-file/edit-file
-Edit file metadata.
-
-**Request Body:**
-```json
-{
-  "base_id": "uuid",
-  "page_title": "New Title",
-  "subsector": "New Subsector"
-}
-```
-
 #### POST /ckb/source-file/refresh
 Trigger file reprocessing.
 
@@ -563,7 +551,6 @@ Generate download URL for a file.
 - `POST /eesti-scrapper-task` - Estonian government sites
 - `POST /specified-api-files-scrapper-task` - Process API files
 - `POST /uploaded-file` - Process uploaded files
-- `POST /generate-edited-metadata` - Generate file metadata
 
 ### Cleaning API (Port 8123)
 
@@ -674,10 +661,8 @@ Generate download URL for a file.
   "is_excluded": "boolean",
   "original_data_url": "string",
   "cleaned_data_url": "string", 
-  "edited_data_url": "string",
   "original_metadata_url": "string",
   "cleaned_metadata_url": "string",
-  "edited_metadata_url": "string",
   "original_data_hash": "string",
   "external_id": "string",
   "created_at": "timestamp",

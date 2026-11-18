@@ -42,12 +42,6 @@ declaration:
       - field: cleaned_metadata_url
         type: string
         description: "Cleaned metadata URL"
-      - field: edited_data_url
-        type: string
-        description: "Edited data URL"
-      - field: edited_metadata_url
-        type: string
-        description: "Edited metadata URL"
       - field: file_size
         type: integer
         description: "File size in bytes"
@@ -80,8 +74,6 @@ WITH page AS (
         status,
         cleaned_data_url,
         cleaned_metadata_url,
-        edited_data_url,
-        edited_metadata_url,
         file_size,
         is_excluded,
         is_deleted,
@@ -103,8 +95,6 @@ SELECT
     p.status,
     p.cleaned_data_url,
     p.cleaned_metadata_url,
-    p.edited_data_url,
-    p.edited_metadata_url,
     p.file_size,
     p.is_excluded,
     p.is_deleted,

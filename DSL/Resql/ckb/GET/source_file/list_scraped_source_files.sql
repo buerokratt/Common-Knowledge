@@ -60,9 +60,6 @@ declaration:
       - field: cleaned_data_url
         type: string
         description: "URL to the cleaned data"
-      - field: edited_data_url
-        type: string
-        description: "URL to the edited data"
       - field: is_excluded
         type: boolean
         description: "Whether the file is excluded"
@@ -88,7 +85,7 @@ declaration:
 WITH latest_scraped_pages AS (
     SELECT DISTINCT ON (base_id) 
         id, base_id, source_base_id, url, page_title, status,
-    original_data_url, cleaned_data_url, edited_data_url, external_id,
+    original_data_url, cleaned_data_url, external_id,
     original_data_hash,
         is_excluded, updated_at, originally_scraped, last_scraped_at, is_deleted
     FROM data_collection.source_file
@@ -99,7 +96,7 @@ WITH latest_scraped_pages AS (
 SELECT 
     id, base_id, source_base_id, url, page_title, status, external_id,
   COALESCE(original_data_hash, '') AS hash,
-    original_data_url, cleaned_data_url, edited_data_url, is_excluded, updated_at, originally_scraped, last_scraped_at,
+    original_data_url, cleaned_data_url, is_excluded, updated_at, originally_scraped, last_scraped_at,
     :page as page,
     CEIL(COUNT(*) OVER () / :page_size::DECIMAL) AS total_pages,
     (COUNT(*) OVER ()) AS total

@@ -6,7 +6,6 @@ import {
   MdRefresh,
   MdOutlineViewColumn,
   MdOutlineTableChart,
-  MdGridView,
   MdOutlineDeleteOutline,
   MdWarning,
   MdArrowForward,
@@ -48,7 +47,6 @@ import {
   bulkDeleteFiles,
   downloadFile,
   fetchFileData,
-  updateFileEditedContentWithUpload,
   ScrapedFile,
   ScrapedFilesListParams,
   EditorState,
@@ -394,39 +392,6 @@ const ScrapedFiles: FC = () => {
     },
   });
 
-  // Save edited content mutation
-  const saveContentMutation = useMutation({
-    mutationFn: ({ content }: { content: string }) => {
-      if (!editorState?.file) {
-        throw new Error('No file available for saving');
-      }
-      setEditorState({ ...editorState, saving: true });
-      const sourcePath = `${sourceData?.agencyBaseId}/${sourceData?.baseId}/${editorState.file.baseId}`;
-      return updateFileEditedContentWithUpload(
-        editorState.file,
-        content,
-        sourcePath
-      );
-    },
-    onSuccess: () => {
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.contentSaved'),
-      });
-
-      queryClient.invalidateQueries(['scrapedFiles']);
-      setEditorState(null);
-    },
-    onError: (error: any) => {
-      setEditorState(null);
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.saveError'),
-      });
-    },
-  });
 
   const handleRefresh = (file: ScrapedFile) => {
     refreshMutation.mutate(file.baseId);
@@ -446,7 +411,7 @@ const ScrapedFiles: FC = () => {
 
   const handleViewContent = async (
     file: ScrapedFile,
-    type: 'raw' | 'cleaned' | 'edited'
+    type: 'raw' | 'cleaned'
   ) => {
     try {
       // If it's raw content, download the file instead of viewing
@@ -463,9 +428,8 @@ const ScrapedFiles: FC = () => {
         sourceType: 'scraped',
       });
 
-      // For cleaned and edited content, continue with existing logic
-      const path =
-        type === 'cleaned' ? file.cleanedDataUrl : file.editedDataUrl;
+      // For cleaned content, continue with existing logic
+      const path = file.cleanedDataUrl;
       if (!path) return;
       const content = await fetchFileData(path);
 
@@ -506,12 +470,9 @@ const ScrapedFiles: FC = () => {
       let content = '';
       const uploadedFile = newState.file as ScrapedFile;
 
-      const editedPath =
-        newState.type === 'edited'
-          ? uploadedFile.editedDataUrl
-          : uploadedFile.cleanedDataUrl;
-      if (editedPath) {
-        content = await fetchFileData(editedPath);
+      const cleanedPath = uploadedFile.cleanedDataUrl;
+      if (cleanedPath) {
+        content = await fetchFileData(cleanedPath);
       }
 
       setEditorState({
@@ -546,11 +507,6 @@ const ScrapedFiles: FC = () => {
     }
   };
 
-  const handleSaveContent = (content: string) => {
-    if (!editorState) return;
-
-    saveContentMutation.mutate({ content });
-  };
 
   const handlePaginationChange = (newPagination: PaginationState) => {
     setPagination(newPagination);
@@ -755,18 +711,6 @@ const ScrapedFiles: FC = () => {
           </Button>
           <Button
             appearance="text"
-            disabled={
-              row.original.status === 'cleaning' || !row.original.editedDataUrl
-            }
-            className="agencies__action-btn"
-            size="s"
-            onClick={() => handleViewContent(row.original, 'edited')}
-          >
-            <Icon icon={<MdGridView fontSize={20} />} size="medium" />
-            {t('knowledgeBase.edited')}
-          </Button>
-          <Button
-            appearance="text"
             disabled={row.original.status === 'cleaning'}
             className="agencies__action-btn"
             size="s"
@@ -883,9 +827,7 @@ const ScrapedFiles: FC = () => {
           <Editor
             changeEditorState={handleEditorStateChange}
             editorState={editorState}
-            readonly={false}
             onCancel={() => setEditorState(null)}
-            onSave={handleSaveContent}
           />
         </Dialog>
       )}

@@ -49,12 +49,6 @@ class UploadedFileTask(BaseObject):
     urls: list[UploadFile]
 
 
-class EditedMetadataTask(BaseModel):
-    download_url: str
-    source_file_id: str
-    source_file_path: str
-
-
 class ApiFileToScrape(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

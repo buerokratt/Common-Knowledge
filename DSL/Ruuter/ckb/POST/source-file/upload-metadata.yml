@@ -19,7 +19,7 @@ declaration:
         description: "Path where metadata file should be stored"
       - field: type
         type: string
-        description: "Processing type: cleaned, edited, or raw"
+        description: "Processing type: cleaned or raw"
         optional: true
       - field: version
         type: string
