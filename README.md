@@ -109,9 +109,8 @@ AWS_ACCESS_KEY_ID=ckb-local
 AWS_SECRET_ACCESS_KEY=ckb-local-secret
 AWS_REGION=us-east-1
 S3_BUCKET_NAME=ckb-storage
-# host.docker.internal, not localhost or seaweedfs: presigned URLs are signed for this host,
-# and the browser, CKB's containers and external systems (via the CentOps zip link) all open them.
-S3_ENDPOINT_URL=http://host.docker.internal:8334
+# localhost: SeaweedFS's S3 port as published on your machine.
+S3_ENDPOINT_URL=http://localhost:8334
 
 # Optional file-processing tunables (compose supplies these defaults if omitted):
 # AUTO_CLEANUP_COMPLETED_TASKS=true
