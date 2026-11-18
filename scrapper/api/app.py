@@ -1,10 +1,3 @@
-import json
-import os
-from datetime import UTC, datetime
-from pathlib import Path
-from scrapper import settings
-
-import requests
 from fastapi import FastAPI
 
 from api.models import (
@@ -13,7 +6,6 @@ from api.models import (
     EntireSourceScrapperTask,
     UploadedFileTask,
     LinkToScrape,
-    EditedMetadataTask,
     SpecifiedApiFilesScrapeTask,
 )
 from worker.tasks import (
@@ -73,27 +65,3 @@ def trigger_specified_api_files_scrapper_task(
     # Always ignore stopping for manual file refresh
     task.ignore_stopping = True
     specified_api_files_scrapper_task.delay(task.model_dump(mode="json"))  # type: ignore[attr-defined]
-
-
-@app.post("/generate-edited-metadata")
-def generate_edited_metadata(task: EditedMetadataTask) -> str:
-    response = requests.get(task.download_url)
-    metadata = response.json()
-    metadata["edited_at"] = str(datetime.now(UTC))
-    metadata["metadata"]["edited"] = True
-
-    path = Path(task.source_file_path)
-    path.mkdir(parents=True, exist_ok=True)
-    metadata_file = path / "edited.meta.json"
-    with metadata_file.open("w") as f:
-        json.dump(metadata, f)
-
-    requests.post(
-        f"{settings.CKB_RUUTER_INTERNAL}/pipeline/upload-file-sync",
-        json={
-            "source_file_path": os.path.join(task.source_file_path, "edited.meta.json"),
-        },
-    )
-    metadata_file.unlink()
-
-    return "OK"

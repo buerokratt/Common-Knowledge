@@ -129,7 +129,6 @@ export interface ApiSourceFile {
   lastScrapedAt: string;
   originalDataUrl?: string;
   cleanedDataUrl?: string;
-  editedDataUrl?: string;
   createdAt: string;
   updatedAt: string;
 }

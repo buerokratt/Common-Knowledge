@@ -44,21 +44,13 @@ def cleaned_sidecar(**overrides: object) -> dict[str, Any]:
     sidecar: dict[str, Any] = {
         "file_type": ".html",
         "source_url": PAGE,
-        "metadata": {"cleaned": True, "edited": False, "language": "et"},
+        "metadata": {"cleaned": True, "language": "et"},
         "page_title": "Peretoetused | Sotsiaalkindlustusamet",
         "external_id": "",
         "version": "1.0",
         "created_at": "2026-09-30 08:14:22.123456+00:00",
-        "edited_at": None,
     }
     return sidecar | overrides
-
-
-def edited_sidecar() -> dict[str, Any]:
-    """What scrapper/api/app.py:generate_edited_metadata writes from it."""
-    sidecar = cleaned_sidecar(edited_at="2026-10-01 09:00:00.000000+00:00")
-    sidecar["metadata"] = sidecar["metadata"] | {"edited": True}
-    return sidecar
 
 
 def encode(sidecar: dict[str, Any]) -> bytes:
@@ -112,8 +104,8 @@ def build(parsed: ParsedSidecar, **ref_overrides: object) -> DocumentRecord:
 # --- C1: sidecar parsing -----------------------------------------------------
 
 
-@pytest.mark.parametrize("sidecar", [cleaned_sidecar(), edited_sidecar()])
-def test_real_shaped_sidecars_parse_verbatim(sidecar: dict[str, Any]) -> None:
+def test_a_real_shaped_sidecar_parses_verbatim() -> None:
+    sidecar = cleaned_sidecar()
     parsed = parsed_ok(encode(sidecar))
     assert to_json_dict(parsed.sidecar) == sidecar
     assert parsed.source_url == PAGE
@@ -487,10 +479,9 @@ def test_reserialising_the_bytes_does_not_move_the_hash() -> None:
     "change",
     [
         {"page_title": "Peretoetused (uuendatud)"},
-        {"metadata": {"cleaned": True, "edited": False, "language": "en"}},
-        {"edited_at": "2026-10-02 10:00:00+00:00"},
+        {"metadata": {"cleaned": True, "language": "en"}},
     ],
-    ids=["page_title", "metadata.language", "edited_at"],
+    ids=["page_title", "metadata.language"],
 )
 def test_a_value_change_moves_the_hash(change: dict[str, Any]) -> None:
     assert metadata_sha256(cleaned_sidecar(**change)) != metadata_sha256(
@@ -540,17 +531,17 @@ def test_the_hash_functions_raise_on_input_the_loader_would_refuse(
 
 
 def test_the_record_carries_exactly_the_canonical_fields() -> None:
-    parsed = parsed_ok(encode(edited_sidecar()))
+    parsed = parsed_ok(encode(cleaned_sidecar()))
     record = build_document_record(
-        ref(content_origin="edited"), parsed, chunk_count=3, synced_at=SYNCED_AT
+        ref(content_origin="cleaned"), parsed, chunk_count=3, synced_at=SYNCED_AT
     )
     loaded = json.loads(json.dumps(to_json_dict(record), ensure_ascii=False))
     assert loaded == {
         "document_id": "0b9f2b4e-6a52-4d8e-9a43-1f3c2d5e7a10",
         "source_base_id": "5c1d3e2f-7b64-4a9d-8e21-6f0a9b8c7d31",
-        "content_origin": "edited",
+        "content_origin": "cleaned",
         "source_url": PAGE,
-        "source": edited_sidecar(),
+        "source": cleaned_sidecar(),
         "raw_sha256": "a" * 64,
         "content_sha256": "b" * 64,
         "metadata_sha256": parsed.metadata_sha256,

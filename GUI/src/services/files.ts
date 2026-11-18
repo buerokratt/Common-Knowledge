@@ -1,5 +1,4 @@
 import { apiDev } from './api';
-import { getUploadUrls, uploadContentToS3 } from './s3';
 
 export interface ScrapedFile {
   id: string;
@@ -16,7 +15,6 @@ export interface ScrapedFile {
   updatedAt: string;
   originalDataUrl?: string;
   cleanedDataUrl?: string;
-  editedDataUrl?: string;
 }
 
 export interface UploadedFile {
@@ -33,7 +31,6 @@ export interface UploadedFile {
   updatedAt: string;
   originalDataUrl?: string;
   cleanedDataUrl?: string;
-  editedDataUrl?: string;
 }
 
 export interface ApiResponse {
@@ -75,13 +72,12 @@ export interface UploadedFilesListParams {
 }
 
 export interface EditorState {
-  type: 'raw' | 'cleaned' | 'edited';
+  type: 'raw' | 'cleaned';
   file?: UploadedFile | ScrapedFile;
   fileId?: string;
   content: string;
   sourceType: 'uploaded' | 'scraped' | 'api';
   loading: boolean;
-  saving?: boolean;
 }
 
 /**
@@ -262,84 +258,3 @@ export const getFileCleanedContent = async (
   return response.data.response;
 };
 
-/**
- * Get edited content of a file
- */
-export const getFileEditedContent = async (fileId: string): Promise<string> => {
-  const response = await apiDev.get('/source-file/content/edited', {
-    params: { fileId },
-  });
-  return response.data.response;
-};
-
-/**
- * Legacy method: Update edited content via API (kept for backward compatibility)
- */
-export const updateFileEditedContent = async (
-  fileId: string,
-  content: string
-): Promise<void> => {
-  await apiDev.post('/source-file/content/update-edited', {
-    fileId: fileId,
-    content: content,
-  });
-};
-
-export const updateFileEditedDataUrl = async (
-  baseId: string,
-  sourcePath: string
-): Promise<void> => {
-  const response = await apiDev.post('/source-file/edit-file', {
-    base_id: baseId,
-    source_file_path: sourcePath,
-  });
-
-  const apiResponse = response.data;
-
-  // Check if update was successful
-  if (response.status >= 400 || apiResponse.error) {
-    throw new Error(
-      apiResponse.error?.message || 'Failed to update edited data URL'
-    );
-  }
-};
-
-/**
- * Update edited content using S3 direct upload
- */
-export const updateFileEditedContentWithUpload = async (
-  file: ScrapedFile | UploadedFile,
-  content: string,
-  sourcePath: string
-): Promise<void> => {
-  try {
-    // Get upload URL for the target path - Updated to match backend format
-    const uploadResponse = await getUploadUrls({
-      files: [
-        {
-          path: `uploads/scrapped-data/${sourcePath}/edited.txt`,
-          content_type: 'text/plain',
-        },
-      ],
-      expires_in: 3600,
-    });
-
-    if (
-      !uploadResponse.upload_urls ||
-      uploadResponse.upload_urls.length === 0
-    ) {
-      throw new Error('No upload URL received');
-    }
-
-    const uploadUrl = uploadResponse.upload_urls[0].upload_url;
-
-    // Upload content directly to S3
-    await uploadContentToS3(uploadUrl, content, 'text/plain');
-
-    // Update database with the edited data URL
-    await updateFileEditedDataUrl(file.baseId, sourcePath);
-  } catch (error) {
-    console.error('Error updating file with upload:', error);
-    throw error;
-  }
-};

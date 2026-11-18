@@ -5,12 +5,10 @@ Pure: no I/O, no clock, no settings. The caller passes in the sidecar's
 bytes, the row's url, REQUIRE_METADATA_SIDECAR and synced_at.
 
 Where the sidecar comes from (C1). cleaned.meta.json is written by
-cleaning/worker/tasks.py; edited.meta.json by the scrapper's
-generate-edited-metadata when a curator edits. Both start from the scrapper's
-MetadataItem: file_type, source_url, page_title, external_id, version,
-created_at, edited_at, metadata{cleaned, edited, language}. Which of the two
-applies is decided by the source_file row (edited_metadata_url, falling back
-to cleaned_metadata_url) and resolved upstream into DocumentRef.metadata_key.
+cleaning/worker/tasks.py, starting from the scrapper's MetadataItem:
+file_type, source_url, page_title, external_id, version, created_at,
+metadata{cleaned, language}. Its key comes from the source_file row
+(cleaned_metadata_url) and is resolved upstream into DocumentRef.metadata_key.
 parse_sidecar() takes bytes and nothing else, so it cannot build a key from a
 filename convention or a config guess, even by accident.
 
@@ -144,7 +142,7 @@ _SPACE_OR_CONTROL = re.compile(r"[\s\x00-\x1f\x7f]")
 # RecursionError instead of returning a rejection.
 _MAX_SIDECAR_DEPTH = 32
 
-_CONTENT_ORIGINS = frozenset({"edited", "cleaned"})
+_CONTENT_ORIGINS = frozenset({"cleaned"})
 
 # synced_at as the rest of the design writes timestamps: seconds precision or
 # finer, with an explicit offset.
@@ -450,7 +448,7 @@ def ascii_identity(record: DocumentRecord) -> dict[str, str]:
 
     Each value is checked against its own shape, which is narrower than
     ASCII: ids are letters, digits, ".", "_" and "-"; hashes are 64
-    lowercase hex characters; the origin is "edited" or "cleaned"; the count
+    lowercase hex characters; the origin is "cleaned"; the count
     is a non-negative integer. So no space or control character can reach a
     header line. Every value comes from a UUID, a hex digest or an int, so a
     failure means a bug upstream, and raises rather than being stripped.

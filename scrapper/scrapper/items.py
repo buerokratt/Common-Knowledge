@@ -6,7 +6,6 @@ from typing import Optional
 @dataclass
 class Metadata:
     cleaned: bool = False
-    edited: bool = False
 
 
 @dataclass
@@ -31,7 +30,6 @@ class MetadataItem:
     # `last_scraped_at < :reference_time` (itself always computed in UTC),
     # causing a file to be re-claimed for scraping indefinitely.
     created_at: str = field(default_factory=lambda: str(datetime.now(UTC)))
-    edited_at: str | None = None
     language: Optional[str] = None
 
 

@@ -73,8 +73,6 @@ _DOCUMENT_COLUMNS = {
     "status": (str,),
     "cleanedDataUrl": (str, type(None)),
     "cleanedMetadataUrl": (str, type(None)),
-    "editedDataUrl": (str, type(None)),
-    "editedMetadataUrl": (str, type(None)),
     "fileSize": (int, type(None)),
     "isExcluded": (bool,),
     "isDeleted": (bool,),
@@ -201,13 +199,7 @@ class CkbDocumentSource(DocumentSource):
                 if document_id <= after_base_id:
                     raise DocumentSourceError("Resql baseId did not advance the cursor")
                 after_base_id = document_id
-                origin = (
-                    "edited"
-                    if row["editedDataUrl"]
-                    else "cleaned"
-                    if row["cleanedDataUrl"]
-                    else None
-                )
+                origin = "cleaned" if row["cleanedDataUrl"] else None
                 documents.append(
                     DocumentRef(
                         document_id=document_id,
@@ -220,9 +212,8 @@ class CkbDocumentSource(DocumentSource):
                         is_excluded=row["isExcluded"],
                         is_deleted=row["isDeleted"] or row["sourceIsDeleted"],
                         updated_at=row["updatedAt"],
-                        content_key=row["editedDataUrl"] or row["cleanedDataUrl"],
-                        metadata_key=row["editedMetadataUrl"]
-                        or row["cleanedMetadataUrl"],
+                        content_key=row["cleanedDataUrl"],
+                        metadata_key=row["cleanedMetadataUrl"],
                         content_origin=origin,
                         file_size=row["fileSize"],
                         skip_reason=(
