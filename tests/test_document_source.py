@@ -53,8 +53,6 @@ ROW = {
     "status": "finished",
     "cleanedDataUrl": "s3://ckb/uploads/cleaned.txt",
     "cleanedMetadataUrl": "uploads/cleaned.meta.json",
-    "editedDataUrl": None,
-    "editedMetadataUrl": None,
     "fileSize": 42,
     "isExcluded": False,
     "isDeleted": False,
@@ -268,20 +266,8 @@ def test_cursor_must_advance_within_and_between_pages(
     [
         ({}, (ROW["cleanedDataUrl"], ROW["cleanedMetadataUrl"], "cleaned")),
         (
-            {"editedDataUrl": "edited.txt", "editedMetadataUrl": "edited.json"},
-            ("edited.txt", "edited.json", "edited"),
-        ),
-        (
-            {"editedDataUrl": "edited.txt"},
-            ("edited.txt", ROW["cleanedMetadataUrl"], "edited"),
-        ),
-        (
-            {"editedMetadataUrl": "edited.json"},
-            (ROW["cleanedDataUrl"], "edited.json", "cleaned"),
-        ),
-        (
-            {"editedDataUrl": "", "editedMetadataUrl": ""},
-            (ROW["cleanedDataUrl"], ROW["cleanedMetadataUrl"], "cleaned"),
+            {"cleanedMetadataUrl": None},
+            (ROW["cleanedDataUrl"], None, "cleaned"),
         ),
         (
             {"cleanedDataUrl": None, "cleanedMetadataUrl": None},
@@ -382,7 +368,7 @@ def test_empty_enumeration_is_a_list(
             SkipReason.NOT_READY,
         ),
         (
-            {"status": "finished", "cleanedDataUrl": None, "editedDataUrl": None},
+            {"status": "finished", "cleanedDataUrl": None},
             "skipped",
             SkipReason.NO_CONTENT,
         ),
@@ -719,9 +705,9 @@ def unread_ref() -> DocumentRef:
         is_deleted=False,
         is_excluded=False,
         updated_at=TIMESTAMP,
-        content_key="uploads/edited.txt",
+        content_key="uploads/cleaned.txt",
         metadata_key=None,
-        content_origin="edited",
+        content_origin="cleaned",
         file_size=42,
     )
 
@@ -826,7 +812,7 @@ def test_read_normalises_and_hashes_without_changing_source_fields(
     sidecar_body = _object(
         s3, "uploads/cleaned.meta.json", json.dumps(metadata).encode()
     )
-    content_body = _object(s3, "uploads/edited.txt", raw)
+    content_body = _object(s3, "uploads/cleaned.txt", raw)
     result = reader.read(ref)
     assert result.text == "Õpe"
     assert unicodedata.is_normalized("NFC", result.text)
@@ -848,7 +834,7 @@ def test_read_normalises_and_hashes_without_changing_source_fields(
 
 
 @pytest.mark.parametrize(
-    "content_key", ["uploads/edited.txt", "s3://ckb/uploads/edited.txt"]
+    "content_key", ["uploads/cleaned.txt", "s3://ckb/uploads/cleaned.txt"]
 )
 @pytest.mark.parametrize("metadata_key", ["metadata.json", "s3://ckb/metadata.json"])
 def test_both_key_formats(
@@ -859,7 +845,7 @@ def test_both_key_formats(
     metadata_key: str,
 ) -> None:
     _object(s3, "metadata.json", b"{}")
-    _object(s3, "uploads/edited.txt", b"text")
+    _object(s3, "uploads/cleaned.txt", b"text")
     result = reader.read(
         replace(unread_ref, content_key=content_key, metadata_key=metadata_key)
     )
@@ -910,7 +896,7 @@ def test_content_size_guard_is_bounded_and_closes_the_body(
     declared_oversize: bool,
 ) -> None:
     body = _object(
-        s3, "uploads/edited.txt", b"x" * 200, length=200 if declared_oversize else 1
+        s3, "uploads/cleaned.txt", b"x" * 200, length=200 if declared_oversize else 1
     )
     _assert_skip(reader.read(unread_ref), unread_ref, "content_too_large")
     assert body.closed
@@ -925,7 +911,7 @@ def test_content_at_or_below_limit_succeeds(
     raw: bytes,
     text: str,
 ) -> None:
-    _object(s3, "uploads/edited.txt", raw)
+    _object(s3, "uploads/cleaned.txt", raw)
     result = reader.read(unread_ref)
     assert result.text == text
     assert result.ref.skip_reason is None
@@ -934,7 +920,7 @@ def test_content_at_or_below_limit_succeeds(
 def test_non_utf8_content_is_a_skip(
     reader: CkbDocumentSource, unread_ref: DocumentRef, s3: Stubber
 ) -> None:
-    body = _object(s3, "uploads/edited.txt", b"\xff")
+    body = _object(s3, "uploads/cleaned.txt", b"\xff")
     _assert_skip(reader.read(unread_ref), unread_ref, "content_undecodable")
     assert body.closed
 
@@ -961,7 +947,7 @@ def test_absent_sidecar_is_parsed_according_to_policy(
         )
     if not required:
         # A required sidecar that is absent skips before the content is read.
-        _object(s3, "uploads/edited.txt", b"text")
+        _object(s3, "uploads/cleaned.txt", b"text")
     result = reader.read(ref)
     if required:
         _assert_skip(result, ref, SidecarRejection.MISSING.value)
@@ -1097,7 +1083,7 @@ def test_client_is_lazy_reused_and_given_explicit_credentials(
     assert reader.watermark(AGENCY) == AgencyWatermark(None, 0)
     assert session_factory.call_count == client_factory.call_count == 0
     for _ in range(2):
-        _object(s3, "uploads/edited.txt", b"text")
+        _object(s3, "uploads/cleaned.txt", b"text")
         assert reader.read(unread_ref).text == "text"
     session_factory.assert_called_once_with(
         aws_access_key_id="read-key",

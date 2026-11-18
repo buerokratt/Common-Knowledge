@@ -291,7 +291,7 @@ class IngestRequest(_Request):
     agency_id: NonEmpty
     document_id: NonEmpty
     source_base_id: NonEmpty
-    content_origin: Literal["edited", "cleaned"]
+    content_origin: Literal["cleaned"]
     source_url: NonEmpty
     raw_sha256: NonEmpty
     content_sha256: NonEmpty

@@ -6,7 +6,6 @@ import {
   MdRefresh,
   MdOutlineViewColumn,
   MdOutlineTableChart,
-  MdGridView,
 } from 'react-icons/md';
 import {
   Button,
@@ -39,7 +38,6 @@ import {
   refreshScrapedFile,
   downloadFile,
   fetchFileData,
-  updateFileEditedContentWithUpload,
   EditorState,
 } from 'services/files';
 
@@ -181,39 +179,6 @@ const ApiDetail: FC = () => {
     },
   });
 
-  // Save edited content mutation
-  const saveContentMutation = useMutation({
-    mutationFn: ({ content }: { content: string }) => {
-      if (!editorState?.file) {
-        throw new Error('No file available for saving');
-      }
-      setEditorState({ ...editorState, saving: true });
-      const sourcePath = `${sourceData?.agencyBaseId}/${sourceData?.baseId}/${editorState.file.baseId}`;
-      return updateFileEditedContentWithUpload(
-        editorState.file,
-        content,
-        sourcePath,
-      );
-    },
-    onSuccess: () => {
-      toast.open({
-        type: 'success',
-        title: t('global.notification'),
-        message: t('knowledgeBase.contentSaved'),
-      });
-
-      queryClient.invalidateQueries(['apiSourceFiles']);
-      setEditorState(null);
-    },
-    onError: (error: any) => {
-      setEditorState(null);
-      toast.open({
-        type: 'error',
-        title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.saveError'),
-      });
-    },
-  });
 
   const handleRefresh = (file: ApiSourceFile) => {
     refreshMutation.mutate(file.baseId);
@@ -228,7 +193,7 @@ const ApiDetail: FC = () => {
 
   const handleViewContent = async (
     file: ApiSourceFile,
-    type: 'raw' | 'cleaned' | 'edited'
+    type: 'raw' | 'cleaned'
   ) => {
     try {
       // If it's raw content, download the file instead of viewing
@@ -245,9 +210,8 @@ const ApiDetail: FC = () => {
         sourceType: 'api',
       });
 
-      // For cleaned and edited content, continue with existing logic
-      const path =
-        type === 'cleaned' ? file.cleanedDataUrl : file.editedDataUrl;
+      // For cleaned content, continue with existing logic
+      const path = file.cleanedDataUrl;
       if (!path) return;
       const content = await fetchFileData(path);
 
@@ -288,12 +252,9 @@ const ApiDetail: FC = () => {
       let content = '';
       const apiFile = newState.file as ApiSourceFile;
 
-      const editedPath =
-        newState.type === 'edited'
-          ? apiFile.editedDataUrl
-          : apiFile.cleanedDataUrl;
-      if (editedPath) {
-        content = await fetchFileData(editedPath);
+      const cleanedPath = apiFile.cleanedDataUrl;
+      if (cleanedPath) {
+        content = await fetchFileData(cleanedPath);
       }
 
       setEditorState({
@@ -328,11 +289,6 @@ const ApiDetail: FC = () => {
     }
   };
 
-  const handleSaveContent = (content: string) => {
-    if (!editorState) return;
-
-    saveContentMutation.mutate({ content });
-  };
 
   const handlePaginationChange = (newPagination: PaginationState) => {
     setPagination(newPagination);
@@ -423,18 +379,6 @@ const ApiDetail: FC = () => {
             <Icon icon={<MdOutlineTableChart fontSize={20} />} size="medium" />
             {t('knowledgeBase.cleaned')}
           </Button>
-          <Button
-            appearance="text"
-            disabled={
-              row.original.status === 'cleaning' || !row.original.editedDataUrl
-            }
-            className="agencies__action-btn"
-            size="s"
-            onClick={() => handleViewContent(row.original, 'edited')}
-          >
-            <Icon icon={<MdGridView fontSize={20} />} size="medium" />
-            {t('knowledgeBase.edited')}
-          </Button>
         </Track>
       ),
     },
@@ -510,9 +454,7 @@ const ApiDetail: FC = () => {
           <Editor
             changeEditorState={handleEditorStateChange}
             editorState={editorState}
-            readonly={false}
             onCancel={() => setEditorState(null)}
-            onSave={handleSaveContent}
           />
         </Dialog>
       )}

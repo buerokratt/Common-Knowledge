@@ -57,8 +57,6 @@ END $$;
 \if :{?not_found_share} \else \set not_found_share 0.02 \endif
 \if :{?scraping_share} \else \set scraping_share 0.03 \endif
 \if :{?cleaning_share} \else \set cleaning_share 0.02 \endif
--- Share of documents with a manual edit, from their fourth version on.
-\if :{?edited_share} \else \set edited_share 0.10 \endif
 -- Each history starts within start_spread of history_start and lasts history_span.
 \if :{?history_start} \else \set history_start '2025-01-01 00:00:00+00' \endif
 \if :{?start_spread} \else \set start_spread '30 days' \endif
@@ -183,8 +181,8 @@ CROSS JOIN LATERAL generate_series(
 -- agencies interleave on the heap as they would after a year of scraping.
 INSERT INTO data_collection.source_file (
     base_id, source_base_id, agency_base_id, url, page_title,
-    original_data_url, cleaned_data_url, edited_data_url,
-    original_metadata_url, cleaned_metadata_url, edited_metadata_url,
+    original_data_url, cleaned_data_url,
+    original_metadata_url, cleaned_metadata_url,
     original_data_hash, created_at, updated_at, last_scraped_at,
     originally_scraped, status, type, subsector, is_excluded, is_deleted,
     file_size
@@ -199,10 +197,8 @@ SELECT
     format(:'page_title_format', d.doc_no, left(md5(d.base_id::text || 't'), 30)),
     p.prefix || '/original.html',
     CASE WHEN v.v >= 3 THEN p.prefix || '/cleaned.txt' END,
-    CASE WHEN r.u4 < :edited_share AND v.v >= 4 THEN p.prefix || '/edited.txt' END,
     p.prefix || '/original.meta.json',
     CASE WHEN v.v >= 3 THEN p.prefix || '/cleaned.meta.json' END,
-    CASE WHEN r.u4 < :edited_share AND v.v >= 4 THEN p.prefix || '/edited.meta.json' END,
     md5(d.base_id::text || v.v) || md5(v.v || d.base_id::text),
     t.at, t.at, t.at, t0.at,
     s.status::source_file_status_type,

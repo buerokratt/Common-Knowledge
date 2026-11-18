@@ -444,7 +444,7 @@ itself, and use the target deployment's Postgres settings.
    WITH page AS (
        SELECT DISTINCT ON (base_id)
            base_id, source_base_id, url, page_title, subsector, status,
-           cleaned_data_url, cleaned_metadata_url, edited_data_url, edited_metadata_url,
+           cleaned_data_url, cleaned_metadata_url,
            file_size, is_excluded, is_deleted, type, updated_at
        FROM data_collection.source_file
        WHERE agency_base_id = $1::UUID AND base_id > $2::UUID
@@ -821,7 +821,7 @@ in `last_run`; if exports keep meeting it, move `trigger_content_reconcile`.
 
 | Field | Meaning | Action |
 |---|---|---|
-| `missing_documents` | In the manifest, absent from the destination | the manifest believes it is published, so no export, not even `--force`, re-sends it until its row moves (Gate 2). Re-clean or edit the document in CKB. If many are missing, re-bootstrap. Reconcile does not repair this category |
+| `missing_documents` | In the manifest, absent from the destination | the manifest believes it is published, so no export, not even `--force`, re-sends it until its row moves (Gate 2). Re-clean the document in CKB. If many are missing, re-bootstrap. Reconcile does not repair this category |
 | `record_missing` | Chunks with no record (an F3 breach) | escalate: the publish order was violated |
 | `chunk_gaps` | An ordinal below the manifest's count is absent | as `missing_documents` |
 | `orphan_tail_documents` / `orphan_tail_chunks` | Chunks at or past the count | `--repair`, or `RECONCILE_REPAIR_ENABLED=true` |
