@@ -472,18 +472,18 @@ const SourceSettings: FC = () => {
   ];
 
   const monthOptions = [
-    { label: 'January', value: 'January' },
-    { label: 'February', value: 'February' },
-    { label: 'March', value: 'March' },
-    { label: 'April', value: 'April' },
-    { label: 'May', value: 'May' },
-    { label: 'June', value: 'June' },
-    { label: 'July', value: 'July' },
-    { label: 'August', value: 'August' },
-    { label: 'September', value: 'September' },
-    { label: 'October', value: 'October' },
-    { label: 'November', value: 'November' },
-    { label: 'December', value: 'December' },
+    { label: t('global.months.january'), value: 'January' },
+    { label: t('global.months.february'), value: 'February' },
+    { label: t('global.months.march'), value: 'March' },
+    { label: t('global.months.april'), value: 'April' },
+    { label: t('global.months.may'), value: 'May' },
+    { label: t('global.months.june'), value: 'June' },
+    { label: t('global.months.july'), value: 'July' },
+    { label: t('global.months.august'), value: 'August' },
+    { label: t('global.months.september'), value: 'September' },
+    { label: t('global.months.october'), value: 'October' },
+    { label: t('global.months.november'), value: 'November' },
+    { label: t('global.months.december'), value: 'December' },
   ];
 
   const weekPositionOptions = [
@@ -814,7 +814,7 @@ const SourceSettings: FC = () => {
   };
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
   return (
     <div className="knowledge-base-settings">
@@ -890,7 +890,7 @@ const SourceSettings: FC = () => {
                   name="timeOfUpdate"
                   type="text"
                   value={settings.timeOfUpdate}
-                  placeholder="hh:mm"
+                  placeholder={t('knowledgeBase.timePlaceholder') ?? ''}
                   style={{ width: 120 }}
                   onChange={(e) => {
                     let value = e.target.value;

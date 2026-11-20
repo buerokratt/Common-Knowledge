@@ -331,7 +331,9 @@ const Agency: FC = () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
-        message: `Successfully created source with ${data.urls_count || formData.urlList?.length || 0} URLs`,
+        message: t('knowledgeBase.urlListSuccess', {
+          count: data.urls_count || formData.urlList?.length || 0,
+        }),
       });
       setAddUrlListModal(false);
       setFormData(getInitialFormData);
@@ -341,7 +343,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || 'Failed to create source with URL list',
+        message: error.message || t('knowledgeBase.urlListError'),
       });
     },
   });
@@ -513,13 +515,13 @@ const Agency: FC = () => {
       toast.open({
         type: 'success',
         title: t('global.notification'),
-        message: `Parsed ${urls.length} URLs from CSV`,
+        message: t('knowledgeBase.csvParsed', { count: urls.length }),
       });
     } catch (error: any) {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || 'Failed to parse CSV file',
+        message: error.message || t('knowledgeBase.csvParseError'),
       });
       event.target.value = '';
     }
@@ -535,7 +537,7 @@ const Agency: FC = () => {
           const lines = text.split('\n').map(line => line.trim()).filter(line => line);
           
           if (lines.length === 0) {
-            reject(new Error('CSV file is empty'));
+            reject(new Error(t('knowledgeBase.csvEmpty') ?? ''));
             return;
           }
           
@@ -544,7 +546,7 @@ const Agency: FC = () => {
           const dataLines = hasHeader ? lines.slice(1) : lines;
           
           if (dataLines.length === 0) {
-            reject(new Error('No URLs found in CSV'));
+            reject(new Error(t('knowledgeBase.csvNoUrls') ?? ''));
             return;
           }
           
@@ -558,18 +560,18 @@ const Agency: FC = () => {
           });
           
           if (urls.length === 0) {
-            reject(new Error('No valid URLs found in CSV. URLs must start with http:// or https://'));
+            reject(new Error(t('knowledgeBase.csvNoValidUrls') ?? ''));
             return;
           }
           
           resolve(urls);
         } catch (error) {
-          reject(new Error('Failed to parse CSV file'));
+          reject(new Error(t('knowledgeBase.csvParseError') ?? ''));
         }
       };
       
       reader.onerror = () => {
-        reject(new Error('Failed to read CSV file'));
+        reject(new Error(t('knowledgeBase.csvReadError') ?? ''));
       };
       
       reader.readAsText(file);
@@ -806,7 +808,7 @@ const Agency: FC = () => {
 
   // Show loading state
   if (isLoadingAgency || isLoadingSources) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   return (
@@ -1176,7 +1178,7 @@ const Agency: FC = () => {
                 maxHeight: '200px',
                 overflowY: 'auto'
               }}>
-                <strong>{formData.urlList.length} URLs loaded:</strong>
+                <strong>{t('knowledgeBase.urlsLoaded', { count: formData.urlList.length })}</strong>
                 <ul style={{ 
                   marginTop: '8px', 
                   paddingLeft: '20px',
@@ -1190,7 +1192,7 @@ const Agency: FC = () => {
                   ))}
                   {formData.urlList.length > 10 && (
                     <li style={{ fontStyle: 'italic', color: '#666' }}>
-                      ... and {formData.urlList.length - 10} more
+                      {t('knowledgeBase.moreUrls', { count: formData.urlList.length - 10 })}
                     </li>
                   )}
                 </ul>

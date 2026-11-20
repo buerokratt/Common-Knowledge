@@ -817,7 +817,7 @@ const ScrapedFiles: FC = () => {
   ];
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   return (
@@ -877,13 +877,13 @@ const ScrapedFiles: FC = () => {
                     <div className="start-cleaning-notice__icon">
                       <MdWarning size={24} />
                     </div>
-                    <div className="start-cleaning-notice__title">Scraping is finished!</div>
+                    <div className="start-cleaning-notice__title">{t('knowledgeBase.scrapingFinished')}</div>
                   </div>
                   <div className="start-cleaning-notice__text">{t('knowledgeBase.startCleaningNotification')}</div>
                 </div>
                 <div className="start-cleaning-notice__action">
                   <Button appearance="primary" onClick={() => handleStartCleaning()}>
-                    Start cleaning
+                    {t('knowledgeBase.startCleaning')}
                   </Button>
                 </div>
               </div>
@@ -1040,7 +1040,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkInclude', {
               count: bulkIncludeConfirm.length,
-              unit: bulkIncludeConfirm.length === 1 ? t('file') : t('files')
+              unit: bulkIncludeConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}
@@ -1069,7 +1069,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkExclude', {
               count: bulkExcludeConfirm.length,
-              unit: bulkExcludeConfirm.length === 1 ? t('file') : t('files')
+              unit: bulkExcludeConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}

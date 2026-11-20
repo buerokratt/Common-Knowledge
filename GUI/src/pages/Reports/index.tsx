@@ -234,12 +234,12 @@ const Reports: FC = () => {
 
   // Show loading state
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   // Show error state
   if (error) {
-    return <div>Error loading reports: {error.message}</div>;
+    return <div>{t('reports.loadError')}: {error.message}</div>;
   }
 
   return (

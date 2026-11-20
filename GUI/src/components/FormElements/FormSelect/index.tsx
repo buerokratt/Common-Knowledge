@@ -79,7 +79,7 @@ const FormSelect= forwardRef<HTMLSelectElement, FormSelectProps>((
       <div className='select__wrapper' >
         <div className='select__trigger' {...getToggleButtonProps()}>
           {selectedItem?.label ?? placeholderValue}
-          <Icon label='Dropdown icon' size='medium' icon={<MdArrowDropDown color='#5D6071' />} />
+          <Icon label={t('global.dropdownIcon')} size='medium' icon={<MdArrowDropDown color='#5D6071' />} />
         </div>
         <ul ref={ref} className={direction === 'down' ? 'select__menu' : 'select__menu_up'} {...getMenuProps()}>
           {isOpen && (

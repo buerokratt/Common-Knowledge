@@ -1,11 +1,13 @@
 import { FC } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useParams } from 'react-router-dom';
+import { useTranslation } from 'react-i18next';
 import { getSource } from 'services/sources';
 import ScrapedFiles from 'pages/ScrapedFiles';
 import UploadedFiles from 'pages/UploadedFiles';
 
 const Files: FC = () => {
+  const { t } = useTranslation();
   const { id: sourceId } = useParams<{ id: string }>();
 
   // Fetch source data to determine type
@@ -21,17 +23,17 @@ const Files: FC = () => {
 
   // Show loading state
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   // Show error state
   if (error) {
-    return <div>Error loading source data</div>;
+    return <div>{t('knowledgeBase.sourceLoadError')}</div>;
   }
 
   // Show error if source not found
   if (!sourceData) {
-    return <div>Source not found</div>;
+    return <div>{t('knowledgeBase.sourceNotFound')}</div>;
   }
 
   // Route to appropriate component based on source type
@@ -43,7 +45,7 @@ const Files: FC = () => {
     case 'file':
       return <UploadedFiles />;
     default:
-      return <div>Unknown source type: {sourceData.type}</div>;
+      return <div>{t('knowledgeBase.unknownSourceType')}: {sourceData.type}</div>;
   }
 };
 

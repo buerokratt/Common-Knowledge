@@ -199,26 +199,14 @@ const AgencyComponent: FC = () => {
     },
   ];
 
-  const agencyOptions = [
-    { label: 'Abc', value: 'abc' },
-    { label: 'Pvc', value: 'pvc' },
-    { label: 'Xyz', value: 'xyz' },
-  ];
-
-  const domainOptions = [
-    { label: 'Domain 1', value: 'domain1' },
-    { label: 'Domain 2', value: 'domain2' },
-    { label: 'Domain 3', value: 'domain3' },
-  ];
-
   // Show loading state
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   // Show error state
   if (error) {
-    return <div>Error loading agencies: {error.message}</div>;
+    return <div>{t('knowledgeBase.agenciesLoadError')}: {error.message}</div>;
   }
 
   return (

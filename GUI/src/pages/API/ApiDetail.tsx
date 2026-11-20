@@ -444,7 +444,7 @@ const ApiDetail: FC = () => {
   ];
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   return (
@@ -468,7 +468,7 @@ const ApiDetail: FC = () => {
           <div>
             <Link to="/api" style={{ textDecoration: 'none' }}>
               <span className="agencies__agency">
-                {sourceData?.name || sourceData?.url || 'API Integration'}
+                {sourceData?.name || sourceData?.url || t('knowledgeBase.apiIntegration')}
               </span>
             </Link>
           </div>

@@ -246,12 +246,12 @@ const ApiList: FC = () => {
 
   // Show loading state
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   // Show error state
   if (error) {
-    return <div>Error loading API integrations: {error.message}</div>;
+    return <div>{t('knowledgeBase.apiIntegrationsLoadError')}: {error.message}</div>;
   }
 
   return (

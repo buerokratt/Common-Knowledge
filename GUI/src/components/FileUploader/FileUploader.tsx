@@ -205,7 +205,7 @@ const FileUploader: FC<FileUploaderProps> = ({
                 className="file-uploader__attachment-delete"
                 onClick={() => onFileDelete(file.id)}
                 type="button"
-                aria-label={`Delete ${file.name}`}
+                aria-label={t('fileUpload.deleteFile', { name: file.name }) ?? ''}
                 disabled={uploadProgress?.isUploading}
               >
                 <MdClose />
@@ -213,7 +213,7 @@ const FileUploader: FC<FileUploaderProps> = ({
             </div>
             {(file.status === 'error' || file.status === 'warning') && (
               <div className="file-uploader__attachment-error-text">
-                {file.message || 'Error occurred'}
+                {file.message || t('global.notificationErrorMsg')}
               </div>
             )}
           </div>
@@ -239,8 +239,7 @@ const FileUploader: FC<FileUploaderProps> = ({
           >
             <MdAttachFile className="file-uploader__attach-icon" />
             <div className="file-uploader__instructions">
-              {t('fileUpload.dropFilesOrClick') ||
-                'Drop files here, or click to browse'}
+              {t('fileUpload.dropFilesOrClick')}
             </div>
           </div>
         )}
@@ -254,7 +253,7 @@ const FileUploader: FC<FileUploaderProps> = ({
         />
         <div className="file-uploader__helper-texts">
           <div className="file-uploader__helper-text">
-            {t('fileUpload.maxFileSize') || 'Max file size'}{' '}
+            {t('fileUpload.maxFileSize')}{' '}
             {formatFileSize(maxFileSize)}
           </div>
         </div>

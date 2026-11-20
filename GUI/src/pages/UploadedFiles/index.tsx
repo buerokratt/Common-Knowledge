@@ -670,7 +670,7 @@ const UploadedFiles: FC = () => {
   ];
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   return (
