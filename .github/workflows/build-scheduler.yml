@@ -2,7 +2,7 @@ name: Build and publish scheduler
 
 on:
   push:
-    branches: [ feat/scheduler-build ]
+    branches: [ v2.0.0 ]
     paths:
       - '.env.scheduler'
 
