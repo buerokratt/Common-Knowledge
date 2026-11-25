@@ -82,18 +82,36 @@ const AxiosInterceptor = ({ children }) => {
 
 const handleRequestError = (error: AxiosError) => {
   import.meta.env.DEBUG_ENABLED && console.debug(error);
-  if (error.response?.status === 401) {
-    // To be added: handle unauthorized requests
-  }
-  if (error.response?.status === 403) {
-    // To be added: handle forbidden requests
-  }
   return Promise.reject(new Error(error.message));
+};
+
+const redirectToLogin = () => {
+  const loginUrl = import.meta.env.REACT_APP_CUSTOMER_SERVICE_LOGIN;
+  if (!loginUrl) {
+    console.error('Session expired, but REACT_APP_CUSTOMER_SERVICE_LOGIN is not set.');
+    return;
+  }
+  window.location.href = loginUrl;
+};
+
+// Registered at module load, so it runs before AxiosInterceptor's handlers
+// (added later in a useEffect) and still sees the raw AxiosError status.
+// 401 = no/expired session -> go to login. 403 = logged in without the
+// required role -> just reject, so the user stays and the page shows its error.
+const handleUnauthorizedResponse = (error: AxiosError) => {
+  if (error.response?.status === 401) {
+    redirectToLogin();
+  }
+  return Promise.reject(error);
 };
 
 api.interceptors.request.use(
   (axiosRequest) => axiosRequest,
   handleRequestError
+);
+api.interceptors.response.use(
+  (response) => response,
+  handleUnauthorizedResponse
 );
 
 const BACKOFFICE_ROUTES = [
@@ -122,5 +140,9 @@ apiDev.interceptors.request.use(
   },
   handleRequestError
 );
+apiDev.interceptors.response.use(
+  (response) => response,
+  handleUnauthorizedResponse
+);
 
-export { api, apiDev, notificationApiDev, AxiosInterceptor };
+export { api, apiDev, notificationApiDev, AxiosInterceptor, redirectToLogin };

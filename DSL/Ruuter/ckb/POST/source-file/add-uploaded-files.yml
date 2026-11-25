@@ -31,6 +31,14 @@ getUserInfo:
       cookie: ${incoming.headers.cookie}
     plaintext: "customJwtCookie"
   result: userInfoResult
+  next: checkUserInfoResult
+
+# TIM answers 200 with an empty body for an expired/blacklisted/invalid token.
+checkUserInfoResult:
+  switch:
+    - condition: ${200 <= userInfoResult.response.statusCodeValue && userInfoResult.response.statusCodeValue < 300 && userInfoResult.response.body != null && userInfoResult.response.body.idCode != null}
+      next: extractRequestData
+  next: returnUnauthorized
 
 extractRequestData:
   assign:
@@ -103,4 +111,9 @@ triggerPipelineForUploadedFiles:
 returnSuccess:
   return: ${createResult.response.body}
   status: 200
+  next: end
+
+returnUnauthorized:
+  return: "unauthorized"
+  status: 401
   next: end

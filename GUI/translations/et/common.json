@@ -6,6 +6,7 @@
     "saving": "Salvestamine",
     "edit": "Muuda",
     "loading": "Laadimine...",
+    "forbidden": "Teil puudub õigus sellele lehele ligi pääseda.",
     "delete": "Kustuta",
     "deleting": "Kustutamine",
     "refresh": "Värskenda",
