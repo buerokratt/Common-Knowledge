@@ -216,7 +216,7 @@ const ScrapedFiles: FC = () => {
         title: t('global.notification'),
         message: t('global.bulkRefreshSuccess', {
           count: count,
-          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+          unit: count === 1 ? t('global.file') : t('global.files'),
         }),
       });
 
@@ -235,7 +235,7 @@ const ScrapedFiles: FC = () => {
         title: t('global.notificationError'),
         message: error.message || t('global.bulkRefreshError', {
           count: count,
-          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+          unit: count === 1 ? t('global.file') : t('global.files'),
         }),
       });
     },
@@ -978,7 +978,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkDelete', {
               count: bulkDeleteConfirm.length,
-              unit: bulkDeleteConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
+              unit: bulkDeleteConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}
@@ -1011,7 +1011,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkRefresh', {
               count: bulkRefreshConfirm.length,
-              unit: bulkRefreshConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
+              unit: bulkRefreshConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}
