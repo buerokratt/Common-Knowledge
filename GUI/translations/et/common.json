@@ -628,7 +628,6 @@
     "cleaning": "Puhastamine",
     "notFound": "Ei leitud",
     "agencyCreated": "Asutuse lisamine õnnestus",
-    "agencyAlreadyExists": "Asutus on juba olemas. CKB toetab ühe rakenduse kohta vaid ühte agentuuri.",
     "agencyLoadError": "Asutuse laadimine ebaõnnestus",
     "agencyUpdated": "Asutuse uuendamine õnnestus",
     "agencyUpdateError": "Asutuse uuendamine ebaõnnestus",
@@ -715,5 +714,20 @@
   },
   "validation": {
     "required": "See väli on kohustuslik"
+  },
+  "errors": {
+    "SOURCE_NOT_FOUND": "Allikat ei leitud",
+    "SOURCE_BUSY": "Selle allika kraapimine või puhastamine on juba pooleli",
+    "SOURCE_NOT_IN_REVIEW": "Puhastamist saab alustada ainult siis, kui allikas on ülevaatamisel",
+    "AGENCY_NOT_FOUND": "Selle allika asutust ei leitud",
+    "NO_FILES_TO_CLEAN": "Selle allika puhul pole ülevaatamisel faile, mida puhastada",
+    "SCRAPING_REPORT_MISSING": "Kraapimise aruannet ei leitud. Enne puhastamist käivitage kraapimine vähemalt korra",
+    "INVALID_URL": "Palun sisesta kehtiv URL, mis algab http:// või https://",
+    "DUPLICATE_FILES": "Selles allikas on juba sama nimega failid",
+    "NOT_FOUND_OR_CHANGED": "Kirjet ei leitud või keegi teine on seda muutnud. Värskendage lehte ja proovige uuesti",
+    "AGENCY_ALREADY_EXISTS": "Asutus on juba olemas. CKB toetab ühe rakenduse kohta vaid ühte agentuuri.",
+    "AGENCY_NAME_EXISTS": "Sellise nimega asutus on juba olemas",
+    "AGENCY_DELETE_NOT_ALLOWED": "Asutust ei saa kustutada. CKB toetab ühe rakenduse kohta ainult ühte asutust",
+    "MISSING_PARAMETER": "Faili asukoht puudub. Värskendage lehte ja proovige uuesti"
   }
 }

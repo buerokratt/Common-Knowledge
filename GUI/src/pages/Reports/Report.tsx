@@ -204,7 +204,7 @@ const Report: FC = () => {
   if (reportError || pagesError) {
     return (
       <div>
-        {t('reports.reportLoadError')}: {reportError?.message || pagesError?.message}
+        {t('reports.reportLoadError')}
       </div>
     );
   }

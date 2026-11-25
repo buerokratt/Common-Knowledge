@@ -34,7 +34,14 @@ validateSingleAgency:
   next: createAgency
 
 returnAgencyExistsError:
-  return: "An agency already exists. CKB supports only one agency per deployment."
+  assign:
+    errorResponse:
+      code: "AGENCY_ALREADY_EXISTS"
+      error: "An agency already exists. CKB supports only one agency per deployment."
+  next: returnAgencyExistsErrorResponse
+
+returnAgencyExistsErrorResponse:
+  return: ${errorResponse}
   status: 409
   next: end
 

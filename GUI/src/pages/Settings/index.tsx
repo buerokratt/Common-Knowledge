@@ -20,6 +20,7 @@ import {
   getSource,
 } from 'services/sources';
 import { apiDev } from 'services/api';
+import { errorMessage } from 'services/errors';
 import './Settings.scss';
 
 interface UpdateSettings {
@@ -279,7 +280,7 @@ const SourceSettings: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.settingsUpdateError'),
+        message: errorMessage(error, t, 'knowledgeBase.settingsUpdateError'),
       });
     },
   });

@@ -51,6 +51,7 @@ import {
   CreateSourceFileRequest,
   CreateSourceWithUrlListRequest,
 } from 'services/sources';
+import { errorMessage } from 'services/errors';
 
 interface KnowledgeBaseFormData {
   subsector: string;
@@ -279,6 +280,8 @@ const Agency: FC = () => {
         currentFileName: '',
       });
 
+      const uploadErrorMessage = errorMessage(error, t, 'knowledgeBase.uploadError');
+
       // Set failed files to error status
       setFormData((prev) => ({
         ...prev,
@@ -286,14 +289,14 @@ const Agency: FC = () => {
           ...file,
           status:
             file.status === 'uploading' ? ('error' as const) : file.status,
-          message: file.status === 'uploading' ? error.message : file.message,
+          message: file.status === 'uploading' ? uploadErrorMessage : file.message,
         })),
       }));
 
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.uploadError'),
+        message: uploadErrorMessage,
       });
     },
   });
@@ -319,7 +322,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.urlError'),
+        message: errorMessage(error, t, 'knowledgeBase.urlError'),
       });
     },
   });
@@ -343,7 +346,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.urlListError'),
+        message: errorMessage(error, t, 'knowledgeBase.urlListError'),
       });
     },
   });
@@ -366,7 +369,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.updateError'),
+        message: errorMessage(error, t, 'knowledgeBase.updateError'),
       });
     },
   });
@@ -407,7 +410,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.deleteError'),
+        message: errorMessage(error, t, 'knowledgeBase.deleteError'),
       });
     },
   });
@@ -427,7 +430,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.stopError'),
+        message: errorMessage(error, t, 'knowledgeBase.stopError'),
       });
     },
   });
@@ -457,7 +460,7 @@ const Agency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.refreshError'),
+        message: errorMessage(error, t, 'knowledgeBase.refreshError'),
       });
     },
   });

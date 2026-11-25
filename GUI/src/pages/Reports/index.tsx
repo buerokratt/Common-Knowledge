@@ -18,6 +18,7 @@ import {
   Report,
   ReportListParams,
 } from 'services/reports';
+import { errorMessage } from 'services/errors';
 import 'pages/Agency/AgencyList.scss';
 
 const Reports: FC = () => {
@@ -113,7 +114,7 @@ const Reports: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('reports.deleteError'),
+        message: errorMessage(error, t, 'reports.deleteError'),
       });
     },
   });
@@ -239,7 +240,7 @@ const Reports: FC = () => {
 
   // Show error state
   if (error) {
-    return <div>{t('reports.loadError')}: {error.message}</div>;
+    return <div>{t('reports.loadError')}</div>;
   }
 
   return (

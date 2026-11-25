@@ -33,6 +33,7 @@ import {
   ApiSourceFile,
   ApiSourceFilesListParams,
 } from 'services/sources';
+import { errorMessage } from 'services/errors';
 import {
   updateFileExclusion,
   refreshScrapedFile,
@@ -153,7 +154,7 @@ const ApiDetail: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.refreshError'),
+        message: errorMessage(error, t, 'knowledgeBase.refreshError'),
       });
     },
   });
@@ -174,7 +175,7 @@ const ApiDetail: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.updateError'),
+        message: errorMessage(error, t, 'knowledgeBase.updateError'),
       });
     },
   });
@@ -284,7 +285,7 @@ const ApiDetail: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.downloadError'),
+        message: errorMessage(error, t, 'knowledgeBase.downloadError'),
       });
     }
   };

@@ -44,6 +44,7 @@ import {
   addFilesToExistingSource,
   AddFilesToExistingSourceRequest,
 } from 'services/sources';
+import { errorMessage } from 'services/errors';
 import type {
   FileItem,
   UploadProgress,
@@ -252,8 +253,7 @@ const UploadedFiles: FC = () => {
       const responseData =
         error.response?.data?.response || error.response?.data || {};
 
-      const errorMessage =
-        responseData.error || error.message || t('knowledgeBase.uploadError');
+      const uploadErrorMessage = errorMessage(error, t, 'knowledgeBase.uploadError');
 
       // Get duplicate file names if available
       const duplicateFiles = responseData.duplicateFiles || [];
@@ -274,7 +274,7 @@ const UploadedFiles: FC = () => {
             return {
               ...file,
               status: 'error' as const,
-              message: errorMessage,
+              message: uploadErrorMessage,
             };
           }
 
@@ -283,14 +283,14 @@ const UploadedFiles: FC = () => {
       }));
 
       // Build detailed error message
-      let displayMessage = errorMessage;
+      let displayMessage = uploadErrorMessage;
       if (duplicateFiles.length > 0) {
         const fileNames = duplicateFiles
           .map((df: any) =>
             typeof df === 'string' ? df : df.fileName || df.file_name
           )
           .join(', ');
-        displayMessage = `${errorMessage}: ${fileNames}`;
+        displayMessage = `${uploadErrorMessage}: ${fileNames}`;
       }
 
       toast.open({
@@ -337,7 +337,7 @@ const UploadedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.deleteError'),
+        message: errorMessage(error, t, 'knowledgeBase.deleteError'),
       });
     },
   });
@@ -358,7 +358,7 @@ const UploadedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.updateError'),
+        message: errorMessage(error, t, 'knowledgeBase.updateError'),
       });
     },
   });
@@ -493,7 +493,7 @@ const UploadedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.downloadError'),
+        message: errorMessage(error, t, 'knowledgeBase.downloadError'),
       });
     }
   };

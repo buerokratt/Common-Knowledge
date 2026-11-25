@@ -45,7 +45,14 @@ validateUrl:
   next: createSource
 
 returnInvalidUrl:
-  return: "Invalid URL"
+  assign:
+    errorResponse:
+      code: "INVALID_URL"
+      error: "Invalid URL"
+  next: returnInvalidUrlResponse
+
+returnInvalidUrlResponse:
+  return: ${errorResponse}
   status: 400
   next: end
 

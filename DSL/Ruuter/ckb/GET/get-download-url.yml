@@ -23,7 +23,14 @@ validatePath:
   next: requestDownloadUrl
 
 returnError:
-  return: "Path parameter is required"
+  assign:
+    errorResponse:
+      code: "MISSING_PARAMETER"
+      error: "Path parameter is required"
+  next: returnErrorResponse
+
+returnErrorResponse:
+  return: ${errorResponse}
   status: 400
   next: end
 

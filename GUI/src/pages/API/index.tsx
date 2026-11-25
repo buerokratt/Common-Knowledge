@@ -18,6 +18,7 @@ import {
   ApiIntegration,
   ApiIntegrationsListParams,
 } from 'services/sources';
+import { errorMessage } from 'services/errors';
 import 'pages/Agency/AgencyList.scss';
 
 const ApiList: FC = () => {
@@ -89,7 +90,7 @@ const ApiList: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.stopError'),
+        message: errorMessage(error, t, 'knowledgeBase.stopError'),
       });
     },
   });
@@ -109,7 +110,7 @@ const ApiList: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.refreshError'),
+        message: errorMessage(error, t, 'knowledgeBase.refreshError'),
       });
     },
   });
@@ -251,7 +252,7 @@ const ApiList: FC = () => {
 
   // Show error state
   if (error) {
-    return <div>{t('knowledgeBase.apiIntegrationsLoadError')}: {error.message}</div>;
+    return <div>{t('knowledgeBase.apiIntegrationsLoadError')}</div>;
   }
 
   return (

@@ -13,7 +13,14 @@ declaration:
         description: "Base ID of the agency to delete"
 
 returnNotAllowed:
-  return: "Agency deletion is not permitted. CKB supports only one agency per deployment, and deletion is not allowed to prevent accidental data loss."
+  assign:
+    errorResponse:
+      code: "AGENCY_DELETE_NOT_ALLOWED"
+      error: "Agency deletion is not permitted. CKB supports only one agency per deployment, and deletion is not allowed to prevent accidental data loss."
+  next: returnNotAllowedResponse
+
+returnNotAllowedResponse:
+  return: ${errorResponse}
   status: 405
   next: end
 
