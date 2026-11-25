@@ -2,10 +2,12 @@ import { FC, useEffect } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useCookies } from 'react-cookie';
+import { useTranslation } from 'react-i18next';
 
 import { CKBLayout } from 'components';
 import useStore from 'store';
 import { UserInfo } from 'types/userInfo';
+import { redirectToLogin } from 'services/api';
 
 import AgencyList from 'pages/Agency';
 import Files from 'pages/Files';
@@ -27,7 +29,13 @@ const customJwtCookieKey = 'customJwtCookie';
 // Mirrors main.tsx: when true, user data comes from the mocked generic/ routes.
 const isLocal = import.meta.env.REACT_APP_LOCAL?.toLowerCase() === 'true';
 
+// The axios error may be the raw AxiosError or AxiosInterceptor's wrapped Error;
+// both keep the HTTP response on `.response`.
+const getErrorStatus = (error: unknown): number | undefined =>
+  (error as { response?: { status?: number } } | null)?.response?.status;
+
 const App: FC = () => {
+  const { t } = useTranslation();
   const userInfo = useStore((state) => state.userInfo);
   const [_, setCookie] = useCookies([customJwtCookieKey]);
 
@@ -53,10 +61,13 @@ const App: FC = () => {
     return () => clearInterval(interval);
   }, [userInfo]);
 
-  useQuery<{
+  const { error: userInfoError } = useQuery<{
     data: { custom_jwt_userinfo: UserInfo };
   }>({
     queryKey: [isLocal ? 'userinfo' : 'auth/jwt/userinfo', 'prod'],
+    // 401/403 won't change on retry; only retry other (e.g. network) failures.
+    retry: (failureCount: number, error: unknown) =>
+      ![401, 403].includes(getErrorStatus(error) ?? 0) && failureCount < 3,
     onSuccess: (res: { response: UserInfo }) => {
       // The mock has no real expiry, so skip the expiration bookkeeping locally.
       if (!isLocal) {
@@ -64,9 +75,25 @@ const App: FC = () => {
       }
       return useStore.getState().setUserInfo(res.response);
     },
+    onError: (error: unknown) => {
+      if (getErrorStatus(error) === 401) {
+        localStorage.removeItem('exp');
+        redirectToLogin();
+      }
+    },
   });
 
   useTabCloseEffect();
+
+  // Render nothing of the app (no menu, no page content) until the user check
+  // has passed, so a logged-out user never sees content before the redirect.
+  if (!userInfo) {
+    const status = getErrorStatus(userInfoError);
+    if (status === 403) return <p>{t('global.forbidden')}</p>;
+    if (userInfoError && status !== 401)
+      return <p>{t('global.notificationErrorMsg')}</p>;
+    return <p>{t('global.loading')}</p>;
+  }
 
   return (
     <Routes>
