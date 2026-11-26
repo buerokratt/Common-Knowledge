@@ -52,6 +52,7 @@ import {
   EditorState,
 } from 'services/files';
 import { getSource, startCleaning } from 'services/sources';
+import { errorMessage } from 'services/errors';
 
 interface FormData {
   search: string;
@@ -129,7 +130,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.cleaningStartError'),
+        message: errorMessage(error, t, 'knowledgeBase.cleaningStartError'),
       });
     }
   };
@@ -199,7 +200,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.refreshError'),
+        message: errorMessage(error, t, 'knowledgeBase.refreshError'),
       });
     },
   });
@@ -216,7 +217,7 @@ const ScrapedFiles: FC = () => {
         title: t('global.notification'),
         message: t('global.bulkRefreshSuccess', {
           count: count,
-          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+          unit: count === 1 ? t('global.file') : t('global.files'),
         }),
       });
 
@@ -233,9 +234,9 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('global.bulkRefreshError', {
+        message: errorMessage(error, t, 'global.bulkRefreshError', {
           count: count,
-          unit: count === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files'),
+          unit: count === 1 ? t('global.file') : t('global.files'),
         }),
       });
     },
@@ -277,7 +278,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.deleteError'),
+        message: errorMessage(error, t, 'knowledgeBase.deleteError'),
       });
     },
   });
@@ -326,7 +327,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('global.bulkDeleteError'),
+        message: errorMessage(error, t, 'global.bulkDeleteError'),
       });
     },
   });
@@ -366,7 +367,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.bulkExcludeError'),
+        message: errorMessage(error, t, 'knowledgeBase.bulkExcludeError'),
       });
     },
   });
@@ -387,7 +388,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.updateError'),
+        message: errorMessage(error, t, 'knowledgeBase.updateError'),
       });
     },
   });
@@ -502,7 +503,7 @@ const ScrapedFiles: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.downloadError'),
+        message: errorMessage(error, t, 'knowledgeBase.downloadError'),
       });
     }
   };
@@ -817,7 +818,7 @@ const ScrapedFiles: FC = () => {
   ];
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   return (
@@ -877,13 +878,13 @@ const ScrapedFiles: FC = () => {
                     <div className="start-cleaning-notice__icon">
                       <MdWarning size={24} />
                     </div>
-                    <div className="start-cleaning-notice__title">Scraping is finished!</div>
+                    <div className="start-cleaning-notice__title">{t('knowledgeBase.scrapingFinished')}</div>
                   </div>
                   <div className="start-cleaning-notice__text">{t('knowledgeBase.startCleaningNotification')}</div>
                 </div>
                 <div className="start-cleaning-notice__action">
                   <Button appearance="primary" onClick={() => handleStartCleaning()}>
-                    Start cleaning
+                    {t('knowledgeBase.startCleaning')}
                   </Button>
                 </div>
               </div>
@@ -978,7 +979,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkDelete', {
               count: bulkDeleteConfirm.length,
-              unit: bulkDeleteConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
+              unit: bulkDeleteConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}
@@ -1011,7 +1012,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkRefresh', {
               count: bulkRefreshConfirm.length,
-              unit: bulkRefreshConfirm.length === 1 ? t('knowledgeBase.file') : t('knowledgeBase.files')
+              unit: bulkRefreshConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}
@@ -1040,7 +1041,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkInclude', {
               count: bulkIncludeConfirm.length,
-              unit: bulkIncludeConfirm.length === 1 ? t('file') : t('files')
+              unit: bulkIncludeConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}
@@ -1069,7 +1070,7 @@ const ScrapedFiles: FC = () => {
           >
             {t('global.confirmBulkExclude', {
               count: bulkExcludeConfirm.length,
-              unit: bulkExcludeConfirm.length === 1 ? t('file') : t('files')
+              unit: bulkExcludeConfirm.length === 1 ? t('global.file') : t('global.files')
             })}
           </Dialog>
         )}

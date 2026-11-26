@@ -29,7 +29,14 @@ checkSourceFound:
   next: sourceNotFoundError
 
 sourceNotFoundError:
-  return: "Error: Source not found."
+  assign:
+    errorResponse:
+      code: "SOURCE_NOT_FOUND"
+      error: "Error: Source not found."
+  next: returnSourceNotFoundError
+
+returnSourceNotFoundError:
+  return: ${errorResponse}
   status: 404
   next: end
 
@@ -58,12 +65,26 @@ validateSourceStatus:
   next: invalidSourceStatus
 
 alreadyRunning:
-  return: "Scrapping or Cleaning is already in progress for this source."
+  assign:
+    errorResponse:
+      code: "SOURCE_BUSY"
+      error: "Scrapping or Cleaning is already in progress for this source."
+  next: returnAlreadyRunning
+
+returnAlreadyRunning:
+  return: ${errorResponse}
   status: 409
   next: end
 
 invalidSourceStatus:
-  return: "Error: Source must be in_review before starting cleaning."
+  assign:
+    errorResponse:
+      code: "SOURCE_NOT_IN_REVIEW"
+      error: "Error: Source must be in_review before starting cleaning."
+  next: returnInvalidSourceStatus
+
+returnInvalidSourceStatus:
+  return: ${errorResponse}
   status: 400
   next: end
 
@@ -83,7 +104,14 @@ checkAgencyFound:
   next: agencyNotFoundError
 
 agencyNotFoundError:
-  return: "Error: Agency not found for source."
+  assign:
+    errorResponse:
+      code: "AGENCY_NOT_FOUND"
+      error: "Error: Agency not found for source."
+  next: returnAgencyNotFoundError
+
+returnAgencyNotFoundError:
+  return: ${errorResponse}
   status: 404
   next: end
 
@@ -143,7 +171,14 @@ checkFilesExist:
   next: noFilesToClean
 
 noFilesToClean:
-  return: "No in_review files found to clean for this source."
+  assign:
+    errorResponse:
+      code: "NO_FILES_TO_CLEAN"
+      error: "No in_review files found to clean for this source."
+  next: returnNoFilesToClean
+
+returnNoFilesToClean:
+  return: ${errorResponse}
   status: 400
   next: end
 
@@ -169,6 +204,13 @@ returnSuccess:
   next: end
 
 reportMissingScrappingLogFile:
-  return: "Error: No existing run report found for source, cannot determine logs path for cleaning. Please run scraping at least once before starting cleaning."
+  assign:
+    errorResponse:
+      code: "SCRAPING_REPORT_MISSING"
+      error: "Error: No existing run report found for source, cannot determine logs path for cleaning. Please run scraping at least once before starting cleaning."
+  next: returnReportMissingScrappingLogFile
+
+returnReportMissingScrappingLogFile:
+  return: ${errorResponse}
   status: 400
   next: end

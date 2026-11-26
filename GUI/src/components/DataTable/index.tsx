@@ -218,7 +218,7 @@ const DataTable: FC<DataTableProps> = ({
         <div className="data-table__selection-bar">
           <div className="data-table__selection-info">
             <span className="data-table__selection-count">
-              {selectedCount} {selectedCount === 1 ? t('global.rowSelected') || 'row selected' : t('global.rowsSelected') || 'rows selected'}
+              {selectedCount} {selectedCount === 1 ? t('global.rowSelected') : t('global.rowsSelected')}
             </span>
           </div>
           <div className="data-table__selection-actions">

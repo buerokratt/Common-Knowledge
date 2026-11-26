@@ -76,7 +76,28 @@
     "stop": "Stop",
     "uploaded": "Uploaded",
     "adding": "Adding",
-    "retry": "Retry"
+    "retry": "Retry",
+    "file": "file",
+    "files": "files",
+    "includeFiles": "Include Files",
+    "excludeFiles": "Exclude Files",
+    "bulkDeleteSuccess": "Selected files deleted successfully ({{count}})",
+    "bulkDeleteError": "Failed to delete the selected files",
+    "dropdownIcon": "Dropdown icon",
+    "months": {
+      "january": "January",
+      "february": "February",
+      "march": "March",
+      "april": "April",
+      "may": "May",
+      "june": "June",
+      "july": "July",
+      "august": "August",
+      "september": "September",
+      "october": "October",
+      "november": "November",
+      "december": "December"
+    }
   },
   "sorting": {
     "desc": "descending",
@@ -595,7 +616,7 @@
     "urls": "URLs",
     "running": "In progress",
     "finished": "Done",
-    "scraping": "Scrapping",
+    "scraping": "Scraping",
     "sources": "Sources",
     "searchWithinListedSources": "Search within listed sources",
     "excluded": "Excluded",
@@ -607,7 +628,6 @@
     "cleaning": "Cleaning",
     "notFound": "Not Found",
     "agencyCreated": "Agency created successfully",
-    "agencyAlreadyExists": "An agency already exists. CKB supports only one agency per deployment.",
     "agencyLoadError": "Failed to load agency",
     "agencyUpdated": "Agency updated successfully",
     "agencyUpdateError": "Failed to update agency",
@@ -618,7 +638,34 @@
     "in_review": "In Review",
     "not_found": "Not Found",
     "startCleaningNotification":"All pages have been scraped. Before continuing, delete all pages that you do not want to make available to the chatbot, like news and archived pages. Once you have made your selection, continue cleaning the pages by clicking the 'Start cleaning' button.",
-    "cleaningStarted": "Cleaning started"
+    "cleaningStarted": "Cleaning started",
+    "cleaningStartError": "Failed to start cleaning",
+    "stopError": "Failed to stop the process",
+    "agencyCreateError": "Failed to create agency",
+    "bulkExcludeSuccess": "Selected files excluded successfully ({{count}})",
+    "bulkIncludeSuccess": "Selected files included successfully ({{count}})",
+    "bulkExcludeError": "Failed to update the selected files",
+    "allFilesAlreadyIncluded": "All selected files are already included",
+    "allFilesAlreadyExcluded": "All selected files are already excluded",
+    "scrapingFinished": "Scraping is finished!",
+    "startCleaning": "Start cleaning",
+    "moreUrls": "... and {{count}} more",
+    "urlListSuccess": "Successfully created source with {{count}} URLs",
+    "urlListError": "Failed to create source with URL list",
+    "csvParsed": "Parsed {{count}} URLs from CSV",
+    "csvParseError": "Failed to parse CSV file",
+    "csvReadError": "Failed to read CSV file",
+    "csvEmpty": "CSV file is empty",
+    "csvNoUrls": "No URLs found in CSV",
+    "csvNoValidUrls": "No valid URLs found in CSV. URLs must start with http:// or https://",
+    "agenciesLoadError": "Error loading agencies",
+    "apiIntegrationsLoadError": "Error loading API integrations",
+    "sourceLoadError": "Error loading source data",
+    "sourceNotFound": "Source not found",
+    "unknownSourceType": "Unknown source type",
+    "timePlaceholder": "hh:mm",
+    "urlsLoaded": "{{count}} URLs loaded:",
+    "apiIntegration": "API Integration"
   },
  "fileUpload": {
     "title": "Upload file",
@@ -643,7 +690,8 @@
     "uploaded": "uploaded.",
     "overwriteFile": "exists already in the system. Overwriting the file deletes the data. Do you want to overwrite the file?",
     "maxSizeAllowed": "Maximum size allowed:",
-    "of": "of"
+    "of": "of",
+    "deleteFile": "Delete {{name}}"
   },
   "reports": {
     "title": "Reports",
@@ -657,6 +705,28 @@
     "errorType": "Error type",
     "errorMessage": "Error Message",
     "cleaningLog": "Cleaning log",
-    "scrapingLog": "Scraping log"
+    "scrapingLog": "Scraping log",
+    "results": "results",
+    "loadError": "Error loading reports",
+    "reportLoadError": "Error loading report",
+    "notFound": "Report not found"
+  },
+  "validation": {
+    "required": "This field is required"
+  },
+  "errors": {
+    "SOURCE_NOT_FOUND": "Source not found",
+    "SOURCE_BUSY": "Scraping or cleaning is already in progress for this source",
+    "SOURCE_NOT_IN_REVIEW": "Cleaning can only be started when the source is in review",
+    "AGENCY_NOT_FOUND": "Agency not found for this source",
+    "NO_FILES_TO_CLEAN": "There are no files in review to clean for this source",
+    "SCRAPING_REPORT_MISSING": "No scraping report found. Run scraping at least once before starting cleaning",
+    "INVALID_URL": "Please enter a valid URL starting with http:// or https://",
+    "DUPLICATE_FILES": "Files with the same name already exist in this source",
+    "NOT_FOUND_OR_CHANGED": "The item was not found or was changed by someone else. Refresh the page and try again",
+    "AGENCY_ALREADY_EXISTS": "An agency already exists. CKB supports only one agency per deployment.",
+    "AGENCY_NAME_EXISTS": "An agency with this name already exists",
+    "AGENCY_DELETE_NOT_ALLOWED": "The agency cannot be deleted. CKB supports only one agency per deployment",
+    "MISSING_PARAMETER": "The file path is missing. Refresh the page and try again"
   }
 }

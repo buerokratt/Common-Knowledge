@@ -91,7 +91,7 @@ const FormMultiselect: FC<FormMultiselectProps> = (
       <div className='select__wrapper'>
         <div className='select__trigger' {...getToggleButtonProps()}>
           {selectedItems.length > 0 ? `${placeholder ?? t('global.chosen')} (${selectedItems.length})` : placeholderValue}
-          <Icon label='Dropdown icon' size='medium' icon={<MdArrowDropDown color='#5D6071' />} />
+          <Icon label={t('global.dropdownIcon')} size='medium' icon={<MdArrowDropDown color='#5D6071' />} />
         </div>
 
         <ul className='select__menu' {...getMenuProps()}>

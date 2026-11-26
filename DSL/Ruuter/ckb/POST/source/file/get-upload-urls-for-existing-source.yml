@@ -113,6 +113,7 @@ returnResponse:
 returnDuplicateError:
   assign:
     errorResponse:
+      code: "DUPLICATE_FILES"
       error: "Duplicate file names found"
       duplicateFiles: ${duplicatesResult.response.body}
   next: returnDuplicateErrorResponse

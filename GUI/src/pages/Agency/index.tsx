@@ -17,6 +17,7 @@ import {
   Agency,
   AgencyListParams,
 } from 'services/agencies';
+import { errorMessage } from 'services/errors';
 import './AgencyList.scss';
 
 const AgencyComponent: FC = () => {
@@ -114,7 +115,7 @@ const AgencyComponent: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.deleteError'),
+        message: errorMessage(error, t, 'knowledgeBase.deleteError'),
       });
     },
   });
@@ -199,26 +200,14 @@ const AgencyComponent: FC = () => {
     },
   ];
 
-  const agencyOptions = [
-    { label: 'Abc', value: 'abc' },
-    { label: 'Pvc', value: 'pvc' },
-    { label: 'Xyz', value: 'xyz' },
-  ];
-
-  const domainOptions = [
-    { label: 'Domain 1', value: 'domain1' },
-    { label: 'Domain 2', value: 'domain2' },
-    { label: 'Domain 3', value: 'domain3' },
-  ];
-
   // Show loading state
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   // Show error state
   if (error) {
-    return <div>Error loading agencies: {error.message}</div>;
+    return <div>{t('knowledgeBase.agenciesLoadError')}</div>;
   }
 
   return (

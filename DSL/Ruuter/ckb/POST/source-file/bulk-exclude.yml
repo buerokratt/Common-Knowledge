@@ -33,7 +33,7 @@ excludeSourceFiles:
 
 validateDatabaseUpdate:
   switch:
-    - condition: "${res.response.length == 0 || res.response.statusCodeValue >= 400}"
+    - condition: "${res.response.body.length == 0 || res.response.statusCodeValue >= 400}"
       next: databaseUpdateError
   next: checkExcluded
 
@@ -99,6 +99,13 @@ returnSuccess:
   next: end
 
 databaseUpdateError:
-  return: "No source files found or they have been updated by another process"
+  assign:
+    errorResponse:
+      code: "NOT_FOUND_OR_CHANGED"
+      error: "No source files found or they have been updated by another process"
+  next: returnDatabaseUpdateError
+
+returnDatabaseUpdateError:
+  return: ${errorResponse}
   status: 404
   next: end

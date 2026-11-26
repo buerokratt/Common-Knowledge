@@ -76,7 +76,28 @@
     "stop": "Peatus",
     "uploaded": "Üles laaditud",
     "adding": "Lisamine",
-    "retry": "Proovi uuesti"
+    "retry": "Proovi uuesti",
+    "file": "fail",
+    "files": "faili",
+    "includeFiles": "Kaasa failid",
+    "excludeFiles": "Välista failid",
+    "bulkDeleteSuccess": "Valitud failid kustutati edukalt ({{count}})",
+    "bulkDeleteError": "Valitud failide kustutamine ebaõnnestus",
+    "dropdownIcon": "Rippmenüü ikoon",
+    "months": {
+      "january": "Jaanuar",
+      "february": "Veebruar",
+      "march": "Märts",
+      "april": "Aprill",
+      "may": "Mai",
+      "june": "Juuni",
+      "july": "Juuli",
+      "august": "August",
+      "september": "September",
+      "october": "Oktoober",
+      "november": "November",
+      "december": "Detsember"
+    }
   },
   "sorting": {
     "desc": "kahanevalt",
@@ -607,7 +628,6 @@
     "cleaning": "Puhastamine",
     "notFound": "Ei leitud",
     "agencyCreated": "Asutuse lisamine õnnestus",
-    "agencyAlreadyExists": "Asutus on juba olemas. CKB toetab ühe rakenduse kohta vaid ühte agentuuri.",
     "agencyLoadError": "Asutuse laadimine ebaõnnestus",
     "agencyUpdated": "Asutuse uuendamine õnnestus",
     "agencyUpdateError": "Asutuse uuendamine ebaõnnestus",
@@ -618,7 +638,34 @@
     "in_review": "Ülevaatamisel",
     "not_found": "Ei leitud",
     "startCleaningNotification": "Kõik leheküljed on kraabitud. Enne jätkamist kustutage kõik leheküljed, mida te ei soovi vestlusrobotile kättesaadavaks teha, näiteks uudised ja arhiveeritud leheküljed. Kui olete oma valiku teinud, jätkake lehekülgede puhastamist, klõpsates nuppu \"Alusta puhastamist\".",
-    "cleaningStarted": "Puhastamine algas"
+    "cleaningStarted": "Puhastamine algas",
+    "cleaningStartError": "Puhastamise alustamine ebaõnnestus",
+    "stopError": "Protsessi peatamine ebaõnnestus",
+    "agencyCreateError": "Asutuse lisamine ebaõnnestus",
+    "bulkExcludeSuccess": "Valitud failid välistati edukalt ({{count}})",
+    "bulkIncludeSuccess": "Valitud failid kaasati edukalt ({{count}})",
+    "bulkExcludeError": "Valitud failide uuendamine ebaõnnestus",
+    "allFilesAlreadyIncluded": "Kõik valitud failid on juba kaasatud",
+    "allFilesAlreadyExcluded": "Kõik valitud failid on juba välistatud",
+    "scrapingFinished": "Kraapimine on lõpetatud!",
+    "startCleaning": "Alusta puhastamist",
+    "moreUrls": "... ja veel {{count}}",
+    "urlListSuccess": "Allikas loodi edukalt, URL-e: {{count}}",
+    "urlListError": "URL-ide nimekirjaga allika loomine ebaõnnestus",
+    "csvParsed": "CSV-failist loeti URL-e: {{count}}",
+    "csvParseError": "CSV-faili töötlemine ebaõnnestus",
+    "csvReadError": "CSV-faili lugemine ebaõnnestus",
+    "csvEmpty": "CSV-fail on tühi",
+    "csvNoUrls": "CSV-failist ei leitud URL-e",
+    "csvNoValidUrls": "CSV-failist ei leitud kehtivaid URL-e. URL peab algama http:// või https://",
+    "agenciesLoadError": "Asutuste laadimine ebaõnnestus",
+    "apiIntegrationsLoadError": "API integratsioonide laadimine ebaõnnestus",
+    "sourceLoadError": "Allika andmete laadimine ebaõnnestus",
+    "sourceNotFound": "Allikat ei leitud",
+    "unknownSourceType": "Tundmatu allika tüüp",
+    "timePlaceholder": "hh:mm",
+    "urlsLoaded": "Laaditud URL-e: {{count}}",
+    "apiIntegration": "API integratsioon"
 
   },
   "fileUpload": {
@@ -644,7 +691,8 @@
     "uploaded": "üles laaditud.",
     "overwriteFile": "on juba süsteemis olemas. Faili ülekirjutamine kustutab andmed. Kas soovid faili üle kirjutada?",
     "maxSizeAllowed": "Maksimaalne lubatud suurus:",
-    "of": "kohta"
+    "of": "kohta",
+    "deleteFile": "Kustuta {{name}}"
   },
   "reports": {
     "title": "Aruanded",
@@ -659,6 +707,27 @@
     "errorMessage": "Veateade",
     "results": "tulemust",
     "cleaningLog": "Puhastamise logi",
-    "scrapingLog": "Kraapimise logi"
+    "scrapingLog": "Kraapimise logi",
+    "loadError": "Aruannete laadimine ebaõnnestus",
+    "reportLoadError": "Aruande laadimine ebaõnnestus",
+    "notFound": "Aruannet ei leitud"
+  },
+  "validation": {
+    "required": "See väli on kohustuslik"
+  },
+  "errors": {
+    "SOURCE_NOT_FOUND": "Allikat ei leitud",
+    "SOURCE_BUSY": "Selle allika kraapimine või puhastamine on juba pooleli",
+    "SOURCE_NOT_IN_REVIEW": "Puhastamist saab alustada ainult siis, kui allikas on ülevaatamisel",
+    "AGENCY_NOT_FOUND": "Selle allika asutust ei leitud",
+    "NO_FILES_TO_CLEAN": "Selle allika puhul pole ülevaatamisel faile, mida puhastada",
+    "SCRAPING_REPORT_MISSING": "Kraapimise aruannet ei leitud. Enne puhastamist käivitage kraapimine vähemalt korra",
+    "INVALID_URL": "Palun sisesta kehtiv URL, mis algab http:// või https://",
+    "DUPLICATE_FILES": "Selles allikas on juba sama nimega failid",
+    "NOT_FOUND_OR_CHANGED": "Kirjet ei leitud või keegi teine on seda muutnud. Värskendage lehte ja proovige uuesti",
+    "AGENCY_ALREADY_EXISTS": "Asutus on juba olemas. CKB toetab ühe rakenduse kohta vaid ühte agentuuri.",
+    "AGENCY_NAME_EXISTS": "Sellise nimega asutus on juba olemas",
+    "AGENCY_DELETE_NOT_ALLOWED": "Asutust ei saa kustutada. CKB toetab ühe rakenduse kohta ainult ühte asutust",
+    "MISSING_PARAMETER": "Faili asukoht puudub. Värskendage lehte ja proovige uuesti"
   }
 }

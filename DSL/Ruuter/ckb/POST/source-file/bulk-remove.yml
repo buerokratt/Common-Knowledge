@@ -28,7 +28,7 @@ deleteSourceFilesFromDatabase:
 
 validateDatabaseDeletion:
   switch:
-    - condition: "${deleteDbResult.response.length == 0 || deleteDbResult.response.statusCodeValue >= 400}"
+    - condition: "${deleteDbResult.response.body.length == 0 || deleteDbResult.response.statusCodeValue >= 400}"
       next: databaseDeleteError
   next: transformToS3Paths
 
@@ -89,6 +89,13 @@ returnSuccess:
   next: end
 
 databaseDeleteError:
-  return: "No source files found or they have been updated by another process"
+  assign:
+    errorResponse:
+      code: "NOT_FOUND_OR_CHANGED"
+      error: "No source files found or they have been updated by another process"
+  next: returnDatabaseDeleteError
+
+returnDatabaseDeleteError:
+  return: ${errorResponse}
   status: 404
   next: end

@@ -28,7 +28,7 @@ deleteSourceFileFromDatabase:
 
 validateDatabaseDeletion:
   switch:
-    - condition: "${deleteDbResult.response.length == 0 || deleteDbResult.response.statusCodeValue >= 400}"
+    - condition: "${deleteDbResult.response.body.length == 0 || deleteDbResult.response.statusCodeValue >= 400}"
       next: databaseDeleteError
   next: deleteFromSearchIndex
 
@@ -73,7 +73,14 @@ returnSuccess:
   next: end
 
 databaseDeleteError:
-  return: "Source file not found or has been updated by another process"
+  assign:
+    errorResponse:
+      code: "NOT_FOUND_OR_CHANGED"
+      error: "Source file not found or has been updated by another process"
+  next: returnDatabaseDeleteError
+
+returnDatabaseDeleteError:
+  return: ${errorResponse}
   status: 404
   next: end
 

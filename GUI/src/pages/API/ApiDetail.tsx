@@ -33,6 +33,7 @@ import {
   ApiSourceFile,
   ApiSourceFilesListParams,
 } from 'services/sources';
+import { errorMessage } from 'services/errors';
 import {
   updateFileExclusion,
   refreshScrapedFile,
@@ -153,7 +154,7 @@ const ApiDetail: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.refreshError'),
+        message: errorMessage(error, t, 'knowledgeBase.refreshError'),
       });
     },
   });
@@ -174,7 +175,7 @@ const ApiDetail: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.updateError'),
+        message: errorMessage(error, t, 'knowledgeBase.updateError'),
       });
     },
   });
@@ -284,7 +285,7 @@ const ApiDetail: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.downloadError'),
+        message: errorMessage(error, t, 'knowledgeBase.downloadError'),
       });
     }
   };
@@ -444,7 +445,7 @@ const ApiDetail: FC = () => {
   ];
 
   if (isLoading) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   return (
@@ -468,7 +469,7 @@ const ApiDetail: FC = () => {
           <div>
             <Link to="/api" style={{ textDecoration: 'none' }}>
               <span className="agencies__agency">
-                {sourceData?.name || sourceData?.url || 'API Integration'}
+                {sourceData?.name || sourceData?.url || t('knowledgeBase.apiIntegration')}
               </span>
             </Link>
           </div>

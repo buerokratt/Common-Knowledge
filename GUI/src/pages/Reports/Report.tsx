@@ -197,20 +197,20 @@ const Report: FC = () => {
 
   // Show loading state
   if (isLoadingReport || isLoadingPages) {
-    return <div>Loading...</div>;
+    return <div>{t('global.loading')}</div>;
   }
 
   // Show error state
   if (reportError || pagesError) {
     return (
       <div>
-        Error loading report: {reportError?.message || pagesError?.message}
+        {t('reports.reportLoadError')}
       </div>
     );
   }
 
   if (!reportData) {
-    return <div>Report not found</div>;
+    return <div>{t('reports.notFound')}</div>;
   }
 
   return (

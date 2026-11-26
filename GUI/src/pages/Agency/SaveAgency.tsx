@@ -12,6 +12,7 @@ import {
   UpdateAgencyRequest,
   Agency,
 } from 'services/agencies';
+import { errorMessage } from 'services/errors';
 import './SaveAgency.scss';
 
 interface AgencyFormData {
@@ -56,7 +57,7 @@ const SaveAgency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.agencyLoadError'),
+        message: errorMessage(error, t, 'knowledgeBase.agencyLoadError'),
       });
     },
   });
@@ -80,9 +81,7 @@ const SaveAgency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.response?.status === 409
-          ? t('knowledgeBase.agencyAlreadyExists')
-          : error.message || t('knowledgeBase.agencyCreateError'),
+        message: errorMessage(error, t, 'knowledgeBase.agencyCreateError'),
       });
     },
   });
@@ -108,7 +107,7 @@ const SaveAgency: FC = () => {
       toast.open({
         type: 'error',
         title: t('global.notificationError'),
-        message: error.message || t('knowledgeBase.agencyUpdateError'),
+        message: errorMessage(error, t, 'knowledgeBase.agencyUpdateError'),
       });
     },
   });

@@ -41,7 +41,14 @@ validateNameUnique:
   next: updateAgency
 
 returnError:
-  return: "Agency with this name already exists"
+  assign:
+    errorResponse:
+      code: "AGENCY_NAME_EXISTS"
+      error: "Agency with this name already exists"
+  next: returnErrorResponse
+
+returnErrorResponse:
+  return: ${errorResponse}
   status: 400
   next: end
 
