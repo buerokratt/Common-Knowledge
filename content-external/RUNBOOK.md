@@ -174,7 +174,7 @@ the `content-external run` log line:
 |---|---|---|
 | `ConfigurationError` | The secret still holds a placeholder, `account_url` is missing or has a query string, it does not hold exactly one credential form, Vault answered 403/404, `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` is empty, or the agent token file is missing or empty. On Compose a 403 also follows an expired AppRole `secret_id` (24h TTL), and a missing token follows an unset `azure-blob` profile | Read the `content-external error` line for which one. Fix the secret, the setting or the `content-external-policy` grant. On Compose, start the `azure-blob` profile, or re-run `vault-init` (`docker compose up --force-recreate --no-deps vault-init`) to mint a new `secret_id`, at least daily. The next tick fails the same way until then |
 | `StoreError`, retryable | Vault unreachable, timed out, 429 or 5xx | Nothing; the next tick retries |
-| `StoreError`, permanent | Any other Vault 4xx, or a response that is not a KV v2 secret | Check `VAULT_ADDR` and `VAULT_SECRET_PATH` (on Helm, `contentExternal.vaultAgent.vaultAddr` and `contentExternal.azure.vaultSecretPath`) |
+| `StoreError`, permanent | Any other Vault 4xx, or a response that is not a KV v2 secret | Check `CKB_VAULT` (in `constants.ini`) and `VAULT_SECRET_PATH` (on Helm, `contentExternal.azure.vaultSecretPath`; the sidecar agent's own address is `contentExternal.vaultAgent.vaultAddr`, which should name the same Vault) |
 
 The image runs as root, which is the only reason it can read the agent's
 token file (owned by `vault:vault`, mode 0640). Adding a `USER` to the
@@ -184,22 +184,43 @@ agent's sink, or every Azure run fails reading the token.
 ## Export query ceiling (#320)
 
 Enumeration makes one watermark call and one document call per page, from
-`exporter/services/document_source.py`, each with the `CKB_RESQL_TIMEOUT`
-timeout (default 30 s). `CKB_RESQL` is the exporter's Resql base URL setting;
-its default is in `exporter/api/config.py`.
+`exporter/services/document_source.py`, through CKB's Ruuter-internal at
+`CKB_RUUTER_INTERNAL` (from `constants.ini`). No service calls Resql
+directly; each flow wraps one Resql query:
 
-- `GET $CKB_RESQL/agency/get_agency_export_watermark` (one row)
-- `GET $CKB_RESQL/source_file/list_agency_export_documents` (up to `EXPORT_PAGE_SIZE` documents)
+- `GET $CKB_RUUTER_INTERNAL/content-external/export-watermark?agencyBaseId=…`
+  → `agency/get_agency_export_watermark` (one row)
+- `GET $CKB_RUUTER_INTERNAL/content-external/export-documents?agencyBaseId=…&afterBaseId=…&pageSize=…`
+  → `source_file/list_agency_export_documents` (up to `EXPORT_PAGE_SIZE` documents)
+
+**Two timeouts, in order.** Each flow's Resql step has `timeout: 25000` (ms);
+the exporter's own read timeout, `CKB_QUERY_TIMEOUT`, is 35 s, so Ruuter always
+answers first. A slow query therefore surfaces as **HTTP 500 from Ruuter**,
+not as an exporter `ReadTimeout`. Startup refuses `CKB_QUERY_TIMEOUT` below
+30 s (`MIN_QUERY_TIMEOUT_SECONDS` in `exporter/services/ckb_ruuter.py`), and
+`tests/test_content_external_flows.py` fails if the flows' `timeout:` and
+`EXPORT_FLOW_TIMEOUT_SECONDS` there drift apart.
+
+**Ruuter limits.** Ruuter buffers only 256 KB of a response by default; the
+document flow sets `limit: 8192` (KB) because a 1,000-row page is about
+0.81 MB. A page over the limit fails every run with HTTP 500
+(`DataBufferLimitException` in ruuter-internal's log; verified locally
+2026-11-28), so startup refuses `EXPORT_PAGE_SIZE` above 5,000
+(`MAX_EXPORT_PAGE_SIZE`, ~4 MB, half the limit). To go higher, raise the
+flow's `limit:`, `DOCUMENTS_FLOW_LIMIT_KB` and `MAX_EXPORT_PAGE_SIZE` together. CKB's `httpCodesAllowList` passes a Resql 400/500
+through as HTTP 200, so each flow checks Resql's status itself and answers
+502 instead; a missing param answers 400.
 
 Both take the latest row per `base_id`, so their cost grows with **every
 version row** of the agency, not with its document count. `source_file` gets a
 new row on every status change. Document pages use an exclusive `base_id` cursor,
 starting at `NIL_UUID` from `document_source.py`; a short page ends the listing.
 An exact multiple of the page size requires a final empty page. All pages must
-succeed before any documents are returned. Each call has the `CKB_RESQL_TIMEOUT`
-timeout. Connection errors, 408/429 and 5xx are retried under F8 (up to 4
-attempts, full jitter, `Retry-After` honoured), each logged as `Resql <query>:
-attempt N of 4 failed`. A **read timeout is never retried**, for the reason in
+succeed before any documents are returned. Connection errors, 408/429 and
+502/503/504 are retried under F8 (up to 4 attempts, full jitter, `Retry-After`
+honoured), each logged as `CKB read <path>: attempt N of 4 failed`. **Neither a
+read timeout nor a Ruuter 500 is retried** — a 500 is how a flow reports its
+Resql step timing out — for the reason in
 [Do not retry immediately after a timeout](#do-not-retry-immediately-after-a-timeout):
 the run fails and the next tick is the retry. Successful enumeration logs the
 agency, page count (including an empty terminal page), and total row count.
@@ -303,7 +324,8 @@ Sources and conditions:
 
 ### With pagination — measured 2026-10-21
 
-`EXPORT_PAGE_SIZE` defaults to **1,000**, with a minimum of 1. It is the only
+`EXPORT_PAGE_SIZE` defaults to **1,000**, from 1 to 5,000 (the ceiling is the
+export-documents flow's response limit, above). It is the only
 size measured whose pages stayed well under the 15 s per-call budget in every
 run, and whose first and middle page plans both use the index with no Sort.
 
@@ -358,8 +380,10 @@ What the numbers show:
 
 - **Ceiling**: ≥ 50k documents (about 1M version rows) and ≥ 1M source
   version rows per agency, at the default page size; 200k documents not
-  measured. The budget is 15 s per HTTP call, half of the default
-  `CKB_RESQL_TIMEOUT` (30 s). On the 2026-10-20/21 machine the slowest call at
+  measured. The budget is 15 s per HTTP call, well under the flows' 25 s
+  Resql step timeout (the measurements below called Resql directly with the
+  then 30 s exporter timeout; going through Ruuter-internal adds its JSON
+  handling to each page). On the 2026-10-20/21 machine the slowest call at
   50k was the watermark at 4.5 s (30%) and the slowest page 1.53 s. With the
   source-deletion fix, on the 2026-10-22 machine, the slowest call at 50k
   with 990k source versions was the watermark at 1.35 s (9%) and the slowest
@@ -468,21 +492,29 @@ itself, and use the target deployment's Postgres settings.
    leading with `base_id, updated_at DESC`, with no heap fetches after a
    vacuum.
 
-3. **Time both calls end to end through Resql**, one call at a time, three
-   times each:
+3. **Time both calls end to end through Ruuter-internal**, the path the
+   exporter uses, one call at a time, three times each (`CKB_RUUTER_INTERNAL`
+   from `constants.ini`, e.g. `http://ruuter-internal:8089/ckb`, run from a
+   container on `bykstack`):
 
    ```bash
-   curl -s -o /dev/null --max-time 300 \
+   curl -s --get -o /dev/null --max-time 300 \
+     --data-urlencode 'agencyBaseId=<agency>' \
      -w 'watermark %{http_code} %{time_total}s %{size_download}B\n' \
-     "$CKB_RESQL/agency/get_agency_export_watermark?agency_base_id=<agency>"
+     "$CKB_RUUTER_INTERNAL/content-external/export-watermark"
    curl -s --get --max-time 300 \
-     --data-urlencode 'agency_base_id=<agency>' \
-     --data-urlencode 'after_base_id=<cursor>' \
-     --data-urlencode 'page_size=<page-size>' \
+     --data-urlencode 'agencyBaseId=<agency>' \
+     --data-urlencode 'afterBaseId=<cursor>' \
+     --data-urlencode 'pageSize=<page-size>' \
      -o <output-file> \
      -w 'documents %{http_code} %{time_total}s %{size_download}B\n' \
-     "$CKB_RESQL/source_file/list_agency_export_documents"
+     "$CKB_RUUTER_INTERNAL/content-external/export-documents"
    ```
+
+   A 500 here means Resql was unreachable, the step hit its 25 s timeout, or
+   the page outgrew the flow's `limit:` — ruuter-internal's log tells them
+   apart (`DataBufferLimitException` for the last). To separate Ruuter's cost
+   from the query's, compare with the EXPLAIN ANALYZE timings from step 2.
 
 4. **Compare** against the table above.
    - Is every page well under 15 s, including pages near the middle?
@@ -546,19 +578,47 @@ After cleanup, verify the seed watermark has `maxUpdatedAt` at 12:00 and
 `liveCount` 3, and that following the paged endpoint to a short page yields the
 seed's four rows.
 
+## A run fails with HTTP 500 from a CKB read
+
+The run line shows `error_type=AgencyCountUnavailableError` or
+`DocumentSourceError`, and the error line reads, for example:
+
+```
+agency count: Ruuter-internal read failed (HTTP 500: Resql down or timed out,
+page over the flow's limit, or content-external flows not deployed; see
+ruuter-internal's log)
+```
+
+Ruuter answers every one of these with a bare 500, so the exporter cannot tell
+them apart; ruuter-internal's log can. Find the request for the
+`content-external/*` flow at that time:
+
+| ruuter-internal's log shows | Cause | What to do |
+|---|---|---|
+| Nothing at all for the request — no `Request received for DSL: content-external/…` line (observed locally 2026-11-28: an undeployed flow answers 500 and logs nothing) | **The flows are not deployed.** In Kubernetes ruuter-internal clones its DSL from upstream `buerokratt/Common-Knowledge@dev`; an exporter image deployed before the flows were merged there fails every run | Merge `DSL/Ruuter.internal/ckb/GET/content-external/` upstream, then restart ruuter-internal (it reads DSL only at startup) |
+| The Resql step failing with a connection error | **Resql was down or restarting** | Nothing, once Resql is back. This is **expected**: a Ruuter 500 is never retried (it may be a query still running), so a Resql restart fails that run, and the next tick recovers it |
+| The Resql step failing with a timeout after 25 s | **A query is too slow** | See [Signs the ceiling is being hit](#signs-the-ceiling-is-being-hit) |
+| `DataBufferLimitException` | **A page outgrew the flow's `limit:`** | Should not happen within `EXPORT_PAGE_SIZE`'s 5,000 ceiling; check for unusually long rows, and lower `EXPORT_PAGE_SIZE` |
+
+A 404 from these flows says the same as the first row: `are the
+content-external flows deployed in ruuter-internal?`.
+
 ## Signs the ceiling is being hit
 
 **What the operator sees:**
 
 - **Exporter**: every run fails during enumeration with
-  `DocumentSourceError: could not read Resql`. Its cause is
-  `requests.exceptions.ReadTimeout … (read timeout=30.0)`. It fails the same
-  way on every run.
+  `DocumentSourceError: CKB read /content-external/export-documents:
+  Ruuter-internal read failed (HTTP 500: Resql down or timed out, …)` (or
+  `…/export-watermark`). It fails the same way on every run, and is not
+  retried within the run.
+- **ruuter-internal log**: the flow's Resql step failing with a WebClient
+  timeout after 25 s.
 - **resql-ckb log**: `AsyncRequestNotUsableException … Broken pipe` for
-  `/ckb/source_file/list_agency_export_documents`. Resql finished after the
-  exporter had already disconnected.
+  `/ckb/source_file/list_agency_export_documents`. Resql finished after Ruuter
+  had already disconnected.
 - **Postgres**: `pg_stat_activity` shows the export query still `active`
-  after more than 30 s. The watermark waits on `BufFileRead` while its Sort
+  after more than 25 s. The watermark waits on `BufFileRead` while its Sort
   spills to disk. A document page at the default size does not sort, so a
   slow page is reading the heap. Abandoned queries keep running,
   so each run adds load for the next one.
@@ -567,8 +627,8 @@ seed's four rows.
 
 1. Find the agency's version-row count (step 1 above) and compare it with the
    table.
-2. Cancel export queries that have run longer than `CKB_RESQL_TIMEOUT`
-   (30 s by default). Their exporter request has already timed out. Resql keeps its
+2. Cancel export queries that have run longer than the flows' 25 s step
+   timeout. Their request has already timed out in Ruuter. Resql keeps its
    database connection open, so a client that has gone is not visible in
    `pg_stat_activity`; the age of the query is the signal:
 
@@ -578,7 +638,7 @@ seed's four rows.
    WHERE state = 'active'
      AND (query LIKE '%retain removal and hold signals%'
           OR query LIKE '%advance the export watermark%')
-     AND now() - query_start > interval '<CKB_RESQL_TIMEOUT> seconds'
+     AND now() - query_start > interval '25 seconds'
      AND pid <> pg_backend_pid();
    ```
 
@@ -588,8 +648,9 @@ seed's four rows.
    them. The file names themselves do not appear in the query text. If a
    description changes, update the pattern.
 3. Re-measure as above. If a document page is over 15 s, reduce the page
-   size and inspect its query plan. Raising `CKB_RESQL_TIMEOUT` only hides the problem until
-   the next growth step.
+   size and inspect its query plan. Raising the flows' `timeout:` (and
+   `CKB_QUERY_TIMEOUT` above it) only hides the problem until the next growth
+   step.
 
 ## Dead-lettered documents
 
@@ -644,7 +705,9 @@ instead needs no CKB change: the next run reads it again on its own.
 
 ## Do not retry immediately after a timeout
 
-Resql does not cancel the query when the client disconnects. A retry
+Neither Ruuter nor Resql cancels the query when the client disconnects, so a
+Ruuter 500 (its step timed out) leaves the query running just as an exporter
+timeout would. A retry
 straight after a timeout therefore runs alongside the abandoned query, and
 back-to-back calls stack. Before pagination, 7 of 9 back-to-back 50k
 `list_documents()` calls hit the 30 s timeout, while single calls on an idle

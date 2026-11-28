@@ -539,6 +539,9 @@ services:
       - 8125:8125
     volumes:
       - content-external-work:/var/lib/content-external
+      # Service endpoints (CKB_RUUTER_INTERNAL, CKB_VAULT): never defaults in
+      # code. Startup refuses without CKB_RUUTER_INTERNAL.
+      - ./constants.ini:/app/constants.ini:ro
       # vault-agent-content's token, read per llm-module operation (L11) and
       # per Azure Blob store build (Stage H). Empty unless the llm-module or
       # azure-blob profile runs; an s3 deployment never reads it. No

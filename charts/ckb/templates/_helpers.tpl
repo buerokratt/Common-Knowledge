@@ -79,10 +79,11 @@ What it refuses, and why:
   service account; binding it to `default` hands the credential to every pod
   in the namespace that runs as `default`;
 - `approle` without the Secret holding role_id and secret_id;
-- VAULT_ADDR or VAULT_TOKEN_PATH also set in contentExternal.env. The sidecar
-  sets both, from the same values it mounts the token with; a second value
-  would win or lose by list order, and a token path that misses the mount is
-  `credential unavailable` on every push;
+- VAULT_TOKEN_PATH also set in contentExternal.env. The sidecar sets it from
+  the same value it mounts the token with; a second value would win or lose
+  by list order, and a token path that misses the mount is `credential
+  unavailable` on every push. (Vault's address is CKB_VAULT in constants.ini,
+  not an env var the chart sets.)
 - the Vault Agent Injector's annotation as well. Two agents would each write
   a token, to different places.
 */}}
@@ -99,8 +100,8 @@ What it refuses, and why:
 {{- fail "contentExternal.vaultAgent.auth.method=approle needs contentExternal.vaultAgent.auth.approleSecret.name: a Secret holding the role_id and secret_id. Note that vault/init.sh gives secret_id a 24h TTL, so something must rotate that Secret — kubernetes auth needs no rotation." -}}
 {{- end -}}
 {{- range concat (.Values.contentExternal.env | default list) (.Values.contentExternal.extraEnv | default list) -}}
-{{- if has .name (list "VAULT_ADDR" "VAULT_TOKEN_PATH") -}}
-{{- fail (printf "contentExternal.env or extraEnv sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.vaultAddr / vaultAgent.tokenMountPath). Remove it." .name) -}}
+{{- if eq .name "VAULT_TOKEN_PATH" -}}
+{{- fail (printf "contentExternal.env or extraEnv sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.tokenMountPath). Remove it." .name) -}}
 {{- end -}}
 {{- end -}}
 {{- if hasKey (.Values.contentExternal.podAnnotations | default dict) "vault.hashicorp.com/agent-inject" -}}

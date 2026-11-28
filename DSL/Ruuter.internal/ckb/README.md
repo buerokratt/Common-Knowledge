@@ -41,6 +41,12 @@ DSL/Ruuter.internal/ckb/
 - `POST /pipeline/upload-file-sync` - Synchronous file upload
 - `POST /pipeline/delete-file-sync` - Synchronous file deletion
 
+### content-external reads
+content-external reads CKB only through these flows, never Resql directly. Each returns 400 on a missing param, 502 when Resql answers with an error, and 500 (null body) when Resql is unreachable or times out.
+- `GET /content-external/agencies?page=&pageSize=&sorting=` - One page of `list_agencies`; the one-agency check reads `total`
+- `GET /content-external/export-watermark?agencyBaseId=` - `get_agency_export_watermark`: latest `updated_at` and live document count
+- `GET /content-external/export-documents?agencyBaseId=&afterBaseId=&pageSize=` - One keyset page of `list_agency_export_documents`. Sets `limit: 8192` (KB) because a 1,000-row page is ~0.81 MB against Ruuter's 256 KB default
+
 ### Source File Operations
 - `GET /source-file/get-one-source-file-to-scrape` - Get next file for processing
 - `POST /source-file/add-scrapped-file` - Add scraped file to database

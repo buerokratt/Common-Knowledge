@@ -564,7 +564,7 @@ def _llm_module_settings(
         llm_module_read_timeout=120.0,
         llm_module_vault_secret_path="llm/connections/llm_module/content",
         llm_module_allow_proposed_contract=allow_proposed,
-        vault_addr="http://vault.invalid:8200",
+        ckb_vault="http://vault.invalid:8200",
         vault_token_path="/nonexistent/agent/token",
     )
 

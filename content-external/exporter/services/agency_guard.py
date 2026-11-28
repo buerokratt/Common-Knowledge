@@ -15,55 +15,46 @@ termination guarantee is a claimed flag on the agency row, and rules 3-5
 forbid this service writing any `agency` column. So: assert, loudly.
 
 WHY THE TWO ENTRY POINTS BEHAVE DIFFERENTLY. `count_agencies` is an HTTP call
-to Resql, so "I could not find out" is a real third answer alongside one and
-many, and what to do about it depends on when you asked:
+to CKB's Ruuter-internal, so "I could not find out" is a real third answer
+alongside one and many, and what to do about it depends on when you asked:
 
   at startup    more than one -> refuse to start
                 unreachable   -> WARN and serve anyway
   at run start  more than one -> fail the run
                 unreachable   -> fail the run
 
-A hard startup assert would couple this container's boot to Resql being up,
-which neither docker-compose (no depends_on for this service) nor Kubernetes
-guarantees — so a transient Resql restart would become a CrashLoopBackOff
+A hard startup assert would couple this container's boot to Ruuter and Resql
+being up, which neither docker-compose (no depends_on for this service) nor
+Kubernetes guarantees — so a transient restart would become a CrashLoopBackOff
 here, and a service that will not boot is worse than one that boots and warns.
 At run start the answer is load-bearing and the run needs the agency list
 anyway, so there is nothing to tolerate.
 
-WHY IT READS RESQL DIRECTLY. `list_agencies` has no Ruuter-internal wrapper
-today; its only caller is the public DSL/Ruuter/ckb/GET/agency/all.yml, and G1
-says to reuse that query rather than add one.
-
-That bypasses the repo-wide convention in CLAUDE.md that every read goes
-through RUUTER_INTERNAL, so it is a **named exception** rather than a local
-judgement call — see "CKB_RESQL is a named exception to the RUUTER_INTERNAL
-convention" in content-external-pipeline.md, which is the authority for it.
-Do not extend the exception from here: it covers read-only, query-named
-SELECTs and nothing else. Stage E's enumeration queries inherit it; a write
-would not.
+The read goes through the Ruuter-internal flow content-external/agencies
+(services/ckb_ruuter.py), which wraps Resql's `list_agencies`. No service
+calls Resql directly.
 """
 
 import logging
 from typing import TYPE_CHECKING
-
-import requests
 
 from exporter.core.redaction import sanitize_sensitive_text
 from exporter.services.backoff import (
     DEFAULT_POLICY,
     NO_RETRY,
     BackoffPolicy,
-    is_retryable_resql,
-    retry_with_backoff,
 )
+from exporter.services.ckb_ruuter import AGENCIES_PATH, CkbReadError, get_rows
 
 if TYPE_CHECKING:
     from exporter.api.config import Settings
 
 logger = logging.getLogger(__name__)
 
-# Short, because this runs in the startup path. A slow Resql should delay boot
-# by seconds and then warn, not hold the container unable to serve.
+# Short, because this runs in the startup path. A slow CKB should delay boot
+# by seconds and then warn, not hold the container unable to serve. Must stay
+# above the content-external/agencies flow's step `timeout:` (4 s), so Ruuter
+# answers before this gives up.
 STARTUP_TIMEOUT_SECONDS = 5.0
 
 # One of the enum values in list_agencies.sql's declaration. Note that
@@ -110,40 +101,22 @@ def count_agencies(
     matters here.
 
     `policy` is F8's backoff. NO_RETRY by default, which is what the startup
-    check wants; the run-start check retries a transient Resql blip. A read
-    timeout is never retried, as for every Resql query: Resql does not cancel
-    the abandoned query, so a retry would stack a second one in Postgres.
+    check wants; the run-start check retries a transient blip. Neither a read
+    timeout nor a Ruuter 500 is ever retried (backoff.is_retryable_ruuter_read):
+    the query may still be running, and a retry would stack a second one in
+    Postgres.
     """
-    url = f"{settings.ckb_resql}/agency/list_agencies"
-    params = {"page": 1, "page_size": _PAGE_SIZE, "sorting": _SORTING}
-
-    def get() -> requests.Response:
-        response = requests.get(url, params=params, timeout=timeout)
-        response.raise_for_status()
-        return response
-
     try:
-        response = retry_with_backoff(
-            get,
-            describe="Resql list_agencies",
+        payload = get_rows(
+            settings.ckb_ruuter_internal,
+            AGENCIES_PATH,
+            {"page": 1, "pageSize": _PAGE_SIZE, "sorting": _SORTING},
+            timeout=timeout,
             policy=policy,
-            is_retryable=is_retryable_resql,
+            describe="agency count",
         )
-    except requests.RequestException as exc:
-        raise AgencyCountUnavailableError(f"could not reach Resql: {exc}") from exc
-
-    try:
-        payload = response.json()
-    except ValueError as exc:
-        raise AgencyCountUnavailableError("Resql returned a non-JSON body") from exc
-
-    # Resql returns the rows directly. The dict form is Ruuter's envelope,
-    # accepted in case this ever moves behind an internal endpoint.
-    if isinstance(payload, dict):
-        payload = payload.get("response", payload)
-
-    if not isinstance(payload, list):
-        raise AgencyCountUnavailableError("Resql did not return a list of agencies")
+    except CkbReadError as exc:
+        raise AgencyCountUnavailableError(str(exc)) from exc
 
     if not payload:
         # A CKB with no agency yet. Nothing to starve, so not a violation.
@@ -172,7 +145,7 @@ def check_single_agency_at_startup(
     """Boot-tolerant N=1 assertion. Returns the count, or None if unknown.
 
     Raises MultipleAgenciesError when the answer is definite and wrong. An
-    unreachable Resql is a warning: see the module docstring for why boot must
+    unreachable CKB is a warning: see the module docstring for why boot must
     not depend on it.
     """
     try:
@@ -180,7 +153,7 @@ def check_single_agency_at_startup(
     except AgencyCountUnavailableError as exc:
         logger.warning(
             "could not confirm this deployment has exactly one agency (%s). "
-            "Serving anyway, because Resql may still be starting and a "
+            "Serving anyway, because CKB may still be starting and a "
             "service that refuses to boot is worse than one that warns. The "
             "check is repeated authoritatively at the start of every export.",
             sanitize_sensitive_text(str(exc)),
@@ -204,9 +177,10 @@ def require_single_agency(
 
     Raises on both failure modes. Stage F calls this before taking the lock:
     at that point the run needs the agency list regardless, so an unreachable
-    Resql is a failed run and not something to tolerate — and a failed run is
-    visible, which silent starvation is not. A transient failure is retried
-    with backoff first (F8), so a Resql restart costs seconds, not a run.
+    CKB is a failed run and not something to tolerate — and a failed run is
+    visible, which silent starvation is not. A transient failure (a connection
+    error, a 502) is retried with backoff first (F8); a Ruuter 500 is not,
+    because it may be a timed-out query still running.
     """
     count = count_agencies(settings, timeout=timeout, policy=policy)
     if count > 1:

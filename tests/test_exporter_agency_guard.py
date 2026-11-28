@@ -25,11 +25,17 @@ from exporter.services.agency_guard import (
 )
 from exporter.services.backoff import BackoffPolicy
 
-GUARD = "exporter.services.agency_guard.requests.get"
+# Every CKB read goes through services/ckb_ruuter.py's requests.get.
+GUARD = "exporter.services.ckb_ruuter.requests.get"
+
+RUUTER_INTERNAL = "http://ruuter-internal.test:8089/ckb"
 
 
 def _settings() -> Settings:
-    return Settings(content_work_dir="/var/lib/content-external")  # pyright: ignore[reportCallIssue]
+    return Settings(  # pyright: ignore[reportCallIssue]
+        content_work_dir="/var/lib/content-external",
+        ckb_ruuter_internal=RUUTER_INTERNAL,
+    )
 
 
 class _Response:
@@ -39,12 +45,13 @@ class _Response:
         self, payload: object = None, *, status: int = 200, body_is_json: bool = True
     ) -> None:
         self._payload = payload
-        self._status = status
+        self.status_code = status
+        self.headers: dict[str, str] = {}
         self._body_is_json = body_is_json
 
     def raise_for_status(self) -> None:
-        if self._status >= 400:
-            raise requests.HTTPError(str(self._status))
+        if self.status_code >= 400:
+            raise requests.HTTPError(str(self.status_code), response=self)  # pyright: ignore[reportArgumentType]
 
     def json(self) -> object:
         if not self._body_is_json:
@@ -85,13 +92,13 @@ def _rows(total: int) -> list[dict[str, object]]:
 # --------------------------------------------------------------------------
 
 
-def test_it_reads_resql_directly(monkeypatch: pytest.MonkeyPatch) -> None:
-    """list_agencies has no Ruuter-internal wrapper, and adding one here
-    would pre-empt G1's "reuse, do not add one"."""
+def test_it_reads_through_ruuter_internal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """No service calls Resql directly: the read goes through the
+    content-external/agencies flow, at CKB_RUUTER_INTERNAL."""
     captured = _stub(monkeypatch, _Response(_rows(1)))
     count_agencies(_settings())
 
-    assert captured["url"] == "http://resql-ckb:8090/ckb/agency/list_agencies"
+    assert captured["url"] == f"{RUUTER_INTERNAL}/content-external/agencies"
 
 
 def test_it_asks_for_a_single_row(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -100,8 +107,7 @@ def test_it_asks_for_a_single_row(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = _stub(monkeypatch, _Response(_rows(1)))
     count_agencies(_settings())
 
-    assert captured["params"]["page_size"] == 1
-    assert captured["params"]["page"] == 1
+    assert captured["params"] == {"page": 1, "pageSize": 1, "sorting": "name asc"}
 
 
 def test_the_sorting_value_is_in_the_declared_enum(
@@ -176,8 +182,10 @@ def test_a_non_numeric_total_is_unavailable(
 
 
 def test_a_connection_error_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
-    _raiser(monkeypatch, requests.ConnectionError("resql is not up"))
-    with pytest.raises(AgencyCountUnavailableError, match="could not reach Resql"):
+    _raiser(monkeypatch, requests.ConnectionError("ruuter is not up"))
+    with pytest.raises(
+        AgencyCountUnavailableError, match="Ruuter-internal read failed"
+    ):
         count_agencies(_settings())
 
 
@@ -199,20 +207,30 @@ def test_a_non_json_body_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None
         count_agencies(_settings())
 
 
-@pytest.mark.parametrize("payload", ["a string", 42, None])
+@pytest.mark.parametrize("payload", [42, None, {"response": 42}])
 def test_a_non_list_payload_is_unavailable(
     monkeypatch: pytest.MonkeyPatch, payload: object
 ) -> None:
     _stub(monkeypatch, _Response(payload))
-    with pytest.raises(AgencyCountUnavailableError, match="list of agencies"):
+    with pytest.raises(AgencyCountUnavailableError, match="did not return a list"):
         count_agencies(_settings())
 
 
-def test_a_ruuter_style_envelope_is_unwrapped(
+@pytest.mark.parametrize("payload", ["Bad Request", {"response": "Bad Request"}])
+def test_a_ruuter_error_string_is_unavailable_not_data(
+    monkeypatch: pytest.MonkeyPatch, payload: object
+) -> None:
+    """CKB's httpCodesAllowList lets a Resql 400/500 through Ruuter as HTTP
+    200 with the reason phrase as the body. That is an error, never rows."""
+    _stub(monkeypatch, _Response(payload))
+    with pytest.raises(AgencyCountUnavailableError, match="error message"):
+        count_agencies(_settings())
+
+
+def test_ruuters_envelope_is_unwrapped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Resql returns rows directly; the envelope is accepted in case this
-    ever moves behind an internal endpoint."""
+    """Ruuter wraps a flow's return value as {"response": value}."""
     _stub(monkeypatch, _Response({"response": _rows(1)}))
     assert count_agencies(_settings()) == 1
 
@@ -245,15 +263,15 @@ def test_startup_refuses_for_more_than_one_agency(
     assert "never be exported" in message
 
 
-def test_startup_warns_and_continues_when_resql_is_unreachable(
+def test_startup_warns_and_continues_when_ckb_is_unreachable(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """Load-bearing. A hard assert here would couple this container's boot to
-    Resql being up, which neither compose (no depends_on) nor Kubernetes
-    guarantees — so a transient Resql restart would become a
+    Ruuter and Resql being up, which neither compose (no depends_on) nor
+    Kubernetes guarantees — so a transient restart would become a
     CrashLoopBackOff, and a service that will not boot is worse than one that
     boots and warns."""
-    _raiser(monkeypatch, requests.ConnectionError("resql is not up yet"))
+    _raiser(monkeypatch, requests.ConnectionError("ruuter is not up yet"))
 
     with caplog.at_level(logging.WARNING, logger="exporter.services.agency_guard"):
         assert check_single_agency_at_startup(_settings()) is None
@@ -272,7 +290,7 @@ def test_the_startup_warning_is_sanitised(
     this service sanitises it."""
     _raiser(
         monkeypatch,
-        requests.ConnectionError("http://user:hunter2@resql/agency?token=abc123"),
+        requests.ConnectionError("http://user:hunter2@ruuter/agency?token=abc123"),
     )
 
     with caplog.at_level(logging.WARNING, logger="exporter.services.agency_guard"):
@@ -322,13 +340,13 @@ def test_run_start_fails_for_more_than_one_agency(
         require_single_agency(_settings())
 
 
-def test_run_start_does_not_tolerate_an_unreachable_resql(
+def test_run_start_does_not_tolerate_an_unreachable_ckb(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The asymmetry with startup, asserted. At run start the export needs
     the agency list regardless, so there is nothing to tolerate — and a
     failed run is visible, which silent starvation is not."""
-    _raiser(monkeypatch, requests.ConnectionError("resql is down"))
+    _raiser(monkeypatch, requests.ConnectionError("ruuter is down"))
     with pytest.raises(AgencyCountUnavailableError):
         require_single_agency(_settings(), policy=_INSTANT)
 
@@ -345,7 +363,7 @@ def _flaky(monkeypatch: pytest.MonkeyPatch, failures: int) -> list[int]:
     def fake_get(_url: str, **_kwargs: object) -> object:
         calls.append(1)
         if len(calls) <= failures:
-            raise requests.ConnectionError("resql is restarting")
+            raise requests.ConnectionError("ruuter is restarting")
         return _Response(_rows(1))
 
     monkeypatch.setattr(GUARD, fake_get)
@@ -355,23 +373,68 @@ def _flaky(monkeypatch: pytest.MonkeyPatch, failures: int) -> list[int]:
 def test_run_start_retries_a_transient_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """F8. A Resql restart at :17 costs seconds, not the hour's run."""
+    """F8. A Ruuter restart at :17 costs seconds, not the hour's run."""
     calls = _flaky(monkeypatch, failures=2)
     assert require_single_agency(_settings(), policy=_INSTANT) == 1
     assert len(calls) == 3
 
 
-def test_run_start_does_not_retry_a_read_timeout(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Resql does not cancel a query whose client gave up, so a retry would
-    run alongside the abandoned one in Postgres. The run fails instead, and
-    the next tick is the retry — the same carve-out Stage E's queries take."""
+def _statuses(monkeypatch: pytest.MonkeyPatch, *statuses: int) -> list[int]:
+    """Answer each call with the next status (then one agency). Returns the
+    call log."""
     calls: list[int] = []
 
     def fake_get(_url: str, **_kwargs: object) -> object:
         calls.append(1)
-        raise requests.ReadTimeout("resql is slow")
+        if len(calls) <= len(statuses):
+            return _Response(status=statuses[len(calls) - 1])
+        return _Response(_rows(1))
+
+    monkeypatch.setattr(GUARD, fake_get)
+    return calls
+
+
+def test_run_start_retries_a_502_from_the_flow(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """502 is the flow saying Resql answered with an error: nothing is left
+    running, so a retry cannot stack load."""
+    calls = _statuses(monkeypatch, 502)
+    assert require_single_agency(_settings(), policy=_INSTANT) == 1
+    assert len(calls) == 2
+
+
+def test_run_start_does_not_retry_a_ruuter_500(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """500 is Ruuter aborting the flow, which is also how its Resql step
+    timing out looks. That query may still be running, so no retry."""
+    calls = _statuses(monkeypatch, 500)
+    with pytest.raises(AgencyCountUnavailableError, match="HTTP 500"):
+        require_single_agency(_settings(), policy=_INSTANT)
+    assert len(calls) == 1
+
+
+def test_run_start_does_not_retry_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    """400 is the flow reporting a missing param: drift, not a blip."""
+    calls = _statuses(monkeypatch, 400)
+    with pytest.raises(AgencyCountUnavailableError):
+        require_single_agency(_settings(), policy=_INSTANT)
+    assert len(calls) == 1
+
+
+def test_run_start_does_not_retry_a_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Neither Ruuter nor Resql cancels a query whose client gave up, so a
+    retry would run alongside the abandoned one in Postgres. The run fails
+    instead, and the next tick is the retry — the same carve-out Stage E's
+    reads take."""
+    calls: list[int] = []
+
+    def fake_get(_url: str, **_kwargs: object) -> object:
+        calls.append(1)
+        raise requests.ReadTimeout("ruuter is slow")
 
     monkeypatch.setattr(GUARD, fake_get)
     with pytest.raises(AgencyCountUnavailableError):
@@ -382,13 +445,13 @@ def test_run_start_does_not_retry_a_read_timeout(
 def test_run_start_retries_a_connect_timeout(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A connect timeout never reached Resql, so there is nothing to stack."""
+    """A connect timeout never reached Ruuter, so there is nothing to stack."""
     calls: list[int] = []
 
     def fake_get(_url: str, **_kwargs: object) -> object:
         calls.append(1)
         if len(calls) == 1:
-            raise requests.ConnectTimeout("resql is not accepting")
+            raise requests.ConnectTimeout("ruuter is not accepting")
         return _Response(_rows(1))
 
     monkeypatch.setattr(GUARD, fake_get)

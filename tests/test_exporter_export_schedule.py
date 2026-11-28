@@ -568,14 +568,18 @@ def test_the_client_unwraps_ruuters_response_envelope(
         return _Response({"response": TOGGLE_ON})
 
     monkeypatch.setattr("exporter.services.export_schedule.requests.get", get)
-    client = RuuterScheduleClient("http://ruuter-internal:8089/")
+    # CKB_RUUTER_INTERNAL as constants.ini spells it: the project layer
+    # included, so the paths must not add it again.
+    client = RuuterScheduleClient("http://ruuter-internal:8089/ckb/")
 
     assert client.content_export_status() == TOGGLE_ON
     assert client.content_export() == TOGGLE_ON
     assert urls == [
-        "http://ruuter-internal:8089" + CONTENT_EXPORT_STATUS_PATH,
-        "http://ruuter-internal:8089" + CONTENT_EXPORT_PATH,
+        "http://ruuter-internal:8089/ckb/pipeline/content-export-status",
+        "http://ruuter-internal:8089/ckb/pipeline/content-export",
     ]
+    assert CONTENT_EXPORT_STATUS_PATH == "/pipeline/content-export-status"
+    assert CONTENT_EXPORT_PATH == "/pipeline/content-export"
 
 
 def test_the_client_accepts_an_unwrapped_answer(

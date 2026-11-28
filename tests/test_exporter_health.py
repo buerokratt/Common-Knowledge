@@ -255,11 +255,11 @@ def test_startup_refuses_when_more_than_one_agency_exists(
     assert "2 agencies" in str(excinfo.value)
 
 
-def test_startup_survives_an_unreachable_resql(
+def test_startup_survives_an_unreachable_ckb(
     work_dir_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The other half of A17's asymmetry: the agency check is the only startup
-    check that tolerates its own failure, because Resql may still be starting
+    check that tolerates its own failure, because CKB may still be starting
     and this service has no depends_on for it."""
     monkeypatch.setattr(
         "exporter.api.app.check_single_agency_at_startup", lambda _settings: None

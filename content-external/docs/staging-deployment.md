@@ -39,7 +39,7 @@ chatbot `byk` database; not yet on Helm.
 
 In staging, content-external copies every finished CKB document into an Azure
 Blob container as chunked JSON, once an hour. It never writes to CKB: it reads
-document rows through Resql and the cleaned Markdown from CKB's own S3 bucket,
+document rows through CKB's Ruuter-internal (never Resql directly) and the cleaned Markdown from CKB's own S3 bucket,
 then writes chunks, per-document metadata and a manifest to Azure.
 
 ```mermaid
@@ -49,7 +49,8 @@ flowchart LR
     CE -->|timer: at once, then hourly<br/>while the toggle is OFF| RI[Ruuter-internal<br/>GET /pipeline/content-export]
     RI -->|list_agencies| RQ[(Resql / PostgreSQL)]
     RI -->|POST /export_agency_async| CE[content-external]
-    CE -->|watermark + document rows| RQ
+    CE -->|watermark + document rows:<br/>GET /content-external/export-*| RI3[Ruuter-internal<br/>content-external/*]
+    RI3 -->|get_agency_export_watermark,<br/>list_agency_export_documents| RQ
     CE -->|GetObject: cleaned Markdown + metadata| S3[(CKB S3 bucket)]
     CE -->|read secret per run| V[Vault<br/>via vault-agent token]
     CE -->|chunks, metadata, manifest| AZ[(Azure Blob container)]
@@ -106,7 +107,7 @@ chart in minikube on 2026-11-04.
 | 1 | Branch changes not merged. The content-external code, DSL and chart are on `v2.0.0`; the Azure switches in `docker-compose.yml` and in the chart (`contentExternal.storeBackend`, `extraEnv`, the always-rendered `serviceAccountName`), and the image-tag fix, are only on `feat/content-external-pipeline` | Both | Merge them into the branch staging deploys from |
 | 2 | The database lacks the export index (changelog `20261020120000-add-source-file-export-index`) | Both | Run Liquibase from `v2.0.0`; [Step 5](#step-5--verify-the-deployment) checks it |
 | 3 | No content-external image on GHCR. `build-content-external.yml` builds only on a push to `wip`, which exists only on the `rootcodelabs` fork | Helm | Run the workflow in the `buerokratt` repo so `ghcr.io/buerokratt/common-knowledge:content-external-dev-1-1-1` exists |
-| 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
+| 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/GET/content-external/*.yml` (the three read flows content-external enumerates through; without them every run fails with HTTP 500 or 404 from Ruuter), `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
 | 5 | The chart's init containers run `git clone --branch dev`; upstream `dev` has none of the content-export DSL | Helm | Clone `v2.0.0` (or merge `v2.0.0` into `dev`) in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates |
 | 6 | Ruuter never loads `constants.ini`: the chart mounts it at `/app/config/constants.ini`, Ruuter reads `/app/constants.ini`. Every `[#CKB_RESQL]` placeholder stays unresolved (`Failed to resolve '%5B'`) | Helm | Change the `mountPath` in `ruuter-deployment.yaml` and `ruuter-internal-deployment.yaml` to `/app/constants.ini` |
 | 7 | Resql connects to `database:5432`; the chart's database Service is `<release>-database` | Helm | Set `SQLMS_DATASOURCES_0_JDBCURL` to `jdbc:postgresql://<release>-database:5432/ckb_db` |
@@ -342,8 +343,8 @@ The Azure switch is a set of plain scalar values, so `--set` is safe:
 | `contentExternal.storeBackend` | `azure_blob` | Renders `CONTENT_EXTERNAL_STORE_BACKEND`; default `s3` |
 | `contentExternal.azure.container` | your container | Renders `AZURE_STORAGE_CONTAINER` |
 | `contentExternal.azure.vaultSecretPath` | leave the default | Renders `VAULT_SECRET_PATH` (`blob/connections/azure_blob/content`) |
-| `contentExternal.vaultAgent.enabled` | `true` | Runs the Vault Agent sidecar; sets `VAULT_ADDR` and `VAULT_TOKEN_PATH` |
-| `contentExternal.vaultAgent.vaultAddr` | your Vault URL | Default `http://vault:8200` |
+| `contentExternal.vaultAgent.enabled` | `true` | Runs the Vault Agent sidecar; sets `VAULT_TOKEN_PATH` (the exporter reads Vault's address as `CKB_VAULT` from `constants.ini`) |
+| `contentExternal.vaultAgent.vaultAddr` | your Vault URL | The sidecar's own address. Default `http://vault:8200`; keep it the same Vault as `CKB_VAULT` in `constants.ini` |
 | `contentExternal.serviceAccount.create` | `true` | Creates the `content-external` service account that Step 2.3 binds |
 | `contentExternal.sourceBucket.*` | CKB's bucket | Endpoint, bucket, region and the Secret holding the read key |
 | `contentExternal.extraEnv` | as needed | Extra settings appended to `env`, such as `DIFF_ON_MISSING_MANIFEST` |
@@ -381,7 +382,7 @@ a mistake fails the deploy rather than the first run.
      `--set-json 'contentExternal.extraEnv=[{"name":"DIFF_ON_MISSING_MANIFEST","value":"fail"}]'`.
      A later `--set-json` of `extraEnv` replaces the earlier one, so pass every
      entry each time.
-   - Do not set `VAULT_ADDR`, `VAULT_TOKEN_PATH`,
+   - Do not set `VAULT_TOKEN_PATH`,
      `CONTENT_EXTERNAL_STORE_BACKEND`, `AZURE_STORAGE_CONTAINER` or
      `VAULT_SECRET_PATH` in `env` or `extraEnv`; the chart renders them and
      refuses duplicates.
@@ -658,7 +659,7 @@ export adds a `content-external error` line with the sanitised cause.
 | `failed`, `error_type: StoreError` | Vault unreachable or 5xx (retryable), or Azure refused or the container does not exist | Retryable: nothing, the next tick retries. Otherwise check the container name, the credential's role and the network path |
 | `failed` naming `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` | The setting is empty | Set it ([4A](#step-4a--compose-configure-and-deploy) / [4B](#step-4b--helm-configure-and-deploy)) |
 | First run fails with `NonEmptyDestination` | The container already holds objects but no manifest | Use an empty container |
-| `export_schedule.state` stays `unknown` | content-external cannot reach Ruuter-internal's `pipeline/content-export-status`, or Ruuter lacks the DSL or `constants.ini` (blockers 4–6) | Check `RUUTER_INTERNAL` and Ruuter-internal's log for `pipeline/content-export-status`; the timer asks again every minute |
+| `export_schedule.state` stays `unknown` | content-external cannot reach Ruuter-internal's `pipeline/content-export-status`, or Ruuter lacks the DSL or `constants.ini` (blockers 4–6) | Check `CKB_RUUTER_INTERNAL` in `constants.ini` and Ruuter-internal's log for `pipeline/content-export-status`; the timer asks again every minute |
 | `export_schedule.state` `inactive` with the toggle OFF | `change_reason` names it: a skip such as `chatbot_domain_not_configured`, or no poll yet since the toggle changed (`last_poll_at`) | Fix the reason, then wait for the next poll or call `pipeline/content-export-sync` |
 | Log `no export will run: BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID ...` (WARNING) | The constant is empty, or names no active chatbot widget domain (the line shows the value). Logged once when first seen, again only if it changes | Set it to the right UUID in `constants.ini` and restart ruuter-internal; the next poll logs `now names an active chatbot widget domain` |
 | `export_schedule.last_poll_result` is `unreachable` or `toggle_unreadable` | The poll could not read the toggle; the timer keeps its state | Check ruuter-internal, `resql-users` and its connection to the chatbot's `byk` database; the next poll retries |
@@ -704,7 +705,8 @@ service; "Helm" means a value under `contentExternal` in
 | `CHUNK_PROFILE` | `azure_native` | fixed in `docker-compose.yml` | `env` in `values.yaml` |
 | `CONTENT_WORK_DIR` | `/var/lib/content-external` | fixed in `docker-compose.yml` | from `workDir` |
 | `VAULT_SECRET_PATH` | `blob/connections/azure_blob/content` | fixed in `docker-compose.yml` | `azure.vaultSecretPath` (default) |
-| `VAULT_ADDR` | your Vault URL | default `http://vault:8200` | `vaultAgent.vaultAddr` |
+| `CKB_RUUTER_INTERNAL` | `http://ruuter-internal:8089/ckb` | `constants.ini`, mounted at `/app/constants.ini` | `constants.ini`, mounted by `content-external-configmap.yaml` |
+| `CKB_VAULT` | your Vault URL | `constants.ini` | `constants.ini` (the sidecar agent uses `vaultAgent.vaultAddr`) |
 | `VAULT_TOKEN_PATH` | the agent's token file | fixed: `/agent/out/token` | set by the sidecar: `/vault/agent/token` |
 | `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_REGION` | CKB's bucket | `.env` | `sourceBucket` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | CKB bucket key (`GetObject`) | `.env` (shared with file-processing) | `sourceBucket.secret` |
@@ -723,10 +725,8 @@ line of the `content-external` service; on Helm, add it to
 | `EXPORT_CONCURRENCY` | `4` | 1–16. Raising it means raising the memory limit |
 | `MAX_DOCUMENT_BYTES` | `20971520` (20 MiB) | Larger documents are skipped as `content_too_large` |
 | `BOOTSTRAP_CHECKPOINT_EVERY` | `250` | First-run manifest checkpoint interval |
-| `EXPORT_PAGE_SIZE` | `1000` | Rows per Resql page |
-| `CKB_RESQL` | `http://resql-ckb:8090/ckb` | Change only if the Resql service is named differently |
-| `CKB_RESQL_TIMEOUT` | `30` s | A read timeout fails the run; it is not retried |
-| `RUUTER_INTERNAL` | `http://ruuter-internal:8089` | The timer's toggle polls and ticks go here |
+| `EXPORT_PAGE_SIZE` | `1000` | Rows per page, at most 5,000 (startup refuses more): the export-documents flow buffers at most 8 MB of a page |
+| `CKB_QUERY_TIMEOUT` | `35` s | At least 30 (startup refuses less): it must stay above the flows' 25 s step timeout. A timeout or Ruuter 500 fails the run; neither is retried |
 | `EXPORT_SCHEDULE_INTERVAL_SECONDS` | `3600` | At least 60. Time between exports while the toggle is OFF |
 | `EXPORT_SCHEDULE_POLL_SECONDS` | `300` | At least 60. Time between toggle reads; the longest a switch takes to start or stop exports |
 | `REQUIRE_METADATA_SIDECAR` | `true` | Keep on: documents without metadata cannot be cited |

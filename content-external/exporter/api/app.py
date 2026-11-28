@@ -142,7 +142,7 @@ def build_export_schedule(settings: Settings) -> ExportSchedule:
     """The export timer, over CKB's Ruuter-internal. A function so tests can
     put a fake CKB behind it."""
     return ExportSchedule(
-        RuuterScheduleClient(settings.ruuter_internal),
+        RuuterScheduleClient(settings.ckb_ruuter_internal),
         interval_seconds=settings.export_schedule_interval_seconds,
         poll_seconds=settings.export_schedule_poll_seconds,
     )

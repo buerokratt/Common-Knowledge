@@ -1,0 +1,104 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "One page of live agencies, for content-external's one-agency check"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    params:
+      - field: page
+        type: number
+        description: "1-based page number"
+      - field: pageSize
+        type: number
+        description: "Agencies per page"
+      - field: sorting
+        type: string
+        description: "One of list_agencies.sql's sorting values, e.g. 'name asc'"
+
+# content-external reads CKB only through Ruuter-internal, never Resql directly.
+# Its caller is content-external/exporter/services/agency_guard.py, which sends
+# all three params on every call and reads `total` off the first row.
+#
+#   a param missing                 -> 400 "missing_param: <name>": the allowlist
+#                                      above and the Python have drifted; not
+#                                      retried
+#   Resql answers with any non-2xx  -> 502 {error: resql_error}; retried
+#   Resql unreachable or timed out  -> 500, null body: Ruuter aborts the flow
+#                                      and `error:` cannot catch it; never
+#                                      retried, because a timed-out query is
+#                                      still running in Postgres
+#
+# The status is checked explicitly because CKB's httpCodesAllowList lets a
+# Resql 400/401/403/500 through as a normal result: without the check the
+# caller would get HTTP 200 {"response": "Bad Request"}.
+#
+# timeout is in ms and must stay below the exporter's read timeout for this
+# call (agency_guard.STARTUP_TIMEOUT_SECONDS, 5 s), so Ruuter answers first.
+
+extractRequestData:
+  assign:
+    page: ${incoming.params.page}
+    pageSize: ${incoming.params.pageSize}
+    sorting: ${incoming.params.sorting}
+  next: checkParams
+
+checkParams:
+  switch:
+    - condition: ${!page}
+      next: returnMissingPage
+    - condition: ${!pageSize}
+      next: returnMissingPageSize
+    - condition: ${!sorting}
+      next: returnMissingSorting
+  next: getAgencies
+
+getAgencies:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/list_agencies"
+    query:
+      page: ${page}
+      page_size: ${pageSize}
+      sorting: ${sorting}
+  timeout: 4000
+  result: res
+  error: assignUpstreamError
+  next: checkStatus
+
+checkStatus:
+  switch:
+    - condition: ${200 <= res.response.statusCodeValue && res.response.statusCodeValue < 300}
+      next: returnSuccess
+  next: assignUpstreamError
+
+assignUpstreamError:
+  assign:
+    upstreamError: { "error": "resql_error", "query": "agency/list_agencies", "upstreamStatus": "${res.response.statusCodeValue}" }
+  next: returnUpstreamError
+
+returnUpstreamError:
+  return: ${upstreamError}
+  status: 502
+  next: end
+
+returnMissingPage:
+  return: "missing_param: page"
+  status: 400
+  next: end
+
+returnMissingPageSize:
+  return: "missing_param: pageSize"
+  status: 400
+  next: end
+
+returnMissingSorting:
+  return: "missing_param: sorting"
+  status: 400
+  next: end
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

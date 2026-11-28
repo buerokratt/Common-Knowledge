@@ -64,12 +64,30 @@ from exporter.services.backoff import (
     is_retryable_http,
     retry_with_backoff,
 )
+from exporter.services.ckb_ruuter import (
+    DOCUMENTS_FLOW_LIMIT_KB,
+    EXPORT_FLOW_TIMEOUT_SECONDS,
+    MAX_EXPORT_PAGE_SIZE,
+    MIN_QUERY_TIMEOUT_SECONDS,
+)
 from exporter.services.locking import probe_lockable, warn_if_locking_is_unreliable
 from exporter.sinks.base import CredentialUnavailableError
 from exporter.sinks.llm_module_contract import AGREED_TERMS, validate_collection
 from exporter.stores.base import StoreError
 
 logger = logging.getLogger(__name__)
+
+# Service endpoints live in the shared constants.ini, never in code — the same
+# file Ruuter, CronManager, cleaning and scrapper read. Compose and the chart
+# mount it at /app/constants.ini (parents[2] in the container); a local run
+# reads the repo root's (parents[3]). Read by load_settings() only, never via
+# model_config, so a Settings() built in a test does not pick up the repo's
+# real endpoints. An environment variable still overrides the file.
+_CONFIG_PATH = Path(__file__).resolve()
+CONSTANTS_FILES: tuple[Path, ...] = (
+    _CONFIG_PATH.parents[3] / "constants.ini",
+    _CONFIG_PATH.parents[2] / "constants.ini",
+)
 
 # Stable prefix so the startup echo is one grep away, and so two deployments
 # can be diffed line-for-line. A15's per-run terminal line follows the same
@@ -199,7 +217,9 @@ def fetch_llm_module_token(
     if not path:
         raise CredentialUnavailableError("LLM_MODULE_VAULT_SECRET_PATH is not set")
     agent_token = _read_vault_agent_token(settings.vault_token_path)
-    url = f"{settings.vault_addr.rstrip('/')}/v1/secret/data/{path}"
+    # /v1/secret/data/ is Vault's KV v2 API path for the `secret` mount, as in
+    # cleaning/api/config.py; the address itself is CKB_VAULT.
+    url = f"{settings.ckb_vault.rstrip('/')}/v1/secret/data/{path}"
 
     def get() -> requests.Response:
         response = requests.get(
@@ -213,7 +233,7 @@ def fetch_llm_module_token(
 
     try:
         # A read is idempotent, so F8's rule applies as it stands: timeouts
-        # included, unlike a Resql query.
+        # included, unlike a CKB read through Ruuter.
         response = retry_with_backoff(
             get,
             describe=f"Vault read of {path}",
@@ -440,10 +460,14 @@ class Settings(BaseSettings):
     )
 
     # --- CKB ---------------------------------------------------------------
-    # CKB's internal Ruuter. The export timer (services/export_schedule.py)
-    # calls its pipeline/content-export-status (startup and every poll) and
-    # pipeline/content-export (every tick).
-    ruuter_internal: str = "http://ruuter-internal:8089"
+    # CKB's internal Ruuter, from constants.ini (CKB_RUUTER_INTERNAL, which
+    # ends in the project layer, /ckb). The only way this service reaches
+    # CKB's database: the export timer (services/export_schedule.py) calls
+    # pipeline/content-export-status and pipeline/content-export, and every
+    # read goes through the content-external/* flows (services/ckb_ruuter.py).
+    # No default: an endpoint is deployment configuration, never code.
+    # load_settings() refuses to start without it.
+    ckb_ruuter_internal: str = ""
     # Seconds between scheduled exports while the chatbot's LLM module toggle
     # is OFF; the first fires as soon as it is switched OFF. At least a
     # minute: a quiet tick is cheap, but each one is a Ruuter call, a gate
@@ -453,8 +477,16 @@ class Settings(BaseSettings):
     # the toggle changed, so this is how long a switch to OFF can take to
     # start an export. Each poll is one gate query on the chatbot database.
     export_schedule_poll_seconds: Annotated[int, Field(ge=60)] = 300
-    ckb_resql: str = "http://resql-ckb:8090/ckb"
-    ckb_resql_timeout: Annotated[float, Field(gt=0)] = 30.0
+    # Read timeout, in seconds, for the watermark and every document page.
+    # Must stay ABOVE the content-external/export-* flows' step `timeout:`
+    # (EXPORT_FLOW_TIMEOUT_SECONDS), so Ruuter always answers (with a 500 that
+    # is never retried) before this gives up; _check_query_timeout refuses
+    # anything below MIN_QUERY_TIMEOUT_SECONDS. A timed-out query keeps
+    # running in Postgres, so lower EXPORT_PAGE_SIZE rather than raising
+    # either.
+    ckb_query_timeout: Annotated[float, Field(gt=0)] = 35.0
+    # Rows per document page. Capped by _check_export_page_size, because the
+    # export-documents flow buffers at most DOCUMENTS_FLOW_LIMIT_KB of a page.
     export_page_size: Annotated[int, Field(ge=1)] = 1_000
 
     # --- reading CKB's own bucket — read-only credentials -------------------
@@ -490,7 +522,11 @@ class Settings(BaseSettings):
     # has none for the same reason: an Azure deployment that forgets it is
     # refused by name at the first run instead of writing to a guessed
     # container.
-    vault_addr: str = "http://vault:8200"
+    #
+    # ckb_vault is Vault's address, from constants.ini (CKB_VAULT), as in
+    # cleaning. No default; load_settings() requires it whenever this
+    # configuration reads Vault (vault_is_required).
+    ckb_vault: str = ""
     vault_token_path: str = "/agent/out/token"
     vault_secret_path: str = ""
     azure_storage_container: str = ""
@@ -521,6 +557,41 @@ class Settings(BaseSettings):
                 f"{', '.join(sorted(CHUNK_PROFILES))}. Geometry is a reviewed "
                 "row in exporter/core/constants.py CHUNK_PROFILES, never four "
                 "separate settings — add a preset there if none fits."
+            )
+        return value
+
+    @field_validator("ckb_query_timeout")
+    @classmethod
+    def _check_query_timeout(cls, value: float) -> float:
+        """Refused below the flows' step timeout plus a margin. Lower, and
+        the exporter gives up on a query Ruuter is still waiting for: a read
+        timeout, never retried, with the query left running in Postgres for
+        the next run to stack on."""
+        if value < MIN_QUERY_TIMEOUT_SECONDS:
+            raise ValueError(
+                f"CKB_QUERY_TIMEOUT={value:g} is below {MIN_QUERY_TIMEOUT_SECONDS:g} "
+                "s. It must exceed the content-external/export-* flows' step "
+                f"timeout ({EXPORT_FLOW_TIMEOUT_SECONDS:g} s, "
+                "DSL/Ruuter.internal/ckb/GET/content-external/) so Ruuter "
+                "answers first; otherwise a slow query is abandoned while still "
+                "running in Postgres. To make pages faster, lower "
+                "EXPORT_PAGE_SIZE instead."
+            )
+        return value
+
+    @field_validator("export_page_size")
+    @classmethod
+    def _check_export_page_size(cls, value: int) -> int:
+        """Refused above what the export-documents flow can buffer. Larger,
+        and every page fails with a Ruuter 500 on every run."""
+        if value > MAX_EXPORT_PAGE_SIZE:
+            raise ValueError(
+                f"EXPORT_PAGE_SIZE={value} is above {MAX_EXPORT_PAGE_SIZE}. The "
+                "content-external/export-documents flow buffers at most "
+                f"{DOCUMENTS_FLOW_LIMIT_KB} KB of a page (its step `limit:`), "
+                "and a 1,000-row page is ~0.81 MB; a larger page fails every "
+                "run with HTTP 500. Raise the flow's `limit:` and "
+                "MAX_EXPORT_PAGE_SIZE together to go higher."
             )
         return value
 
@@ -809,6 +880,16 @@ class Settings(BaseSettings):
         return self.content_sink
 
     @property
+    def vault_is_required(self) -> bool:
+        """Whether this configuration reads Vault: an Azure Blob store (the
+        destination or the manifest store) or the llm-module sink's token."""
+        return (
+            self.content_external_store_backend == "azure_blob"
+            or self.manifest_store_backend == "azure_blob"
+            or self.content_sink == "llm_module"
+        )
+
+    @property
     def manifest_store_is_inherited(self) -> bool:
         """True when the manifest store IS the object-store sink's own store.
 
@@ -852,8 +933,13 @@ class Settings(BaseSettings):
         return self.manifest_store_prefix
 
 
-def load_settings() -> Settings:
-    """Build Settings from the environment, or die.
+def load_settings(constants_files: Sequence[Path] | None = None) -> Settings:
+    """Build Settings from the environment and constants.ini, or die.
+
+    Endpoints come from constants.ini (CONSTANTS_FILES); everything else from
+    the environment, which also overrides the file. `constants_files` exists
+    so the tests can point at a temporary file. Nothing in the service passes
+    it.
 
     A pydantic ValidationError echoes the offending input value, and some of
     these fields are URLs that can legitimately carry userinfo, so the message
@@ -861,13 +947,47 @@ def load_settings() -> Settings:
     than `from exc`: chaining would re-print the unsanitised ValidationError
     in the traceback.
     """
+    files = tuple(CONSTANTS_FILES if constants_files is None else constants_files)
     try:
-        return Settings()  # pyright: ignore[reportCallIssue]
+        settings = Settings(_env_file=files)  # pyright: ignore[reportCallIssue]
     except ValidationError as exc:
         raise ConfigurationError(
             "content-external configuration is invalid:\n"
             + sanitize_sensitive_text(str(exc))
         ) from None
+    assert_endpoints_configured(settings)
+    return settings
+
+
+def _endpoint_problem(name: str, value: str) -> str | None:
+    if not value.strip():
+        return f"{name} is empty"
+    if not value.startswith(("http://", "https://")):
+        return (
+            f"{name} must be an http(s):// URL, got {sanitize_sensitive_text(value)!r}"
+        )
+    return None
+
+
+def assert_endpoints_configured(settings: Settings) -> None:
+    """Refuse to start without the endpoints this configuration needs.
+
+    No endpoint has a default in code, so an empty one means constants.ini
+    was not mounted, or does not define it. CKB_RUUTER_INTERNAL is always
+    needed: it is the only way this service reaches CKB. CKB_VAULT only when
+    something reads Vault (Settings.vault_is_required).
+    """
+    problems = [_endpoint_problem("CKB_RUUTER_INTERNAL", settings.ckb_ruuter_internal)]
+    if settings.vault_is_required:
+        problems.append(_endpoint_problem("CKB_VAULT", settings.ckb_vault))
+    found = [problem for problem in problems if problem]
+    if found:
+        raise ConfigurationError(
+            f"{'; '.join(found)}. Endpoints are never defaults in code: set "
+            "them in constants.ini, which compose and the chart mount at "
+            "/app/constants.ini (or as an environment variable of the same "
+            "name)."
+        )
 
 
 # Bounded so an unresponsive Vault fails the run instead of holding its lock.
@@ -914,7 +1034,7 @@ def get_vault_secrets(settings: Settings) -> AzureBlobSecrets:
         raise ConfigurationError(sanitize_sensitive_text(str(exc))) from None
     try:
         response = requests.get(
-            f"{settings.vault_addr}/v1/secret/data/{path}",
+            f"{settings.ckb_vault.rstrip('/')}/v1/secret/data/{path}",
             headers={"X-Vault-Token": token},
             timeout=_VAULT_TIMEOUT_SECONDS,
         )
@@ -1171,7 +1291,7 @@ def redacted_settings(settings: Settings) -> dict[str, str]:
     secret.
 
     Non-secret strings still go through sanitize_sensitive_text, because a URL
-    can carry userinfo (https://user:pw@llm.example).
+    can carry userinfo (a user:password@ before the host).
     """
     out: dict[str, str] = {}
     for name, field in type(settings).model_fields.items():

@@ -81,9 +81,10 @@ logger = logging.getLogger(__name__)
 
 ScheduleState = Literal["unknown", "active", "inactive"]
 
-# CKB's Ruuter-internal flows, under RUUTER_INTERNAL.
-CONTENT_EXPORT_PATH = "/ckb/pipeline/content-export"
-CONTENT_EXPORT_STATUS_PATH = "/ckb/pipeline/content-export-status"
+# CKB's Ruuter-internal flows, under CKB_RUUTER_INTERNAL, which already ends in
+# the project layer (/ckb) — as cleaning, scrapper and CronManager append.
+CONTENT_EXPORT_PATH = "/pipeline/content-export"
+CONTENT_EXPORT_STATUS_PATH = "/pipeline/content-export-status"
 
 # The gate's reasons this module acts on (content-export-gate.yml).
 _LLM_MODULE_ACTIVE = "llm_module_active"
@@ -120,7 +121,7 @@ class CkbScheduleClient(Protocol):
 
 
 class RuuterScheduleClient:
-    """CKB's two flows over HTTP, at RUUTER_INTERNAL."""
+    """CKB's two flows over HTTP, at CKB_RUUTER_INTERNAL."""
 
     def __init__(self, base_url: str) -> None:
         self._base_url = base_url.rstrip("/")

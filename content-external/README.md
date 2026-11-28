@@ -60,11 +60,12 @@ it — see the note in the table below.
 | Variable | Required | Description |
 |---|---|---|
 | `CONTENT_WORK_DIR` | **yes — no default** | Path to this service's own working volume — holds the run lock, the deletion journal, the last-run record and the dead-letter record (`_dead_letter/`). Must never be under a `scrapped-data` tree (rule 1), asserted at startup against both the configured value and its resolved real path. There is deliberately no fallback: one would let a deployment that forgot this variable write to a path that is not the mounted volume and keep running. Compose and the chart both set `/var/lib/content-external` |
-| `VAULT_ADDR` / `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | `VAULT_SECRET_PATH` required for an Azure destination or explicit Azure manifest store | Vault Agent sidecar (`vault-agent-content`); one agent token serves both the llm-module credential (`LLM_MODULE_VAULT_SECRET_PATH`) and the Azure credential, each read afresh on every use. `VAULT_SECRET_PATH` has no default; the Azure secret path is `blob/connections/azure_blob/content` |
+| `CKB_RUUTER_INTERNAL` | **yes**, from `constants.ini` (no default in code) | CKB's internal Ruuter, project layer included (`http://ruuter-internal:8089/ckb`). The only way this service reaches CKB's database: the export timer calls `/pipeline/content-export` on each tick and `/pipeline/content-export-status` at startup and every poll ([Schedule](#schedule)), and every read goes through the `content-external/*` flows ([Reading CKB](#reading-ckb-through-ruuter-internal)). Startup refuses without it. Compose and the chart mount `constants.ini` at `/app/constants.ini`; an environment variable of the same name overrides it |
+| `CKB_VAULT` | from `constants.ini` (no default in code); required for an Azure destination, an Azure manifest store, or `llm_module` | Vault's address, as for cleaning. Startup refuses a configuration that reads Vault without it |
+| `VAULT_TOKEN_PATH` / `VAULT_SECRET_PATH` | `VAULT_SECRET_PATH` required for an Azure destination or explicit Azure manifest store | Vault Agent sidecar (`vault-agent-content`); one agent token serves both the llm-module credential (`LLM_MODULE_VAULT_SECRET_PATH`) and the Azure credential, each read afresh on every use. `VAULT_SECRET_PATH` has no default; the Azure secret path is `blob/connections/azure_blob/content` |
 | `CONTENT_SINK` | no (default `object_store`) | `object_store` \| `llm_module` — resolved once, in one factory, at run start |
-| `EXPORT_PAGE_SIZE` | no (default `1000`, minimum `1`) | Documents per Resql keyset page. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
-| `CKB_RESQL_TIMEOUT` | no (default `30`, seconds, greater than `0`) | Timeout for each Resql call: the watermark and every document page. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising this — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit). For the same reason a read timeout is never retried, while connection errors, 429 and 5xx are (F8) |
-| `RUUTER_INTERNAL` | no (default `http://ruuter-internal:8089`) | CKB's internal Ruuter. The export timer calls its `/ckb/pipeline/content-export` on each tick and `/ckb/pipeline/content-export-status` at startup and every poll ([Schedule](#schedule)) |
+| `EXPORT_PAGE_SIZE` | no (default `1000`, `1`–`5000`) | Documents per keyset page. Startup refuses more than 5,000 (`MAX_EXPORT_PAGE_SIZE` in `exporter/services/ckb_ruuter.py`): the `content-external/export-documents` flow buffers at most 8 MB of a page (its `limit:`), and a larger page would fail every run with HTTP 500. To go higher, raise the flow's `limit:` and that constant together. Enumeration still returns the complete list or fails. The default comes from the 50k comparison of 1,000 / 5,000 / 20,000 in [RUNBOOK.md](RUNBOOK.md#with-pagination--measured-2026-10-21). |
+| `CKB_QUERY_TIMEOUT` | no (default `35`, seconds, at least `30`) | Read timeout for the watermark and every document page. Startup refuses less than 30 s: it must exceed the flows' 25 s step `timeout:` (`EXPORT_FLOW_TIMEOUT_SECONDS`), so Ruuter answers first. A timed-out query keeps running in Postgres, so lower `EXPORT_PAGE_SIZE` rather than raising either — see [RUNBOOK.md](RUNBOOK.md#signs-the-ceiling-is-being-hit). For the same reason neither a read timeout nor a Ruuter 500 is retried, while connection errors, 429, 502, 503 and 504 are (F8) |
 | `EXPORT_SCHEDULE_INTERVAL_SECONDS` | no (default `3600`, at least `60`) | Seconds between scheduled exports while the chatbot's LLM module toggle is OFF. The first fires as soon as the toggle is seen OFF ([Schedule](#schedule)) |
 | `EXPORT_SCHEDULE_POLL_SECONDS` | no (default `300`, at least `60`) | Seconds between reads of the toggle. The longest a switch takes to start or stop exports; each read is one query on the chatbot database ([Schedule](#schedule)) |
 | `CKB_S3_CONNECT_TIMEOUT` / `CKB_S3_READ_TIMEOUT` | no (defaults `5` / `60`, seconds, greater than `0`) | Timeouts for each attempt to read from CKB's own bucket. Throttles, 5xx, connection errors and timeouts are retried by botocore's standard mode, up to 3 attempts in all (F8); a read that still fails fails the run, and the next tick is the retry |
@@ -144,7 +145,8 @@ The client is created on the first document read, so enumeration needs no
 bucket credentials. Missing endpoint, bucket or credentials fail that read.
 
 Use a dedicated key with **`s3:GetObject` only**. Enumeration comes from
-Resql, so no `s3:ListBucket` permission is needed. Without it, S3 can answer
+CKB's database through Ruuter-internal, so no `s3:ListBucket` permission is
+needed. Without it, S3 can answer
 403 for a missing object; that is indistinguishable from denied access and
 therefore fails the run. A definitive object 404 is handled as missing.
 
@@ -357,9 +359,10 @@ colliding with an export) becomes indistinguishable from normal operation.
 ## Running an export
 
 > Both entry points below read CKB through Stage E's document source: the
-> Resql enumeration and read-only S3 reads of CKB's bucket. A run therefore
-> needs `CKB_RESQL` reachable and the `AWS_*` / `S3_*` read keys set, as well
-> as a configured destination.
+> enumeration through Ruuter-internal and read-only S3 reads of CKB's bucket.
+> A run therefore needs `CKB_RUUTER_INTERNAL` reachable (with the
+> `content-external/*` flows deployed) and the `AWS_*` / `S3_*` read keys set,
+> as well as a configured destination.
 
 **The production surface is the HTTP endpoint**, which this service's export
 timer reaches through CKB's Ruuter ([Schedule](#schedule)):
@@ -484,10 +487,44 @@ take up to about 3 × (5 s connect + 60 s read). A container stop grace period
 shorter than that ends in SIGKILL. That is safe: nothing commits before the
 end, the lock dies with the process, and every upsert is replayed next tick.
 
-Retries: Resql calls back off with full jitter on connection errors and
-408/429/5xx, honouring `Retry-After` up to 120 s. Past that, the call fails
-and the next tick is the retry. S3 calls use botocore's own standard-mode
-retries, deliberately not doubled.
+Retries: CKB reads through Ruuter-internal back off with full jitter on
+connection errors and 408/429/502/503/504, honouring `Retry-After` up to
+120 s. Past that, the call fails and the next tick is the retry. A read
+timeout and a Ruuter 500 are never retried: either may be a query still
+running in Postgres. S3 calls use botocore's own standard-mode retries,
+deliberately not doubled.
+
+### Reading CKB through Ruuter-internal
+
+No service calls Resql directly. content-external's three reads are
+Ruuter-internal flows under
+[`DSL/Ruuter.internal/ckb/GET/content-external/`](../DSL/Ruuter.internal/ckb/GET/content-external/),
+each wrapping one read-only Resql query
+([`services/ckb_ruuter.py`](exporter/services/ckb_ruuter.py) is the client):
+
+| Flow | Params | Wraps |
+|---|---|---|
+| `content-external/agencies` | `page`, `pageSize`, `sorting` | `agency/list_agencies` (the one-agency check) |
+| `content-external/export-watermark` | `agencyBaseId` | `agency/get_agency_export_watermark` |
+| `content-external/export-documents` | `agencyBaseId`, `afterBaseId`, `pageSize` | `source_file/list_agency_export_documents` |
+
+What a flow answers: the rows (HTTP 200); **400** when a param did not
+arrive (the flow's allowlist and the Python have drifted; not retried);
+**502** when Resql answered with an error (retried); **500 with no body**
+when Resql could not be reached or the step hit its `timeout:` (not retried).
+Each flow checks Resql's status itself, because CKB's `httpCodesAllowList`
+would otherwise pass a Resql 400/500 through as HTTP 200 with the reason
+phrase as the body; the client also refuses such a body as an error.
+
+The document flow sets `limit: 8192` (KB): Ruuter buffers only 256 KB of a
+response by default, and a 1,000-row page is about 0.81 MB. It also turns
+step logging off, since ruuter-internal otherwise logs every page body.
+`tests/test_content_external_flows.py` checks all of this statically, and
+that no file under `exporter/` names Resql's address or any host.
+
+In Kubernetes, ruuter-internal's init container clones its DSL from upstream
+`buerokratt/Common-Knowledge@dev`, so these flows must be merged there
+before an exporter image that needs them is deployed.
 
 ## Deletion operations (Stage J)
 
@@ -649,7 +686,7 @@ What moves it:
 
 Each tick calls CKB's
 [`pipeline/content-export`](../DSL/Ruuter.internal/ckb/GET/pipeline/content-export.yml)
-at `RUUTER_INTERNAL`, which reads the toggle again and, only while it is OFF,
+at `CKB_RUUTER_INTERNAL`, which reads the toggle again and, only while it is OFF,
 POSTs `/export_agency_async` back here. The gate stays the one judge of
 whether an export runs; the timer only decides when CKB is asked. A tick's
 result is in `/health` as `export_schedule.last_tick_result`: `started` or
@@ -849,15 +886,16 @@ instead.
 
 The check runs in two places, deliberately asymmetric:
 
-| | More than one agency | Resql unreachable |
+| | More than one agency | CKB unreachable |
 |---|---|---|
 | **At startup** | **refuses to start**, naming the count | **warns and serves** |
 | **At the start of each export** | fails the run, loudly | fails the run |
 
-Startup tolerates an unreachable Resql because a hard assert there would
-couple this container's boot to Resql being up — which neither compose (this
-service has no `depends_on`) nor Kubernetes guarantees — so a transient Resql
-restart would become a `CrashLoopBackOff` here. A service that boots and warns
+Startup tolerates an unreachable CKB (Ruuter-internal or the Resql behind
+it) because a hard assert there would couple this container's boot to both
+being up — which neither compose (this service has no `depends_on`) nor
+Kubernetes guarantees — so a transient restart would become a
+`CrashLoopBackOff` here. A service that boots and warns
 beats one that will not boot. At the start of a run the answer is
 load-bearing and the run needs the agency list regardless, so nothing is
 tolerated there.
@@ -985,7 +1023,7 @@ expired token (`ConfigurationError`, Vault 403). In a cluster, `contentExternal.
 agent as a sidecar. It authenticates with the pod's service account
 (Kubernetes auth, the default, so there is nothing to rotate) or with
 AppRole, keeps the token in a memory-backed volume, and points
-`VAULT_ADDR` / `VAULT_TOKEN_PATH` at it. A cluster with the Vault Agent
+`VAULT_TOKEN_PATH` at it (Vault's address is `CKB_VAULT` in `constants.ini`). A cluster with the Vault Agent
 Injector can use its annotations instead. The Vault-side setup and the
 render-time guards are in `charts/ckb/values.yaml`.
 

@@ -1,0 +1,81 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "An agency's export watermark (latest updated_at and live document count), for content-external"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    params:
+      - field: agencyBaseId
+        type: string
+        description: "UUID of the agency base"
+
+# content-external reads CKB only through Ruuter-internal, never Resql directly.
+# Its caller is content-external/exporter/services/document_source.py, which
+# reads this before listing documents and expects exactly one row.
+#
+#   agencyBaseId missing            -> 400 "missing_param: <name>": the allowlist
+#                                      above and the Python have drifted; not
+#                                      retried
+#   Resql answers with any non-2xx  -> 502 {error: resql_error}; retried
+#   Resql unreachable or timed out  -> 500, null body: Ruuter aborts the flow
+#                                      and `error:` cannot catch it; never
+#                                      retried, because a timed-out query is
+#                                      still running in Postgres
+#
+# The status is checked explicitly because CKB's httpCodesAllowList lets a
+# Resql 400/401/403/500 through as a normal result: without the check the
+# caller would get HTTP 200 {"response": "Bad Request"}.
+#
+# timeout is in ms (Ruuter's default is 15 s; the query takes 1.7-4.5 s at 50k
+# documents, RUNBOOK.md). It must stay below the exporter's CKB_QUERY_TIMEOUT
+# (35 s by default), so Ruuter always answers first.
+
+extractRequestData:
+  assign:
+    agencyBaseId: ${incoming.params.agencyBaseId}
+  next: checkParams
+
+checkParams:
+  switch:
+    - condition: ${!agencyBaseId}
+      next: returnMissingAgencyBaseId
+  next: getWatermark
+
+getWatermark:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/agency/get_agency_export_watermark"
+    query:
+      agency_base_id: ${agencyBaseId}
+  timeout: 25000
+  result: res
+  error: assignUpstreamError
+  next: checkStatus
+
+checkStatus:
+  switch:
+    - condition: ${200 <= res.response.statusCodeValue && res.response.statusCodeValue < 300}
+      next: returnSuccess
+  next: assignUpstreamError
+
+assignUpstreamError:
+  assign:
+    upstreamError: { "error": "resql_error", "query": "agency/get_agency_export_watermark", "upstreamStatus": "${res.response.statusCodeValue}" }
+  next: returnUpstreamError
+
+returnUpstreamError:
+  return: ${upstreamError}
+  status: 502
+  next: end
+
+returnMissingAgencyBaseId:
+  return: "missing_param: agencyBaseId"
+  status: 400
+  next: end
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end
