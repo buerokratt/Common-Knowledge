@@ -43,11 +43,23 @@ spec:
             {{- end }}
           ports:
             - containerPort: {{ .Values.ruuterInternal.service.port }}
+          # Ruuter reports the pod Ready about 10 s before it listens. Without
+          # a probe, the Service routes content-external's first toggle poll
+          # or tick after a restart to a closed port.
+          readinessProbe:
+            tcpSocket:
+              port: {{ .Values.ruuterInternal.service.port }}
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
           resources:
             {{- toYaml .Values.ruuterInternal.resources | nindent 12 }}
           volumeMounts:
+            # Ruuter reads /app/constants.ini, as compose mounts it. At
+            # /app/config/ every [#CKB_RESQL]-style placeholder stayed
+            # unresolved and each Resql call failed ("Failed to resolve '%5B'").
             - name: constants-config
-              mountPath: /app/config/constants.ini
+              mountPath: /app/constants.ini
               subPath: constants.ini
             - name: dsl
               mountPath: /DSL

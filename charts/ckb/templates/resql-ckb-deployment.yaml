@@ -42,9 +42,11 @@ spec:
             - name: dsl
               mountPath: /DSL
           env:
+            # Values go through tpl, so one can name the release's own
+            # Services (SQLMS_DATASOURCES_0_JDBCURL -> <release>-database).
             {{- range .Values.resqlCkb.env }}
             - name: {{ .name }}
-              value: {{ .value | quote }}
+              value: {{ tpl (toString .value) $ | quote }}
             {{- end }}
           resources:
             {{- toYaml .Values.resqlCkb.resources | nindent 12 }}

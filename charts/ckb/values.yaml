@@ -55,10 +55,14 @@ liquibase:
   backoffLimit: 3
   image:
     repository: liquibase/liquibase
-    tag: "latest"
+    # Pinned: 5.x (`latest`) ships without the PostgreSQL driver.
+    tag: "4.33"
     pullPolicy: IfNotPresent
-  repo: "https://github.com/varmoh/Common-Knowledge.git"
-  branch: "dev"
+  # Upstream v2.0.0 carries every changelog, including content-external's
+  # export index (20261020120000-add-source-file-export-index); the varmoh
+  # fork's dev lacked 14 of them.
+  repo: "https://github.com/buerokratt/Common-Knowledge.git"
+  branch: "v2.0.0"
   path: "DSL/Liquibase"
   env:
     - name: POSTGRES_USER
@@ -143,8 +147,10 @@ resqlCkb:
       value: "8090"
     - name: SQLMS_DATASOURCES_0_NAME
       value: "byk"
+    # The chart's database Service is <release>-database
+    # (templates/database-service.yaml); rendered through tpl.
     - name: SQLMS_DATASOURCES_0_JDBCURL
-      value: "jdbc:postgresql://database:5432/ckb_db"
+      value: "jdbc:postgresql://{{ .Release.Name }}-database:5432/ckb_db"
     - name: SQLMS_DATASOURCES_0_USERNAME
       value: "byk"
     - name: SQLMS_DATASOURCES_0_PASSWORD

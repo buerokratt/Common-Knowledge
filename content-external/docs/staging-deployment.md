@@ -87,9 +87,11 @@ refuses a container that already holds objects but no manifest
 
 ## Blockers to clear before staging
 
-A Helm deployment cannot work today without the fixes below; a Compose
-deployment needs only rows 1, 2 and 4. Rows 5–9 were found by installing the
-chart in minikube on 2026-11-04.
+A Helm deployment cannot work without the fixes below; a Compose deployment
+needs only rows 1, 2 and 4. Rows 5–9 were found by installing the chart in
+minikube on 2026-11-04. Rows 6–9 are fixed in the chart on
+`feat/cep-refactoring` for everything content-external depends on, so on Helm
+only rows 1–5 and 10 remain to clear.
 
 | # | Blocker | Affects | Fix |
 | --- | --- | --- | --- |
@@ -98,17 +100,19 @@ chart in minikube on 2026-11-04.
 | 3 | No content-external image on GHCR. `build-content-external.yml` builds only on a push to `wip`, which exists only on the `rootcodelabs` fork | Helm | Run the workflow in the `buerokratt` repo so `ghcr.io/buerokratt/common-knowledge:content-external-dev-1-1-1` exists |
 | 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/GET/content-external/*.yml` (the three read flows content-external enumerates through; without them every run fails with HTTP 500 or 404 from Ruuter), `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
 | 5 | The chart's init containers run `git clone --branch dev https://github.com/buerokratt/Common-Knowledge.git`; upstream `dev` has none of the content-export DSL, and no upstream branch yet has the `content-external/*` read flows | Helm | Get the `feat/cep-refactoring` changes onto a branch of `buerokratt/Common-Knowledge` (or merge them into upstream `dev`), and clone that branch in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates. Cloning `v2.0.0` is no longer enough |
-| 6 | Ruuter never loads `constants.ini`: the chart mounts it at `/app/config/constants.ini`, Ruuter reads `/app/constants.ini`. Every `[#CKB_RESQL]` placeholder stays unresolved (`Failed to resolve '%5B'`) | Helm | Change the `mountPath` in `ruuter-deployment.yaml` and `ruuter-internal-deployment.yaml` to `/app/constants.ini` |
-| 7 | Resql connects to `database:5432`; the chart's database Service is `<release>-database` | Helm | Set `SQLMS_DATASOURCES_0_JDBCURL` to `jdbc:postgresql://<release>-database:5432/ckb_db` |
-| 8 | The Liquibase job uses `liquibase/liquibase:latest` (5.x, no PostgreSQL driver) and the `varmoh` fork's 2025 `dev` (14 changelogs missing) | Helm | `liquibase.image.tag: "4.33"`, `liquibase.repo: https://github.com/buerokratt/Common-Knowledge.git`, `liquibase.branch: v2.0.0` |
-| 9 | Ruuter has no readiness probe, so Kubernetes reports it available about 10 s before it listens | Helm | Add a readiness probe, or expect the first cron tick after a Ruuter restart to fail |
+| 6 | Ruuter never loaded `constants.ini`: the chart mounted it at `/app/config/constants.ini`, Ruuter reads `/app/constants.ini`. Every `[#CKB_RESQL]` placeholder stayed unresolved (`Failed to resolve '%5B'`) | Helm | **Fixed for ruuter-internal** (`ruuter-internal-deployment.yaml` mounts `/app/constants.ini`). The public `ruuter-deployment.yaml` still mounts `/app/config/`; content-external never calls it, but the GUI's API does, so fix it for CKB as a whole |
+| 7 | Resql connected to `database:5432`; the chart's database Service is `<release>-database` | Helm | **Fixed:** `SQLMS_DATASOURCES_0_JDBCURL` is `jdbc:postgresql://{{ .Release.Name }}-database:5432/ckb_db`, rendered through `tpl` in `resql-ckb-deployment.yaml` |
+| 8 | The Liquibase job used `liquibase/liquibase:latest` (5.x, no PostgreSQL driver) and the `varmoh` fork's 2025 `dev` (14 changelogs missing, the export index among them) | Helm | **Fixed:** `liquibase.image.tag: "4.33"`, `liquibase.repo: https://github.com/buerokratt/Common-Knowledge.git`, `liquibase.branch: v2.0.0` |
+| 9 | Ruuter had no readiness probe, so Kubernetes reported it available about 10 s before it listened | Helm | **Fixed for ruuter-internal:** a `tcpSocket` readiness probe on its port. The public Ruuter still has none |
 | 10 | The chart has no `resql-users`. The gate reads the toggle at `[#CKB_USERS_RESQL]` (`http://resql-users:8087/users`), the same service CKB's login uses, so it must come from the surrounding Bürokratt deployment. That service must be connected to the chatbot's `byk` database and carry `get_domain_configuration.sql`; without it every gate answer is `toggle_unreadable` or an unreachable Ruuter call, and the timer never starts | Helm | Add the file to the DSL that `resql-users` loads, and check `CKB_USERS_RESQL` resolves in the namespace |
 
-Rows 5–9 affect all of CKB on Helm, not only this pipeline. Running `helm`
+Rows 5–9 affect all of CKB on Helm, not only this pipeline (6 and 9 remain
+open for the public Ruuter). Running `helm`
 from a Windows checkout also breaks `charts/ckb/constants.ini`, a symlink
 checked out as a text file; deploy from Linux or CI. Content-external reads
-its endpoints from that file too, so on a Windows render it refuses to start
-with `CKB_RUUTER_INTERNAL is empty`.
+its endpoints from that file too, so the chart refuses such a render
+(`charts/ckb/constants.ini has no CKB_RUUTER_INTERNAL=http(s)://... line`)
+rather than deploy a pod that would crash-loop.
 
 ## Step 1 — Azure: storage account, container, credential
 
@@ -446,7 +450,8 @@ uncommenting it. Any other setting from the
 On Helm there is one values file, [`charts/ckb/values.yaml`](../../charts/ckb/values.yaml),
 and it defaults to S3. Staging switches to Azure with `--set` flags in its
 deploy job (or the equivalent parameters in its CD tool). Secrets go in
-Kubernetes Secrets and Vault, never in values. Clear blockers 3 and 5–9 first.
+Kubernetes Secrets and Vault, never in values. Clear blockers 3, 5 and 10
+first (6–9 are fixed in the chart).
 
 The Azure switch is a set of plain scalar values, so `--set` is safe:
 
