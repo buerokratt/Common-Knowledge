@@ -595,13 +595,19 @@ them apart; ruuter-internal's log can. Find the request for the
 
 | ruuter-internal's log shows | Cause | What to do |
 |---|---|---|
-| Nothing at all for the request — no `Request received for DSL: content-external/…` line (observed locally 2026-11-28: an undeployed flow answers 500 and logs nothing) | **The flows are not deployed.** In Kubernetes ruuter-internal clones its DSL from upstream `buerokratt/Common-Knowledge@dev`; an exporter image deployed before the flows were merged there fails every run | Merge `DSL/Ruuter.internal/ckb/GET/content-external/` upstream, then restart ruuter-internal (it reads DSL only at startup) |
+| Nothing at all for the request — no `Request received for DSL: content-external/…` line (observed locally 2026-11-28: an undeployed flow answers 500 and logs nothing) | **The flows are not deployed.** In Kubernetes ruuter-internal clones its DSL from `buerokratt/Common-Knowledge`; an exporter image deployed before the flows are in what it clones fails every run | Merge `DSL/Ruuter.internal/ckb/GET/content-external/` into what ruuter-internal clones, then restart ruuter-internal (it reads DSL only at startup) |
 | The Resql step failing with a connection error | **Resql was down or restarting** | Nothing, once Resql is back. This is **expected**: a Ruuter 500 is never retried (it may be a query still running), so a Resql restart fails that run, and the next tick recovers it |
 | The Resql step failing with a timeout after 25 s | **A query is too slow** | See [Signs the ceiling is being hit](#signs-the-ceiling-is-being-hit) |
 | `DataBufferLimitException` | **A page outgrew the flow's `limit:`** | Should not happen within `EXPORT_PAGE_SIZE`'s 5,000 ceiling; check for unusually long rows, and lower `EXPORT_PAGE_SIZE` |
 
-A 404 from these flows says the same as the first row: `are the
-content-external flows deployed in ruuter-internal?`.
+That 500 is how a **locally built** Ruuter (Compose) answers a flow that does
+not exist. The **published** image the chart runs
+(`ghcr.io/buerokratt/ruuter:v2.2.1`) answers it 300 with an empty body instead
+(seen in minikube, 2026-11-28); neither ever answers 404. The exporter fails
+the run on the 300 at once, never retrying it, and says `HTTP 300: no such
+flow: are the content-external flows deployed in ruuter-internal?`: the first
+row's cause. The export timer's warning for `pipeline/content-export-status`
+names the same 300 or 500 the same way.
 
 ## Signs the ceiling is being hit
 

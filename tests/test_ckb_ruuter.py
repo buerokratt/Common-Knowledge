@@ -96,11 +96,12 @@ def test_params_must_match_the_flows_allowlist(
         requests.ConnectionError(f"{BASE} refused"),
         _response(500, b""),
         _response(502, b'{"response": {"error": "resql_error"}}'),
+        _response(300, b""),
         _response(200, b"not json"),
         _response(200, b'{"response": "Bad Request"}'),
         _response(200, b"null"),
     ],
-    ids=["connection", "500", "502", "not-json", "error-string", "null"],
+    ids=["connection", "500", "502", "300", "not-json", "error-string", "null"],
 )
 def test_errors_never_carry_the_url(
     monkeypatch: pytest.MonkeyPatch, answer: object
@@ -118,9 +119,9 @@ def test_errors_never_carry_the_url(
 
 @pytest.mark.parametrize(
     ("status", "hint"),
-    [(500, "flows not deployed"), (404, "flows deployed")],
+    [(500, "flows not deployed"), (300, "flows deployed")],
 )
-def test_a_ruuter_500_or_404_names_its_likely_causes(
+def test_a_ruuter_500_or_300_names_its_likely_causes(
     monkeypatch: pytest.MonkeyPatch, status: int, hint: str
 ) -> None:
     """The status alone does not say whether Resql is down, a page outgrew
@@ -131,14 +132,40 @@ def test_a_ruuter_500_or_404_names_its_likely_causes(
         _read()
 
 
-def test_the_longest_error_fits_the_worker_error_line(
+def test_ruuters_no_such_flow_300_fails_at_once_and_says_so(
     monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ruuter answers a path with no flow behind it 300 with an empty body
+    (seen against ruuter v2.2.1), which raise_for_status lets through. It
+    must fail as "not deployed", on the first attempt, rather than as a
+    body that is not JSON."""
+    calls = _stub(monkeypatch, _response(300, b""))
+    with pytest.raises(CkbReadError) as excinfo:
+        _read()
+    assert "HTTP 300" in str(excinfo.value)
+    assert "flows deployed" in str(excinfo.value)
+    assert "non-JSON" not in str(excinfo.value)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize("status", [201, 204, 302])
+def test_any_status_but_200_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    _stub(monkeypatch, _response(status, b'{"response": []}'))
+    with pytest.raises(CkbReadError, match=f"HTTP {status}"):
+        _read()
+
+
+@pytest.mark.parametrize("status", [500, 300])
+def test_the_longest_error_fits_the_worker_error_line(
+    monkeypatch: pytest.MonkeyPatch, status: int
 ) -> None:
     """worker/utils.py cuts an error line at 300 characters; the hint must
     survive intact with the longest flow path in front of it."""
     from exporter.worker.utils import _MAX_MESSAGE_CHARS
 
-    _stub(monkeypatch, _response(500, b""))
+    _stub(monkeypatch, _response(status, b""))
     with pytest.raises(CkbReadError) as excinfo:
         _read(
             path=ckb_ruuter.DOCUMENTS_PATH,
@@ -173,6 +200,8 @@ def _http_error(status: int) -> requests.HTTPError:
         (requests.ReadTimeout("slow"), False),
         (_http_error(400), False),
         (_http_error(404), False),
+        # Ruuter's "no such flow": retrying cannot deploy it.
+        (_http_error(300), False),
     ],
     ids=[
         "connection",
@@ -185,6 +214,7 @@ def _http_error(status: int) -> requests.HTTPError:
         "read-timeout",
         "400",
         "404",
+        "300",
     ],
 )
 def test_which_failures_are_retried(error: BaseException, retryable: bool) -> None:

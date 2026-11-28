@@ -89,20 +89,19 @@ refuses a container that already holds objects but no manifest
 
 A Helm deployment cannot work without the fixes below; a Compose deployment
 needs only rows 1, 2 and 4. Rows 5–9 were found by installing the chart in
-minikube on 2026-11-04. Rows 6–9 are fixed in the chart on
-`feat/cep-refactoring` for everything content-external depends on, so on Helm
-only rows 1–5 and 10 remain to clear.
+minikube on 2026-11-04. Rows 6–9 are fixed in the chart for everything
+content-external depends on, so on Helm only rows 1–5 and 10 remain to clear.
 
 | # | Blocker | Affects | Fix |
 | --- | --- | --- | --- |
-| 1 | Branch changes not merged. The current content-external code, DSL and chart (the Ruuter-only reads, the three `content-external/*` flows, the `constants.ini` mount) are only on `feat/cep-refactoring`. `v2.0.0`, `feat/content-external-pipeline` and `feat/cep-triggering` carry older code that reads Resql directly and lacks those flows | Both | Merge `feat/cep-refactoring` into the branch staging deploys from. Do not deploy content-external code from `feat/cep-refactoring` against DSL from `v2.0.0`: every run fails with HTTP 404 or 500 from Ruuter |
-| 2 | The database lacks the export index (changelog `20261020120000-add-source-file-export-index`) | Both | Run Liquibase from `v2.0.0`; [Step 5](#step-5--verify-the-deployment) checks it |
-| 3 | No content-external image on GHCR. `build-content-external.yml` builds only on a push to `wip`, which exists only on the `rootcodelabs` fork | Helm | Run the workflow in the `buerokratt` repo so `ghcr.io/buerokratt/common-knowledge:content-external-dev-1-1-1` exists |
-| 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/GET/content-external/*.yml` (the three read flows content-external enumerates through; without them every run fails with HTTP 500 or 404 from Ruuter), `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
-| 5 | The chart's init containers run `git clone --branch dev https://github.com/buerokratt/Common-Knowledge.git`; upstream `dev` has none of the content-export DSL, and no upstream branch yet has the `content-external/*` read flows | Helm | Get the `feat/cep-refactoring` changes onto a branch of `buerokratt/Common-Knowledge` (or merge them into upstream `dev`), and clone that branch in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates. Cloning `v2.0.0` is no longer enough |
+| 1 | The current content-external code, DSL and chart (the Ruuter-only reads, the three `content-external/*` flows, the `constants.ini` mount) are not yet in what staging deploys from. Older code reads Resql directly and lacks those flows | Both | Deploy the content-external image, the DSL and the chart from the same release. An image with the Ruuter-only reads against DSL without the `content-external/*` flows fails every run with HTTP 300 or 500 from Ruuter |
+| 2 | The database lacks the export index (changelog `20261020120000-add-source-file-export-index`) | Both | Run Liquibase from a checkout that includes this changelog; [Step 5](#step-5--verify-the-deployment) checks it |
+| 3 | No content-external image on GHCR: `build-content-external.yml` has not been run in the `buerokratt` repo | Helm | Run the workflow there so `ghcr.io/buerokratt/common-knowledge:content-external-dev-1-1-1` exists |
+| 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/GET/content-external/*.yml` (the three read flows content-external enumerates through; without them every run fails with HTTP 300 or 500 from Ruuter), `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
+| 5 | The chart's init containers `git clone` their DSL from `https://github.com/buerokratt/Common-Knowledge.git`, and what they clone does not yet carry the content-export DSL or the `content-external/*` read flows | Helm | Merge the changes into what the chart clones, or point the `git clone` in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates at a ref that has them |
 | 6 | Ruuter never loaded `constants.ini`: the chart mounted it at `/app/config/constants.ini`, Ruuter reads `/app/constants.ini`. Every `[#CKB_RESQL]` placeholder stayed unresolved (`Failed to resolve '%5B'`) | Helm | **Fixed for ruuter-internal** (`ruuter-internal-deployment.yaml` mounts `/app/constants.ini`). The public `ruuter-deployment.yaml` still mounts `/app/config/`; content-external never calls it, but the GUI's API does, so fix it for CKB as a whole |
 | 7 | Resql connected to `database:5432`; the chart's database Service is `<release>-database` | Helm | **Fixed:** `SQLMS_DATASOURCES_0_JDBCURL` is `jdbc:postgresql://{{ .Release.Name }}-database:5432/ckb_db`, rendered through `tpl` in `resql-ckb-deployment.yaml` |
-| 8 | The Liquibase job used `liquibase/liquibase:latest` (5.x, no PostgreSQL driver) and the `varmoh` fork's 2025 `dev` (14 changelogs missing, the export index among them) | Helm | **Fixed:** `liquibase.image.tag: "4.33"`, `liquibase.repo: https://github.com/buerokratt/Common-Knowledge.git`, `liquibase.branch: v2.0.0` |
+| 8 | The Liquibase job used `liquibase/liquibase:latest` (5.x, no PostgreSQL driver) and an outdated fork of the repo (14 changelogs missing, the export index among them) | Helm | **Fixed:** `liquibase.image.tag: "4.33"`, and `liquibase.repo` / `liquibase.branch` point at `buerokratt/Common-Knowledge` with every changelog |
 | 9 | Ruuter had no readiness probe, so Kubernetes reported it available about 10 s before it listened | Helm | **Fixed for ruuter-internal:** a `tcpSocket` readiness probe on its port. The public Ruuter still has none |
 | 10 | The chart has no `resql-users`. The gate reads the toggle at `[#CKB_USERS_RESQL]` (`http://resql-users:8087/users`), the same service CKB's login uses, so it must come from the surrounding Bürokratt deployment. That service must be connected to the chatbot's `byk` database and carry `get_domain_configuration.sql`; without it every gate answer is `toggle_unreadable` or an unreachable Ruuter call, and the timer never starts | Helm | Add the file to the DSL that `resql-users` loads, and check `CKB_USERS_RESQL` resolves in the namespace |
 
@@ -391,7 +390,7 @@ On Compose, everything staging-specific goes in the root `.env` on the staging
 host; `docker-compose.yml` defaults to S3 and switches to Azure when `.env`
 says so. This needs blocker 1 merged.
 
-1. **Update the checkout** to the branch carrying the content-external code
+1. **Update the checkout** to the release carrying the content-external code
    and DSL.
 2. **Add to the root `.env`:**
 
@@ -546,8 +545,8 @@ a mistake fails the deploy rather than the first run.
    raise both together.
 6. **Check the image.** `contentExternal.image.tag` is
    `content-external-dev-1-1-1`; it must exist on
-   `ghcr.io/buerokratt/common-knowledge` (blocker 3), built from a commit
-   that includes `feat/cep-refactoring` (blocker 1).
+   `ghcr.io/buerokratt/common-knowledge` (blocker 3), built from the same
+   release as the DSL and chart (blocker 1).
 7. **Deploy** with the command from item 2, from a Linux machine or CI.
 
 The deployment runs one replica with the `Recreate` strategy by design. Never
@@ -637,12 +636,16 @@ to Azure; the first sample run in Step 6 proves that.
    Use staging's `CKB_RUUTER_INTERNAL` in place of
    `http://ruuter-internal:8089/ckb`. Expect `{"response":[…]}` holding the
    one agency. An `HTTP Error` instead says what is wrong:
-   - **404:** the `content-external/*` flows are not deployed (blockers 1,
-     4 and 5).
+   - **300** (empty body): the `content-external/*` flows are not deployed
+     (blockers 1, 4 and 5). This is how the chart's Ruuter image
+     (`ghcr.io/buerokratt/ruuter:v2.2.1`) answers a path with no flow behind
+     it; it never answers 404. A locally built Ruuter (Compose) answers 500
+     instead.
    - **400** (`missing_param`): the flows and the image come from different
-     branches, so the allowlist and the code no longer match.
-   - **500:** Resql is unreachable or timed out, or Ruuter did not load
-     `constants.ini` (blocker 6). Ruuter-internal's log has the cause.
+     releases, so the allowlist and the code no longer match.
+   - **500:** Resql is unreachable or timed out, Ruuter did not load
+     `constants.ini` (blocker 6), or, on a locally built Ruuter, the flows
+     are not deployed. Ruuter-internal's log has the cause.
    - **502** (`resql_error`): Resql answered with an error.
 
    The other two flows, `content-external/export-watermark` and
@@ -768,7 +771,7 @@ How the change reaches CronManager:
 - **Compose:** edit the file in the checkout, then
   `docker compose restart cron-manager`.
 - **Helm:** CronManager clones `scheduler.yml` from git when its pod starts
-  (blocker 5), so commit the change to the branch it clones, then
+  (blocker 5), so commit the change to what it clones, then
   `kubectl -n <namespace> rollout restart deploy/cron-manager`.
 
 Then switch on the destructive halves, each after a dry cycle:
@@ -847,9 +850,9 @@ export adds a `content-external error` line with the sanitised cause.
 | `failed`, `error_type: ConfigurationError` | The Vault secret still holds `REPLACE_ME`, has two credential forms, has a query string on `account_url`, Vault answered 403/404, or the agent token file is missing or expired. On Helm, a 403 with a valid token usually means `CKB_VAULT` names a different Vault from `vaultAgent.vaultAddr` | Fix the secret ([2.1](#21-write-the-secret)), the policy ([2.2](#22-policy)), the agent's login ([2.3](#23-agent-authentication)), or `CKB_VAULT` ([4B](#step-4b--helm-configure-and-deploy) item 3) |
 | `failed`, `error_type: StoreError` | Vault unreachable or 5xx (retryable), or Azure refused or the container does not exist. A Vault that is unreachable on every run usually means `CKB_VAULT` is still `http://vault:8200` | Retryable: nothing, the next tick retries. Otherwise check `CKB_VAULT`, the container name, the credential's role and the network path |
 | Central Vault ([2.4](#24-variant--the-shared-central-vault-helm)): `failed`, `ConfigurationError`, `Vault returned HTTP 403` or `404` | 403: central's policy does not cover the `<prefix>/…` path in `VAULT_SECRET_PATH`, or `CKB_VAULT` and `vaultAgent.vaultAddr` name different Vaults. 404: nothing written at that path yet | Run the check at the end of 2.4. Policy and secret are the platform team's to fix; the two addresses are yours |
-| `failed`, `Ruuter-internal read failed (HTTP 404: …)` (`agency count` or `CKB read /content-external/…`) | The `content-external/*` flows are not in ruuter-internal | Deploy the DSL from the same branch as the image (blockers 1, 4 and 5), then restart ruuter-internal |
+| `failed`, `Ruuter-internal read failed (HTTP 300: no such flow …)` (`agency count` or `CKB read /content-external/…`) | The `content-external/*` flows are not in ruuter-internal. The chart's Ruuter image answers a missing flow 300, never 404 (a locally built one answers 500, the next row) | Deploy the DSL from the same release as the image (blockers 1, 4 and 5), then restart ruuter-internal |
 | `failed`, `Ruuter-internal read failed (HTTP 500: …)` | Ruuter aborted the flow: Resql unreachable or past the step's 25 s timeout, a page over the flow's 8 MB limit, the flow missing, or Ruuter without `constants.ini` (blocker 6). Never retried, because the query may still be running | Read ruuter-internal's log for the flow. For timeouts or the size limit, lower `EXPORT_PAGE_SIZE`; for a slow first page, check the export index (Step 5.4) |
-| `failed`, `Ruuter-internal read failed (HTTP 400)` | A param the code sends is not in the flow's allowlist: flows and image are from different branches | Deploy both from the same commit |
+| `failed`, `Ruuter-internal read failed (HTTP 400)` | A param the code sends is not in the flow's allowlist: flows and image are from different releases | Deploy both from the same release |
 | `failed`, `Ruuter-internal read failed (HTTP 502)` | Resql answered every retry with an error | Check resql-ckb's log and its database connection (blocker 7 on Helm) |
 | `failed` naming `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` | The setting is empty | Set it ([4A](#step-4a--compose-configure-and-deploy) / [4B](#step-4b--helm-configure-and-deploy)) |
 | `failed`, `StoreError`: `CKB reads require …` (any of `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) | A setting for CKB's own bucket is empty; none has a default in code | Compose: the root `.env` ([4A](#step-4a--compose-configure-and-deploy) item 2). Helm: `contentExternal.sourceBucket.*` and its Secret ([4B](#step-4b--helm-configure-and-deploy) items 1–2) |
@@ -987,7 +990,7 @@ above:
 
 ## Checklist
 
-- [ ] Blockers 1–2 (and 3–10 on Helm) cleared; image and DSL both from a commit that includes `feat/cep-refactoring`
+- [ ] Blockers 1–2 (and 3–10 on Helm) cleared; image, DSL and chart all from the same release
 - [ ] Every entry in [Endpoints in constants.ini](#endpoints-in-constantsini) points at staging (Helm: `CKB_VAULT` equals `vaultAgent.vaultAddr`)
 - [ ] `content-external/agencies` answers from inside the content-external container (Step 5.6)
 - [ ] Azure container created; credential created and scoped to it

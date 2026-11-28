@@ -609,6 +609,30 @@ def test_the_client_raises_ckb_call_error(
         RuuterScheduleClient("http://ruuter-internal:8089").content_export()
 
 
+@pytest.mark.parametrize(
+    ("status", "hint"),
+    [(300, "flows deployed"), (500, "flows not deployed"), (204, "")],
+)
+def test_the_client_names_the_status_and_its_likely_cause(
+    monkeypatch: pytest.MonkeyPatch, status: int, hint: str
+) -> None:
+    """A path with no flow behind it is 300 (published Ruuter image) or 500
+    (a local build), both with an empty body; raise_for_status would let the
+    300 through. The warning names the status and where to look, never a
+    JSON decode error, and never the URL."""
+    monkeypatch.setattr(
+        "exporter.services.export_schedule.requests.get",
+        lambda url, timeout: _Response(None, status=status),
+    )
+    with pytest.raises(CkbCallError) as excinfo:
+        RuuterScheduleClient("http://ruuter-internal:8089").content_export_status()
+    message = str(excinfo.value)
+    assert message.startswith(f"/pipeline/content-export-status: HTTP {status}")
+    assert hint in message
+    assert "JSONDecodeError" not in message
+    assert "ruuter-internal:8089" not in message
+
+
 def test_the_client_raises_ckb_call_error_when_unreachable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

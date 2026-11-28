@@ -7,6 +7,13 @@ constants.ini. The flows wrap three read-only Resql queries and nothing else.
 WHAT A FLOW ANSWERS, AND WHAT THIS MODULE MAKES OF IT.
 
   200 {"response": [rows]}   the rows
+  300, empty body            no flow at that path: the content-external flows
+                             are not deployed in ruuter-internal. What the
+                             published Ruuter image answers for an unknown
+                             path (its finalResponse
+                             dslWithoutResponseHttpStatusCode), never 404; a
+                             locally built Ruuter answers 500 instead.
+                             Permanent; anything but 200 is an error here
   200 {"response": "<text>"} an error, never data. A flow that lost its status
                              check would hand back Ruuter's reason phrase
                              ("Bad Request") this way, because CKB's
@@ -86,13 +93,16 @@ MIN_QUERY_TIMEOUT_SECONDS = EXPORT_FLOW_TIMEOUT_SECONDS + 5.0
 # for longer URLs and titles. A page over the limit fails every run with 500.
 MAX_EXPORT_PAGE_SIZE = 5_000
 
-# What a Ruuter 404 or 500 from these flows usually means, named in the error
-# because the status alone does not say. Ruuter answers 500 with an empty
-# body when the Resql step fails, when a page outgrows the step's `limit:`,
-# and when the flow is not deployed at all. Kept short: worker/utils.py cuts
-# an error line at 300 characters, and the path comes first.
+# What a Ruuter 300 or 500 from these flows usually means, named in the error
+# because the status alone does not say. A path with no flow behind it is
+# never a 404: the published image the chart runs (ghcr.io/buerokratt/ruuter
+# v2.2.1) answers 300 with an empty body, and the locally built image compose
+# runs answers 500 with an empty body (both checked 2026-11-28). Ruuter also
+# answers 500 when the Resql step fails or a page outgrows the step's
+# `limit:`. Kept short: worker/utils.py cuts an error line at 300 characters,
+# and the path comes first.
 _RUUTER_FAILURE_HINTS = {
-    404: "are the content-external flows deployed in ruuter-internal?",
+    300: "no such flow: are the content-external flows deployed in ruuter-internal?",
     500: (
         "Resql down or timed out, page over the flow's limit, or "
         "content-external flows not deployed; see ruuter-internal's log"
@@ -138,6 +148,11 @@ def get_rows(
     def get() -> requests.Response:
         response = requests.get(url, params=dict(params), timeout=timeout)
         response.raise_for_status()
+        if response.status_code != 200:
+            # raise_for_status passes 1xx-3xx, and Ruuter's "no such flow" is
+            # a 300. Every flow here answers 200; anything else is an error,
+            # never retried (is_retryable_ruuter_read).
+            raise requests.HTTPError(str(response.status_code), response=response)
         return response
 
     try:

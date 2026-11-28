@@ -523,8 +523,8 @@ step logging off, since ruuter-internal otherwise logs every page body.
 `tests/test_content_external_flows.py` checks all of this statically, and
 that no file under `exporter/` names Resql's address or any host.
 
-In Kubernetes, ruuter-internal's init container clones its DSL from upstream
-`buerokratt/Common-Knowledge@dev`, so these flows must be merged there
+In Kubernetes, ruuter-internal's init container clones its DSL from
+`buerokratt/Common-Knowledge`, so these flows must be in what it clones
 before an exporter image that needs them is deployed.
 
 ## Deletion operations (Stage J)

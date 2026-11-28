@@ -105,6 +105,18 @@ DEFAULT_POLL_SECONDS = 300.0
 # timeout only bounds a hung Ruuter.
 _TIMEOUT = (5.0, 60.0)
 
+# What a non-200 from the pipeline/* flows usually means, appended to the
+# warning. The published Ruuter image answers an undeployed flow 300, a
+# locally built one 500 (both seen 2026-11-28); a 500 is also a failed step,
+# such as resql-users unreachable from the gate.
+_RUUTER_STATUS_HINTS = {
+    300: " (no such flow: are the pipeline flows deployed in ruuter-internal?)",
+    500: (
+        " (pipeline flows not deployed, or a step failed, e.g. resql-users "
+        "unreachable; see ruuter-internal's log)"
+    ),
+}
+
 
 class CkbCallError(RuntimeError):
     """CKB could not be asked, or did not answer with a JSON object."""
@@ -135,10 +147,21 @@ class RuuterScheduleClient:
     def _get(self, path: str) -> Mapping[str, Any]:
         try:
             response = requests.get(self._base_url + path, timeout=_TIMEOUT)
-            response.raise_for_status()
-            body = response.json()
-        except (requests.RequestException, ValueError) as exc:
+        except requests.RequestException as exc:
             # The exception type only: a message can carry the URL.
+            raise CkbCallError(f"{path}: {type(exc).__name__}") from exc
+        if response.status_code != 200:
+            # Anything but 200 fails (raise_for_status would pass 1xx-3xx).
+            # A path with no flow behind it is never a 404: the published
+            # Ruuter image answers 300 and a locally built one 500, both with
+            # an empty body. The status only, never the body or the URL.
+            raise CkbCallError(
+                f"{path}: HTTP {response.status_code}"
+                f"{_RUUTER_STATUS_HINTS.get(response.status_code, '')}"
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
             raise CkbCallError(f"{path}: {type(exc).__name__}") from exc
         # Ruuter wraps a flow's return value as {"response": value} unless the
         # flow opts out, so accept both shapes.
