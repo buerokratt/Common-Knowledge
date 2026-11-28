@@ -13,8 +13,8 @@ read a settings object (the cross-cutting Config rule).
 It never asks which sink is configured: sinks/factory.py does (A13), and the
 manifest service takes the sink's id from the sink it is paired with.
 
-The document source is Stage E's CkbDocumentSource: the Resql enumeration
-and the read-only S3 reads of CKB's bucket. Building it touches neither —
+The document source is Stage E's CkbDocumentSource: the enumeration through
+CKB's Ruuter-internal and the read-only S3 reads of CKB's bucket. Building it touches neither —
 its S3 client is created on the first read — so a missing AWS_* value fails
 the run that needs it, never /health. The deletion operations never build
 one: none of them reads CKB.

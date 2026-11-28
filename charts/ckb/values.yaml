@@ -55,10 +55,14 @@ liquibase:
   backoffLimit: 3
   image:
     repository: liquibase/liquibase
-    tag: "latest"
+    # Pinned: 5.x (`latest`) ships without the PostgreSQL driver.
+    tag: "4.33"
     pullPolicy: IfNotPresent
-  repo: "https://github.com/varmoh/Common-Knowledge.git"
-  branch: "dev"
+  # Upstream v2.0.0 carries every changelog, including content-external's
+  # export index (20261020120000-add-source-file-export-index); the varmoh
+  # fork's dev lacked 14 of them.
+  repo: "https://github.com/buerokratt/Common-Knowledge.git"
+  branch: "v2.0.0"
   path: "DSL/Liquibase"
   env:
     - name: POSTGRES_USER
@@ -143,8 +147,10 @@ resqlCkb:
       value: "8090"
     - name: SQLMS_DATASOURCES_0_NAME
       value: "byk"
+    # The chart's database Service is <release>-database
+    # (templates/database-service.yaml); rendered through tpl.
     - name: SQLMS_DATASOURCES_0_JDBCURL
-      value: "jdbc:postgresql://database:5432/ckb_db"
+      value: "jdbc:postgresql://{{ .Release.Name }}-database:5432/ckb_db"
     - name: SQLMS_DATASOURCES_0_USERNAME
       value: "byk"
     - name: SQLMS_DATASOURCES_0_PASSWORD
@@ -665,12 +671,13 @@ contentExternal:
   # llm-module-ingest-contract.md; recorded 2026-10-28 on an assumption,
   # written sign-off pending), so llm_module needs no development flag; it
   # would be refused again only if that agreement were withdrawn. Its credential is
-  # read from Vault per task (L11) through VAULT_ADDR + VAULT_TOKEN_PATH, a
-  # token Vault Agent keeps fresh. Two ways to provide that agent:
+  # read from Vault per task (L11) at CKB_VAULT (constants.ini, mounted by
+  # templates/content-external-configmap.yaml) with VAULT_TOKEN_PATH, a token
+  # Vault Agent keeps fresh. Two ways to provide that agent:
   #
   #   1. The chart's own sidecar — `vaultAgent.enabled: true` below. The
   #      cluster counterpart of compose's vault-agent-content. It sets
-  #      VAULT_ADDR and VAULT_TOKEN_PATH itself; do not also set them in env.
+  #      VAULT_TOKEN_PATH itself; do not also set it in env.
   #   2. The Vault Agent Injector, if the cluster runs one — leave vaultAgent
   #      disabled and annotate instead:
   #
@@ -679,7 +686,7 @@ contentExternal:
   #          vault.hashicorp.com/role: "content-external"
   #          vault.hashicorp.com/agent-inject-token: "true"   # -> /vault/secrets/token
   #
-  #      with VAULT_ADDR and VAULT_TOKEN_PATH=/vault/secrets/token in env.
+  #      with VAULT_TOKEN_PATH=/vault/secrets/token in env.
   #
   # Rendering refuses both at once. It recognises the injector only by the
   # `vault.hashicorp.com/agent-inject` annotation in podAnnotations; an
@@ -694,10 +701,16 @@ contentExternal:
   #   - name: LLM_MODULE_VAULT_SECRET_PATH  value: "content-external/llm_module"
   #   - name: CHUNK_PROFILE                 value: "<from §13 q1>"
   #   - name: LLM_MODULE_CHUNK_PROFILE_CONFIRMED  value: "<the same name>"
-  #   (+ VAULT_ADDR / VAULT_TOKEN_PATH only for option 2)
+  #   (+ VAULT_TOKEN_PATH only for option 2)
   #
   # The service never caches the credential, so the agent's renewal is
   # picked up without a restart.
+  #
+  # ENDPOINTS ARE NOT SET HERE. CKB_RUUTER_INTERNAL and CKB_VAULT come from
+  # the shared constants.ini, mounted at /app/constants.ini as for cleaning;
+  # no endpoint is a default in code, and startup refuses without
+  # CKB_RUUTER_INTERNAL. Every CKB read goes through Ruuter-internal's
+  # content-external/* flows, never Resql directly.
   #
   # STALE_SWEEP_ENABLED (L10) is off by default; "true" lets a committed run
   # that saw the whole corpus ask the destination to drop what the manifest
@@ -761,7 +774,7 @@ contentExternal:
   #
   # It keeps a token at <tokenMountPath>/token in a memory-backed emptyDir,
   # renewed and re-authenticated by the agent, and the chart points
-  # VAULT_ADDR / VAULT_TOKEN_PATH at it. The exporter reads it on every
+  # VAULT_TOKEN_PATH at it. The exporter reads it on every
   # llm-module operation and never at startup, so a Vault outage is a
   # `failed` run with `credential unavailable`, never a pod that will not
   # start — and the sidecar has no readiness probe, so it never takes /health
@@ -788,6 +801,8 @@ contentExternal:
       repository: hashicorp/vault
       tag: "1.21.3"     # the version compose's agents run
       pullPolicy: IfNotPresent
+    # The sidecar agent's own Vault address. The exporter reads CKB_VAULT from
+    # constants.ini instead; keep the two pointing at the same Vault.
     vaultAddr: "http://vault:8200"
     # Where the exporter container sees the token directory, read-only.
     tokenMountPath: /vault/agent

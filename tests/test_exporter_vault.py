@@ -13,7 +13,7 @@ from exporter.stores.base import StoreError
 
 TOKEN = "hvs.first-token"
 SECRET_PATH = "blob/connections/azure_blob/content"
-VAULT_ADDR = "http://vault.test:8200"
+CKB_VAULT = "http://vault.test:8200"
 ACCOUNT_URL = "https://exampleaccount.blob.core.windows.net"
 ACCOUNT_KEY = "c2VjcmV0LWFjY291bnQta2V5"
 SAS_TOKEN = "sv=2024-11-04&ss=b&sig=c2VjcmV0LXNpZw"
@@ -37,7 +37,7 @@ def _settings(
 ) -> Settings:
     return Settings(
         content_work_dir=str(tmp_path / "work"),
-        vault_addr=VAULT_ADDR,
+        ckb_vault=CKB_VAULT,
         vault_token_path=str(token_file),
         vault_secret_path=secret_path,
     )
@@ -97,7 +97,7 @@ def test_each_credential_kind_is_parsed_from_one_bounded_request(
     assert secrets.credential_kind == kind
     _assert_no_secret_in(repr(secrets))
     [call] = calls
-    assert call["url"] == f"{VAULT_ADDR}/v1/secret/data/{SECRET_PATH}"
+    assert call["url"] == f"{CKB_VAULT}/v1/secret/data/{SECRET_PATH}"
     assert call["headers"] == {"X-Vault-Token": TOKEN}
     assert 0 < call["timeout"] <= 30
 

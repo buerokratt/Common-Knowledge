@@ -93,6 +93,7 @@ def test_health_reports_the_configured_sink(
     # D18: an s3 manifest store authenticates with the EXTERNAL_S3_* keys.
     monkeypatch.setenv("EXTERNAL_S3_ACCESS_KEY_ID", "manifest-key-id")
     monkeypatch.setenv("EXTERNAL_S3_SECRET_ACCESS_KEY", "manifest-secret")
+    monkeypatch.setenv("EXTERNAL_S3_REGION", "eu-north-1")
     monkeypatch.setenv("LLM_MODULE_BASE_URL", "https://llm.example/ingest")
     monkeypatch.setenv("LLM_MODULE_COLLECTION", "ckb_chunks_v1")
     monkeypatch.setenv("LLM_MODULE_VAULT_SECRET_PATH", "llm/connections/ingest")
@@ -255,11 +256,11 @@ def test_startup_refuses_when_more_than_one_agency_exists(
     assert "2 agencies" in str(excinfo.value)
 
 
-def test_startup_survives_an_unreachable_resql(
+def test_startup_survives_an_unreachable_ckb(
     work_dir_env: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The other half of A17's asymmetry: the agency check is the only startup
-    check that tolerates its own failure, because Resql may still be starting
+    check that tolerates its own failure, because CKB may still be starting
     and this service has no depends_on for it."""
     monkeypatch.setattr(
         "exporter.api.app.check_single_agency_at_startup", lambda _settings: None

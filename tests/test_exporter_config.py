@@ -41,9 +41,8 @@ def clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Clear every variable Settings reads.
 
     Derived from the model itself, so a field added by A12, H or L is covered
-    without editing this fixture. It is needed because tests/conftest.py
-    already seeds RUUTER_INTERNAL for the cleaning tests, and a developer
-    shell may carry AWS_* credentials.
+    without editing this fixture. It is needed because a developer shell may
+    carry AWS_* credentials or a CKB_* endpoint.
     """
     for name in Settings.model_fields:
         monkeypatch.delenv(name.upper(), raising=False)
@@ -82,16 +81,19 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.bootstrap_checkpoint_every == 250
     assert settings.max_document_bytes == 20_971_520
     assert settings.max_chunks_per_document == 5_000
-    assert settings.ckb_resql_timeout == 30.0
+    assert settings.ckb_query_timeout == 35.0
     assert settings.ckb_s3_connect_timeout == 5.0
     assert settings.ckb_s3_read_timeout == 60.0
-    assert settings.ruuter_internal == "http://ruuter-internal:8089"
-    assert settings.ckb_resql == "http://resql-ckb:8090/ckb"
-    assert settings.vault_addr == "http://vault:8200"
+    # No endpoint is a default in code: they come from constants.ini, read by
+    # load_settings() (see the constants.ini tests below).
+    assert settings.ckb_ruuter_internal == ""
+    assert settings.ckb_vault == ""
+    assert "ckb_resql" not in Settings.model_fields
     assert settings.vault_token_path == "/agent/out/token"
     assert settings.vault_secret_path == ""
     assert settings.azure_storage_container == ""
-    assert settings.external_s3_region == "us-east-1"
+    # No region default either: deployment config supplies it.
+    assert settings.external_s3_region == ""
     assert settings.external_s3_supports_batch_delete is True
 
 
@@ -154,6 +156,7 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     # D18: an explicit s3 manifest store authenticates with these.
     "external_s3_access_key_id": "manifest-key-id",
     "external_s3_secret_access_key": "manifest-secret",
+    "external_s3_region": "eu-north-1",
     "llm_module_base_url": "https://llm.example/ingest",
     "llm_module_collection": "ckb_chunks_v1",
     "llm_module_vault_secret_path": "llm/connections/ingest",
@@ -304,6 +307,10 @@ def test_llm_module_base_url_error_does_not_echo_a_credential() -> None:
         (
             {"manifest_store_backend": "s3", "manifest_store_endpoint_url": ""},
             "ENDPOINT_URL",
+        ),
+        (
+            {"manifest_store_backend": "s3", "external_s3_region": ""},
+            "EXTERNAL_S3_REGION",
         ),
         (
             {"manifest_store_backend": "azure_blob", "manifest_store_bucket": ""},
@@ -498,6 +505,7 @@ _COMPLETE_S3_DESTINATION: dict[str, object] = {
     "external_s3_bucket_name": "content-external",
     "external_s3_access_key_id": SecretStr("writer"),
     "external_s3_secret_access_key": SecretStr("writer-secret"),
+    "external_s3_region": "us-east-1",
 }
 
 
@@ -525,6 +533,7 @@ def test_an_empty_s3_destination_is_warned_about_by_name(
         "EXTERNAL_S3_BUCKET_NAME",
         "EXTERNAL_S3_ACCESS_KEY_ID",
         "EXTERNAL_S3_SECRET_ACCESS_KEY",
+        "EXTERNAL_S3_REGION",
     ):
         assert name in message
 
@@ -599,6 +608,7 @@ def test_missing_destination_settings_is_what_the_factory_refuses(
         "EXTERNAL_S3_ENDPOINT_URL",
         "EXTERNAL_S3_ACCESS_KEY_ID",
         "EXTERNAL_S3_SECRET_ACCESS_KEY",
+        "EXTERNAL_S3_REGION",
     ]
     with pytest.raises(ConfigurationError, match=", ".join(missing)):
         build_destination_store(settings)
@@ -811,8 +821,14 @@ def test_enum_and_string_fields_reject_bad_values(field: str, value: str) -> Non
         ("export_concurrency", "four"),
         ("export_page_size", 0),
         ("export_page_size", -1),
-        ("ckb_resql_timeout", 0),
-        ("ckb_resql_timeout", -1),
+        ("ckb_query_timeout", 0),
+        ("ckb_query_timeout", -1),
+        # Below the content-external/export-* flows' 25 s step timeout + 5.
+        ("ckb_query_timeout", 10),
+        ("ckb_query_timeout", 29.9),
+        # Above what the export-documents flow's `limit:` can buffer.
+        ("export_page_size", 5_001),
+        ("export_page_size", 20_000),
         ("ckb_s3_connect_timeout", 0),
         ("ckb_s3_connect_timeout", -1),
         ("ckb_s3_read_timeout", 0),
@@ -1250,7 +1266,7 @@ def _vault(
 
     monkeypatch.setattr(config_module.requests, "get", get)
     settings = Settings.model_construct(
-        vault_addr="http://vault:8200/",
+        ckb_vault="http://vault:8200/",
         vault_token_path=str(token_file),
         llm_module_vault_secret_path=f"/{_SECRET_PATH}/",
     )
@@ -1374,3 +1390,184 @@ def test_an_empty_agent_token_is_refused(
     with pytest.raises(CredentialUnavailableError, match="is empty"):
         config_module.fetch_llm_module_token(settings)
     assert calls == []
+
+
+# --------------------------------------------------------------------------
+# Endpoints come from constants.ini, never from code
+# --------------------------------------------------------------------------
+
+
+def _constants(tmp_path: Path, body: str) -> list[Path]:
+    path = tmp_path / "constants.ini"
+    path.write_text(body, encoding="utf-8")
+    return [path]
+
+
+def test_endpoints_are_read_from_constants_ini(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The shared file Ruuter, cleaning and scrapper read. Keys the exporter
+    does not know (CKB_RESQL among them) are ignored."""
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    files = _constants(
+        tmp_path,
+        "CKB_RESQL=http://resql-ckb:8090/ckb\n"
+        "CKB_RUUTER_INTERNAL=http://ruuter-internal.test:8089/ckb\n"
+        "CKB_VAULT=http://vault.test:8200\n"
+        "BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID=\n",
+    )
+
+    settings = load_settings(files)
+
+    assert settings.ckb_ruuter_internal == "http://ruuter-internal.test:8089/ckb"
+    assert settings.ckb_vault == "http://vault.test:8200"
+
+
+def test_an_environment_variable_overrides_constants_ini(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The docker-compose-test.yml pattern: env wins over the file."""
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    monkeypatch.setenv("CKB_RUUTER_INTERNAL", "http://mock-ruuter:8089/ckb")
+    files = _constants(
+        tmp_path, "CKB_RUUTER_INTERNAL=http://ruuter-internal:8089/ckb\n"
+    )
+
+    assert load_settings(files).ckb_ruuter_internal == "http://mock-ruuter:8089/ckb"
+
+
+@pytest.mark.parametrize(
+    "body", ["", "CKB_RUUTER_INTERNAL=\n", "CKB_RUUTER_INTERNAL=ruuter-internal:8089\n"]
+)
+def test_startup_refuses_without_a_ruuter_internal_endpoint(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, body: str
+) -> None:
+    """Missing, empty or not a URL: the service never falls back to a host
+    name baked into code."""
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    with pytest.raises(ConfigurationError, match="CKB_RUUTER_INTERNAL") as excinfo:
+        load_settings(_constants(tmp_path, body))
+    assert "constants.ini" in str(excinfo.value)
+
+
+def test_startup_refuses_when_constants_ini_is_not_mounted(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    with pytest.raises(ConfigurationError, match="CKB_RUUTER_INTERNAL"):
+        load_settings([tmp_path / "absent.ini"])
+
+
+def test_vault_is_not_required_for_an_s3_object_store(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    files = _constants(
+        tmp_path, "CKB_RUUTER_INTERNAL=http://ruuter-internal:8089/ckb\n"
+    )
+
+    assert load_settings(files).ckb_vault == ""
+
+
+def test_vault_is_required_when_the_configuration_reads_it(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    monkeypatch.setenv("CONTENT_EXTERNAL_STORE_BACKEND", "azure_blob")
+    files = _constants(
+        tmp_path, "CKB_RUUTER_INTERNAL=http://ruuter-internal:8089/ckb\n"
+    )
+
+    with pytest.raises(ConfigurationError, match="CKB_VAULT"):
+        load_settings(files)
+
+
+@pytest.mark.parametrize(
+    "overrides, required",
+    [
+        ({}, False),
+        ({"content_external_store_backend": "azure_blob"}, True),
+        (
+            {
+                "manifest_store_backend": "azure_blob",
+                "manifest_store_bucket": "manifests",
+                "vault_secret_path": "blob/x",
+            },
+            True,
+        ),
+    ],
+)
+def test_vault_is_required_exactly_when_something_reads_it(
+    overrides: dict[str, object], required: bool
+) -> None:
+    assert _settings(**overrides).vault_is_required is required
+
+
+def test_the_repo_constants_ini_satisfies_startup(
+    clean_env: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file compose and the chart mount defines what startup requires,
+    with the project layer included, as cleaning and scrapper expect it."""
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    settings = load_settings()
+
+    assert settings.ckb_ruuter_internal.endswith("/ckb")
+    assert settings.ckb_vault.startswith("http")
+
+
+def test_constants_files_cover_the_container_and_the_repo() -> None:
+    """/app/constants.ini in the container (config.py is /app/exporter/api/),
+    the repo root's when run from a checkout."""
+    repo_root = Path(__file__).resolve().parents[1]
+    content_external = repo_root / "content-external"
+    assert repo_root / "constants.ini" in config_module.CONSTANTS_FILES
+    assert content_external / "constants.ini" in config_module.CONSTANTS_FILES
+
+
+# --------------------------------------------------------------------------
+# Settings the content-external flows' fixed Ruuter values bound
+# --------------------------------------------------------------------------
+
+
+def test_the_flow_bounds_are_inclusive() -> None:
+    """The floor and ceiling themselves are valid values."""
+    from exporter.services.ckb_ruuter import (
+        MAX_EXPORT_PAGE_SIZE,
+        MIN_QUERY_TIMEOUT_SECONDS,
+    )
+
+    settings = _settings(
+        ckb_query_timeout=MIN_QUERY_TIMEOUT_SECONDS,
+        export_page_size=MAX_EXPORT_PAGE_SIZE,
+    )
+    assert settings.ckb_query_timeout == MIN_QUERY_TIMEOUT_SECONDS
+    assert settings.export_page_size == MAX_EXPORT_PAGE_SIZE
+
+
+@pytest.mark.parametrize(
+    ("variable", "value", "names"),
+    [
+        ("CKB_QUERY_TIMEOUT", "20", "step timeout"),
+        ("EXPORT_PAGE_SIZE", "10000", "export-documents flow"),
+    ],
+)
+def test_a_value_the_flows_cannot_honour_refuses_startup_by_name(
+    clean_env: None,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    variable: str,
+    value: str,
+    names: str,
+) -> None:
+    """The refusal names the variable and the flow it would break, because
+    the person reading it is looking at a crashed container."""
+    monkeypatch.setenv(WORK_DIR_ENV, "/var/lib/content-external")
+    monkeypatch.setenv(variable, value)
+    files = _constants(
+        tmp_path, "CKB_RUUTER_INTERNAL=http://ruuter-internal:8089/ckb\n"
+    )
+
+    with pytest.raises(ConfigurationError) as excinfo:
+        load_settings(files)
+    assert variable in str(excinfo.value)
+    assert names in str(excinfo.value)

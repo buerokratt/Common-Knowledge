@@ -32,16 +32,17 @@ spec:
       # L11: how a cluster hands the llm-module sink its Vault token — the
       # built-in sidecar (vaultAgent), or the Vault Agent Injector's
       # annotations. See values.yaml.
-      {{- if or .Values.contentExternal.podAnnotations $va.enabled }}
       annotations:
         {{- with .Values.contentExternal.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
+        # A changed constants.ini (an endpoint) restarts the pod; nothing else
+        # would, because it is read once at startup.
+        checksum/constants: {{ include (print $.Template.BasePath "/content-external-configmap.yaml") . | sha256sum }}
         {{- if $va.enabled }}
         # A changed agent config restarts the pod; nothing else would.
         checksum/vault-agent: {{ include (print $.Template.BasePath "/content-external-vault-agent-configmap.yaml") . | sha256sum }}
         {{- end }}
-      {{- end }}
     spec:
       # Always rendered, `default` when the namespace default is meant. An
       # upgrade that omits it (serviceAccount.create switched off, e.g. back
@@ -88,9 +89,8 @@ spec:
             # L11: the token the sidecar below keeps fresh, read on every
             # llm-module operation. Templated from the same value as the
             # mount, so the two cannot drift; vaultAgentMethod refuses a
-            # second definition in env.
-            - name: VAULT_ADDR
-              value: {{ $va.vaultAddr | quote }}
+            # second definition in env. Vault's own address is CKB_VAULT in
+            # constants.ini (mounted below), as for cleaning.
             - name: VAULT_TOKEN_PATH
               value: {{ printf "%s/token" (trimSuffix "/" $va.tokenMountPath) | quote }}
             {{- end }}
@@ -176,6 +176,12 @@ spec:
           volumeMounts:
             - name: content-external-work
               mountPath: {{ include "ckb.contentExternal.workDir" . }}
+            # Endpoints (CKB_RUUTER_INTERNAL, CKB_VAULT). Startup refuses
+            # without CKB_RUUTER_INTERNAL.
+            - name: constants-config
+              mountPath: /app/constants.ini
+              subPath: constants.ini
+              readOnly: true
             {{- if $va.enabled }}
             - name: vault-agent-token
               mountPath: {{ trimSuffix "/" $va.tokenMountPath }}
@@ -220,6 +226,9 @@ spec:
         - name: content-external-work
           persistentVolumeClaim:
             claimName: "{{ .Values.contentExternal.nameOverride }}-work-pvc"
+        - name: constants-config
+          configMap:
+            name: {{ .Values.contentExternal.nameOverride }}-constants
         {{- if $va.enabled }}
         # Memory-backed: the token never touches a node's disk. Memory
         # counts against the pod's limit, so it is capped: a token is bytes.

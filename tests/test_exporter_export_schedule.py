@@ -568,14 +568,18 @@ def test_the_client_unwraps_ruuters_response_envelope(
         return _Response({"response": TOGGLE_ON})
 
     monkeypatch.setattr("exporter.services.export_schedule.requests.get", get)
-    client = RuuterScheduleClient("http://ruuter-internal:8089/")
+    # CKB_RUUTER_INTERNAL as constants.ini spells it: the project layer
+    # included, so the paths must not add it again.
+    client = RuuterScheduleClient("http://ruuter-internal:8089/ckb/")
 
     assert client.content_export_status() == TOGGLE_ON
     assert client.content_export() == TOGGLE_ON
     assert urls == [
-        "http://ruuter-internal:8089" + CONTENT_EXPORT_STATUS_PATH,
-        "http://ruuter-internal:8089" + CONTENT_EXPORT_PATH,
+        "http://ruuter-internal:8089/ckb/pipeline/content-export-status",
+        "http://ruuter-internal:8089/ckb/pipeline/content-export",
     ]
+    assert CONTENT_EXPORT_STATUS_PATH == "/pipeline/content-export-status"
+    assert CONTENT_EXPORT_PATH == "/pipeline/content-export"
 
 
 def test_the_client_accepts_an_unwrapped_answer(
@@ -603,6 +607,30 @@ def test_the_client_raises_ckb_call_error(
     )
     with pytest.raises(CkbCallError):
         RuuterScheduleClient("http://ruuter-internal:8089").content_export()
+
+
+@pytest.mark.parametrize(
+    ("status", "hint"),
+    [(300, "flows deployed"), (500, "flows not deployed"), (204, "")],
+)
+def test_the_client_names_the_status_and_its_likely_cause(
+    monkeypatch: pytest.MonkeyPatch, status: int, hint: str
+) -> None:
+    """A path with no flow behind it is 300 (published Ruuter image) or 500
+    (a local build), both with an empty body; raise_for_status would let the
+    300 through. The warning names the status and where to look, never a
+    JSON decode error, and never the URL."""
+    monkeypatch.setattr(
+        "exporter.services.export_schedule.requests.get",
+        lambda url, timeout: _Response(None, status=status),
+    )
+    with pytest.raises(CkbCallError) as excinfo:
+        RuuterScheduleClient("http://ruuter-internal:8089").content_export_status()
+    message = str(excinfo.value)
+    assert message.startswith(f"/pipeline/content-export-status: HTTP {status}")
+    assert hint in message
+    assert "JSONDecodeError" not in message
+    assert "ruuter-internal:8089" not in message
 
 
 def test_the_client_raises_ckb_call_error_when_unreachable(

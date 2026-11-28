@@ -79,10 +79,11 @@ What it refuses, and why:
   service account; binding it to `default` hands the credential to every pod
   in the namespace that runs as `default`;
 - `approle` without the Secret holding role_id and secret_id;
-- VAULT_ADDR or VAULT_TOKEN_PATH also set in contentExternal.env. The sidecar
-  sets both, from the same values it mounts the token with; a second value
-  would win or lose by list order, and a token path that misses the mount is
-  `credential unavailable` on every push;
+- VAULT_TOKEN_PATH also set in contentExternal.env. The sidecar sets it from
+  the same value it mounts the token with; a second value would win or lose
+  by list order, and a token path that misses the mount is `credential
+  unavailable` on every push. (Vault's address is CKB_VAULT in constants.ini,
+  not an env var the chart sets.)
 - the Vault Agent Injector's annotation as well. Two agents would each write
   a token, to different places.
 */}}
@@ -99,8 +100,8 @@ What it refuses, and why:
 {{- fail "contentExternal.vaultAgent.auth.method=approle needs contentExternal.vaultAgent.auth.approleSecret.name: a Secret holding the role_id and secret_id. Note that vault/init.sh gives secret_id a 24h TTL, so something must rotate that Secret — kubernetes auth needs no rotation." -}}
 {{- end -}}
 {{- range concat (.Values.contentExternal.env | default list) (.Values.contentExternal.extraEnv | default list) -}}
-{{- if has .name (list "VAULT_ADDR" "VAULT_TOKEN_PATH") -}}
-{{- fail (printf "contentExternal.env or extraEnv sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.vaultAddr / vaultAgent.tokenMountPath). Remove it." .name) -}}
+{{- if eq .name "VAULT_TOKEN_PATH" -}}
+{{- fail (printf "contentExternal.env or extraEnv sets %s, but contentExternal.vaultAgent is enabled and sets it itself (vaultAgent.tokenMountPath). Remove it." .name) -}}
 {{- end -}}
 {{- end -}}
 {{- if hasKey (.Values.contentExternal.podAnnotations | default dict) "vault.hashicorp.com/agent-inject" -}}
@@ -183,6 +184,31 @@ line, so nothing else may get in), and on a constants.ini without exactly one
 BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID line, which is also what a Windows checkout
 gives: the link arrives as a text file holding "../../constants.ini".
 */}}
+{{/*
+content-external's constants.ini: the repo file (charts/ckb/constants.ini, a
+link to the root constants.ini), unchanged.
+
+Aborts the render when the file has no CKB_RUUTER_INTERNAL=http(s)://... line,
+because the exporter has no endpoint defaults in code and would crash-loop at
+startup with "CKB_RUUTER_INTERNAL is empty". A Windows checkout causes exactly
+this: the link arrives as a text file holding "../../constants.ini". Skipped
+when contentExternal.env or extraEnv sets CKB_RUUTER_INTERNAL, which overrides
+the file.
+*/}}
+{{- define "ckb.contentExternal.constantsIni" -}}
+{{- $ini := .Files.Get "constants.ini" -}}
+{{- $overridden := false -}}
+{{- range concat (.Values.contentExternal.env | default list) (.Values.contentExternal.extraEnv | default list) -}}
+{{- if eq .name "CKB_RUUTER_INTERNAL" -}}
+{{- $overridden = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and (not $overridden) (not (regexMatch "(?m)^CKB_RUUTER_INTERNAL=https?://\\S+" $ini)) -}}
+{{- fail "charts/ckb/constants.ini has no CKB_RUUTER_INTERNAL=http(s)://... line, so content-external would refuse to start. On Windows the link checks out as a text file holding \"../../constants.ini\": render from Linux or CI" -}}
+{{- end -}}
+{{- $ini -}}
+{{- end -}}
+
 {{- define "ckb.ruuterInternal.constantsIni" -}}
 {{- $ini := .Files.Get "constants.ini" -}}
 {{- $domain := .Values.ruuterInternal.chatbotWidgetDomainId | default "" | trim -}}

@@ -1,0 +1,16 @@
+{{- if .Values.contentExternal.enabled }}
+# The shared constants.ini (charts/ckb/constants.ini links to the repo root's),
+# mounted at /app/constants.ini as for cleaning and scrapper. content-external
+# reads its endpoints from it — CKB_RUUTER_INTERNAL always, CKB_VAULT when it
+# reads Vault — and refuses to start without them: no endpoint is a default
+# in code. The helper aborts the render when CKB_RUUTER_INTERNAL is missing
+# (e.g. a Windows checkout of the link) instead of shipping a pod that
+# crash-loops.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.contentExternal.nameOverride }}-constants
+data:
+  constants.ini: |-
+{{ include "ckb.contentExternal.constantsIni" . | indent 4 }}
+{{- end }}

@@ -19,16 +19,17 @@ fails the call now; the next tick is the retry.
 WHERE IT IS APPLIED, AND WHERE IT IS DELIBERATELY NOT.
 
 - Every `requests` call: the run-start agency check
-  (services/agency_guard.py), Stage E's Resql queries
-  (services/document_source.py), and Stage L's llm-module push when it
-  lands. A timeout is retried, and a timed-out request may have been applied,
-  so this is for idempotent calls: GETs, and an upsert keyed by coordinate
-  chunk ids, whose replay overwrites rather than adds. A caller with a
-  non-idempotent request, or one whose timed-out request keeps running on the
-  far side, passes its own `is_retryable`: every Resql query passes
-  `is_retryable_resql`, because Resql does not cancel a query whose client
-  gave up, so a retry would run alongside the abandoned one and stack load
-  (RUNBOOK.md, "Do not retry immediately after a timeout").
+  (services/agency_guard.py), Stage E's enumeration reads
+  (services/document_source.py), and Stage L's llm-module push. A timeout is
+  retried, and a timed-out request may have been applied, so this is for
+  idempotent calls: GETs, and an upsert keyed by coordinate chunk ids, whose
+  replay overwrites rather than adds. A caller with a non-idempotent request,
+  or one whose timed-out request keeps running on the far side, passes its own
+  `is_retryable`: every CKB read through Ruuter-internal
+  (services/ckb_ruuter.py) passes `is_retryable_ruuter_read`, because neither
+  Ruuter nor Resql cancels a query whose client gave up, so a retry would run
+  alongside the abandoned one and stack load (RUNBOOK.md, "Do not retry
+  immediately after a timeout").
 - NOT either S3 client. botocore's `retries={"mode": "standard"}` already
   backs off with jitter on throttles, 5xx and connection errors
   (exporter/stores/s3_store.py for the destination,
@@ -62,7 +63,7 @@ __all__ = [
     "BackoffPolicy",
     "full_jitter_delay",
     "is_retryable_http",
-    "is_retryable_resql",
+    "is_retryable_ruuter_read",
     "retry_after_seconds",
     "retry_with_backoff",
 ]
@@ -131,10 +132,26 @@ def _read_timed_out(exc: BaseException) -> bool:
     )
 
 
-def is_retryable_resql(exc: BaseException) -> bool:
-    """F8's rule, less a read timeout: see the module docstring. A connect
-    timeout never reached Resql and is still retried."""
-    return not _read_timed_out(exc) and is_retryable_http(exc)
+# Ruuter's answer when a flow aborts: the Resql call behind it could not
+# connect or hit the step's `timeout:`. The two are indistinguishable from
+# here, and the second leaves the query running in Postgres.
+_RUUTER_ABORT_STATUS = 500
+
+
+def is_retryable_ruuter_read(exc: BaseException) -> bool:
+    """F8's rule for a CKB read through Ruuter-internal, less two cases that
+    may leave a query running in Postgres: our own read timeout, and a
+    Ruuter 500, which is how a flow reports that its Resql step timed out (or
+    could not connect). A connect timeout never reached Ruuter, and a 502 is
+    the flow saying Resql answered with an error, so both are still retried.
+
+    The cost: a Resql restart now fails the run instead of being ridden out
+    by backoff, and the next tick retries it. That is the price of never
+    stacking a second copy of a slow query on the first.
+    """
+    if _read_timed_out(exc) or _status(exc) == _RUUTER_ABORT_STATUS:
+        return False
+    return is_retryable_http(exc)
 
 
 def retry_after_seconds(

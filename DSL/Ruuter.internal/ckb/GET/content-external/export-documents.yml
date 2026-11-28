@@ -1,0 +1,118 @@
+declaration:
+  call: declare
+  version: 0.1
+  description: "One keyset page of an agency's export documents, for content-external"
+  method: get
+  accepts: json
+  returns: json
+  namespace: ckb
+  allowlist:
+    params:
+      - field: agencyBaseId
+        type: string
+        description: "UUID of the agency base"
+      - field: afterBaseId
+        type: string
+        description: "Exclusive lower bound for the document base ID; the nil UUID for the first page"
+      - field: pageSize
+        type: number
+        description: "Maximum documents per page (EXPORT_PAGE_SIZE)"
+
+# content-external reads CKB only through Ruuter-internal, never Resql directly.
+# Its caller is content-external/exporter/services/document_source.py, which
+# pages through every document of the agency by base_id cursor.
+#
+#   a param missing                 -> 400 "missing_param: <name>": the allowlist
+#                                      above and the Python have drifted; not
+#                                      retried
+#   Resql answers with any non-2xx  -> 502 {error: resql_error}; retried
+#   Resql unreachable or timed out  -> 500, null body: Ruuter aborts the flow
+#                                      and `error:` cannot catch it; never
+#                                      retried, because a timed-out query is
+#                                      still running in Postgres
+#
+# The status is checked explicitly because CKB's httpCodesAllowList lets a
+# Resql 400/401/403/500 through as a normal result: without the check the
+# caller would get HTTP 200 {"response": "Bad Request"}.
+#
+# limit is in KB. Ruuter buffers at most 256 KB of a response by default, and
+# one 1,000-row page measures about 0.81 MB (RUNBOOK.md): without it every
+# page fails and the export fails on every run. 8 MB leaves headroom for
+# EXPORT_PAGE_SIZE up to roughly 8,000 rows. Raising EXPORT_PAGE_SIZE beyond
+# that means raising this too.
+#
+# Logging is off for this step: ruuter-internal logs whole response bodies
+# (displayResponseContent=true), which would be ~0.8 MB of log per page.
+#
+# timeout is in ms (Ruuter's default is 15 s; the slowest page took 1.53 s at
+# 50k documents, RUNBOOK.md). It must stay below the exporter's
+# CKB_QUERY_TIMEOUT (35 s by default), so Ruuter always answers first.
+
+extractRequestData:
+  assign:
+    agencyBaseId: ${incoming.params.agencyBaseId}
+    afterBaseId: ${incoming.params.afterBaseId}
+    pageSize: ${incoming.params.pageSize}
+  next: checkParams
+
+checkParams:
+  switch:
+    - condition: ${!agencyBaseId}
+      next: returnMissingAgencyBaseId
+    - condition: ${!afterBaseId}
+      next: returnMissingAfterBaseId
+    - condition: ${!pageSize}
+      next: returnMissingPageSize
+  next: getDocuments
+
+getDocuments:
+  call: http.get
+  args:
+    url: "[#CKB_RESQL]/source_file/list_agency_export_documents"
+    query:
+      agency_base_id: ${agencyBaseId}
+      after_base_id: ${afterBaseId}
+      page_size: ${pageSize}
+  timeout: 25000
+  limit: 8192
+  logging:
+    request: false
+    response: false
+  result: res
+  error: assignUpstreamError
+  next: checkStatus
+
+checkStatus:
+  switch:
+    - condition: ${200 <= res.response.statusCodeValue && res.response.statusCodeValue < 300}
+      next: returnSuccess
+  next: assignUpstreamError
+
+assignUpstreamError:
+  assign:
+    upstreamError: { "error": "resql_error", "query": "source_file/list_agency_export_documents", "upstreamStatus": "${res.response.statusCodeValue}" }
+  next: returnUpstreamError
+
+returnUpstreamError:
+  return: ${upstreamError}
+  status: 502
+  next: end
+
+returnMissingAgencyBaseId:
+  return: "missing_param: agencyBaseId"
+  status: 400
+  next: end
+
+returnMissingAfterBaseId:
+  return: "missing_param: afterBaseId"
+  status: 400
+  next: end
+
+returnMissingPageSize:
+  return: "missing_param: pageSize"
+  status: 400
+  next: end
+
+returnSuccess:
+  return: ${res.response.body}
+  next: end

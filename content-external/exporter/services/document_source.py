@@ -1,9 +1,12 @@
-"""Enumeration reads Resql directly under the named read-only SELECT exception.
+"""Enumeration reads CKB through Ruuter-internal, never Resql directly.
 
-Like agency_guard, this bypasses Ruuter only for query-named reads. Every row
-must reach the diff: omitting an unfinished or malformed row would turn it
-into a downstream deletion. Malformed responses therefore fail the whole run.
-URLs and timestamps stay verbatim so enumeration cannot change their meaning.
+The watermark and the document pages come from the flows
+content-external/export-watermark and content-external/export-documents
+(services/ckb_ruuter.py), which wrap Resql's get_agency_export_watermark and
+list_agency_export_documents. Every row must reach the diff: omitting an
+unfinished or malformed row would turn it into a downstream deletion.
+Malformed responses therefore fail the whole run. URLs and timestamps stay
+verbatim so enumeration cannot change their meaning.
 
 A deleted source deletes its files. CKB marks only the source row
 (source/delete_source.sql) and never its files, so a file whose source's
@@ -18,15 +21,16 @@ does not withhold the corpus watermark the way a read-time skip does.
 A read fetches the sidecar before the content, so a rejected sidecar costs one
 small GET instead of a full content download on every run.
 
-Each Resql call is retried under F8's rule (services/backoff.py): connection
-errors, 408/429 and 5xx, with full jitter and Retry-After honoured. A read
-timeout is the one carve-out. Resql does not cancel a query its client gave up
-on, so a retry would run alongside the abandoned one and stack load
-(RUNBOOK.md, "Do not retry immediately after a timeout"). That holds whether
-the timeout hits before the response or while its body streams in, which
-requests reports as a ConnectionError. A connect timeout never reached Resql
-and is retried. The classifier, is_retryable_resql, lives in services/backoff.py
-because agency_guard's run-start check applies the same carve-out.
+Each read is retried under F8's rule (services/backoff.py): connection
+errors, 408/429 and 5xx, with full jitter and Retry-After honoured. Two
+carve-outs, both because neither Ruuter nor Resql cancels a query its client
+gave up on, so a retry would run alongside the abandoned one and stack load
+(RUNBOOK.md, "Do not retry immediately after a timeout"): our own read
+timeout, whether it hits before the response or while its body streams in
+(requests reports the latter as a ConnectionError), and a Ruuter 500, which is
+how a flow reports that its Resql step timed out. A connect timeout never
+reached Ruuter and is retried. The classifier, is_retryable_ruuter_read, lives
+in services/backoff.py because agency_guard's run-start check applies it too.
 """
 
 import logging
@@ -34,21 +38,20 @@ from abc import ABC, abstractmethod
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any
 
-import requests
-
 from exporter.core.metadata import MAX_SIDECAR_BYTES, SidecarRejection, parse_sidecar
 from exporter.core.schemas import AgencyWatermark, DocumentRef, ReadDocument
 from exporter.core.text_normaliser import normalise_nfc, sha256_hex, sha256_text
-from exporter.services.backoff import (
-    DEFAULT_POLICY,
-    BackoffPolicy,
-    is_retryable_resql,
-    retry_with_backoff,
-)
+from exporter.services.backoff import DEFAULT_POLICY, BackoffPolicy
 from exporter.services.ckb_bucket import (
     CkbBucket,
     InvalidObjectKeyError,
     ObjectTooLargeError,
+)
+from exporter.services.ckb_ruuter import (
+    DOCUMENTS_PATH,
+    WATERMARK_PATH,
+    CkbReadError,
+    get_rows,
 )
 
 if TYPE_CHECKING:
@@ -106,11 +109,11 @@ class DocumentSource(ABC):
 
 def _validate_row(row: object, columns: dict[str, tuple[type, ...]]) -> dict[str, Any]:
     if not isinstance(row, dict):
-        raise DocumentSourceError("Resql returned a non-object row")
+        raise DocumentSourceError("CKB returned a non-object row")
     for name, types in columns.items():
         if name not in row or type(row[name]) not in types:
             # Exact types prevent JSON booleans being accepted as integer counts.
-            raise DocumentSourceError(f"Resql column {name} is missing or mistyped")
+            raise DocumentSourceError(f"CKB column {name} is missing or mistyped")
     return row
 
 
@@ -136,44 +139,26 @@ class CkbDocumentSource(DocumentSource):
         self._bucket = CkbBucket(settings)
         self._backoff = backoff
 
-    def _rows(self, query: str, agency_id: str, **params: str | int) -> list[Any]:
-        url = f"{self._settings.ckb_resql}/{query}"
-
-        def get() -> requests.Response:
-            response = requests.get(
-                url,
-                params={"agency_base_id": agency_id, **params},
-                timeout=self._settings.ckb_resql_timeout,
-            )
-            response.raise_for_status()
-            return response
-
+    def _rows(self, path: str, agency_id: str, **params: str | int) -> list[Any]:
         try:
-            response = retry_with_backoff(
-                get,
-                describe=f"Resql {query}",
+            return get_rows(
+                self._settings.ckb_ruuter_internal,
+                path,
+                {"agencyBaseId": agency_id, **params},
+                timeout=self._settings.ckb_query_timeout,
                 policy=self._backoff,
-                is_retryable=is_retryable_resql,
+                describe=f"CKB read {path}",
             )
-        except requests.RequestException as exc:
-            raise DocumentSourceError("could not read Resql") from exc
-        try:
-            payload = response.json()
-        except ValueError as exc:
-            raise DocumentSourceError("Resql returned a non-JSON body") from exc
-        if isinstance(payload, dict):
-            payload = payload.get("response", payload)
-        if not isinstance(payload, list):
-            raise DocumentSourceError("Resql did not return a list")
-        return payload
+        except CkbReadError as exc:
+            raise DocumentSourceError(str(exc)) from exc
 
     def watermark(self, agency_id: str) -> AgencyWatermark:
-        rows = self._rows("agency/get_agency_export_watermark", agency_id)
+        rows = self._rows(WATERMARK_PATH, agency_id)
         if len(rows) != 1:
-            raise DocumentSourceError("Resql did not return exactly one watermark")
+            raise DocumentSourceError("CKB did not return exactly one watermark")
         row = _validate_row(rows[0], _WATERMARK_COLUMNS)
         if row["liveCount"] < 0:
-            raise DocumentSourceError("Resql liveCount is negative")
+            raise DocumentSourceError("CKB liveCount is negative")
         return AgencyWatermark(row["maxUpdatedAt"], row["liveCount"])
 
     def list_documents(self, agency_id: str) -> list[DocumentRef]:
@@ -187,17 +172,19 @@ class CkbDocumentSource(DocumentSource):
         pages = 0
         while True:
             rows = self._rows(
-                "source_file/list_agency_export_documents",
+                DOCUMENTS_PATH,
                 agency_id,
-                after_base_id=after_base_id,
-                page_size=page_size,
+                afterBaseId=after_base_id,
+                pageSize=page_size,
             )
             pages += 1
             for raw in rows:
                 row = _validate_row(raw, _DOCUMENT_COLUMNS)
                 document_id = row["baseId"]
                 if document_id <= after_base_id:
-                    raise DocumentSourceError("Resql baseId did not advance the cursor")
+                    # Also what a dropped afterBaseId looks like: the same
+                    # first page again. Fails loudly rather than looping.
+                    raise DocumentSourceError("CKB baseId did not advance the cursor")
                 after_base_id = document_id
                 origin = "cleaned" if row["cleanedDataUrl"] else None
                 documents.append(

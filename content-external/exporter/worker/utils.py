@@ -40,7 +40,7 @@ logger = logging.getLogger(__name__)
 # Grep this beside `content-external run` and `content-external config`.
 ERROR_LOG_PREFIX = "content-external error"
 
-# Long enough for a Resql URL path or a store key and an error code; short
+# Long enough for a Ruuter flow path or a store key and an error code; short
 # enough that a library message quoting more than that is cut off.
 _MAX_MESSAGE_CHARS = 300
 

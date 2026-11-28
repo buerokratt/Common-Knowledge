@@ -33,11 +33,11 @@ from exporter.core.schemas import (
     ManifestDocumentEntry,
     ReadDocument,
 )
-from exporter.services import document_source
+from exporter.services import ckb_ruuter, document_source
 from exporter.services.backoff import (
     BackoffPolicy,
     is_retryable_http,
-    is_retryable_resql,
+    is_retryable_ruuter_read,
 )
 from exporter.services.document_source import CkbDocumentSource, DocumentSourceError
 from exporter.stores.base import StoreError
@@ -63,11 +63,11 @@ ROW = {
 
 
 @pytest.fixture
-def resql_settings() -> Settings:
+def ruuter_settings() -> Settings:
     return Settings(
         content_work_dir="/var/lib/content-external",
-        ckb_resql="http://resql.test/ckb",
-        ckb_resql_timeout=12.5,
+        ckb_ruuter_internal="http://ruuter.test/ckb",
+        ckb_query_timeout=45.0,
         export_page_size=2,
         s3_endpoint_url="invalid://unused",
         s3_bucket_name="",
@@ -80,14 +80,14 @@ FAST_RETRY = BackoffPolicy(max_attempts=3, base_delay=0, max_delay=0)
 
 @pytest.fixture
 def source(
-    monkeypatch: pytest.MonkeyPatch, resql_settings: Settings
+    monkeypatch: pytest.MonkeyPatch, ruuter_settings: Settings
 ) -> CkbDocumentSource:
     def no_client(*_args: object, **_kwargs: object) -> None:
         pytest.fail("enumeration must not create an S3 client")
 
     monkeypatch.setattr(boto3, "client", no_client)
     monkeypatch.setattr(boto3.session.Session, "client", no_client)
-    return CkbDocumentSource(resql_settings, backoff=FAST_RETRY)
+    return CkbDocumentSource(ruuter_settings, backoff=FAST_RETRY)
 
 
 def _stub(
@@ -107,7 +107,7 @@ def _stub(
         captured.update(kwargs)
         return response
 
-    monkeypatch.setattr(document_source.requests, "get", fake_get)
+    monkeypatch.setattr(ckb_ruuter.requests, "get", fake_get)
     return captured
 
 
@@ -130,7 +130,7 @@ def _manifest(entry: ManifestDocumentEntry) -> Manifest:
 def test_enumeration_maps_every_column_without_reading(
     monkeypatch: pytest.MonkeyPatch,
     source: CkbDocumentSource,
-    resql_settings: Settings,
+    ruuter_settings: Settings,
     envelope: bool,
 ) -> None:
     payload = [ROW]
@@ -154,13 +154,13 @@ def test_enumeration_maps_every_column_without_reading(
         )
     ]
     assert captured == {
-        "url": "http://resql.test/ckb/source_file/list_agency_export_documents",
+        "url": "http://ruuter.test/ckb/content-external/export-documents",
         "params": {
-            "agency_base_id": AGENCY,
-            "after_base_id": document_source.NIL_UUID,
-            "page_size": 2,
+            "agencyBaseId": AGENCY,
+            "afterBaseId": document_source.NIL_UUID,
+            "pageSize": 2,
         },
-        "timeout": resql_settings.ckb_resql_timeout,
+        "timeout": ruuter_settings.ckb_query_timeout,
     }
 
 
@@ -184,7 +184,7 @@ def _stub_pages(
         response._content = json.dumps(page).encode()
         return response
 
-    monkeypatch.setattr(document_source.requests, "get", fake_get)
+    monkeypatch.setattr(ckb_ruuter.requests, "get", fake_get)
     return captured
 
 
@@ -204,11 +204,11 @@ def test_enumeration_pages_until_a_short_page(
     assert [ref.document_id for ref in documents] == [row["baseId"] for row in rows]
     assert captured == [
         {
-            "agency_base_id": AGENCY,
-            "after_base_id": (
+            "agencyBaseId": AGENCY,
+            "afterBaseId": (
                 document_source.NIL_UUID if i == 0 else rows[i - 1]["baseId"]
             ),
-            "page_size": page_size,
+            "pageSize": page_size,
         }
         for i in range(0, count + 1, page_size)
     ]
@@ -239,7 +239,10 @@ def test_second_page_failure_aborts_enumeration(
         source.list_documents(AGENCY)
     assert len(captured) == 2
     if isinstance(failure, requests.RequestException):
-        assert excinfo.value.__cause__ is failure
+        # DocumentSourceError <- CkbReadError <- the requests error.
+        cause = excinfo.value.__cause__
+        assert isinstance(cause, ckb_ruuter.CkbReadError)
+        assert cause.__cause__ is failure
 
 
 @pytest.mark.parametrize(
@@ -473,7 +476,7 @@ def test_malformed_or_duplicate_rows_fail_the_enumeration(
 def test_watermark(
     monkeypatch: pytest.MonkeyPatch,
     source: CkbDocumentSource,
-    resql_settings: Settings,
+    ruuter_settings: Settings,
     envelope: bool,
     timestamp: str | None,
     count: int,
@@ -482,9 +485,9 @@ def test_watermark(
     captured = _stub(monkeypatch, {"response": payload} if envelope else payload)
     assert source.watermark(AGENCY) == AgencyWatermark(timestamp, count)
     assert captured == {
-        "url": "http://resql.test/ckb/agency/get_agency_export_watermark",
-        "params": {"agency_base_id": AGENCY},
-        "timeout": resql_settings.ckb_resql_timeout,
+        "url": "http://ruuter.test/ckb/content-external/export-watermark",
+        "params": {"agencyBaseId": AGENCY},
+        "timeout": ruuter_settings.ckb_query_timeout,
     }
 
 
@@ -551,7 +554,7 @@ def test_http_and_json_errors_fail(
         (requests.ReadTimeout, 1),
     ],
 )
-def test_unreachable_resql_fails_after_f8s_retries(
+def test_unreachable_ckb_fails_after_f8s_retries(
     monkeypatch: pytest.MonkeyPatch,
     source: CkbDocumentSource,
     method: str,
@@ -564,7 +567,7 @@ def test_unreachable_resql_fails_after_f8s_retries(
     assert len(captured) == attempts
 
 
-def test_a_read_timeout_mid_body_is_not_retried(resql_settings: Settings) -> None:
+def test_a_read_timeout_mid_body_is_not_retried(ruuter_settings: Settings) -> None:
     """requests reports a timeout after the headers as ConnectionError, not
     ReadTimeout (requests/models.py). A real server that sends headers and
     then stalls the body proves the carve-out still holds: one attempt."""
@@ -592,18 +595,23 @@ def test_a_read_timeout_mid_body_is_not_retried(resql_settings: Settings) -> Non
     thread = threading.Thread(target=serve, daemon=True)
     thread.start()
     port = listener.getsockname()[1]
-    settings = resql_settings.model_copy(
-        update={"ckb_resql": f"http://127.0.0.1:{port}/ckb", "ckb_resql_timeout": 0.3}
+    settings = ruuter_settings.model_copy(
+        update={
+            "ckb_ruuter_internal": f"http://127.0.0.1:{port}/ckb",
+            "ckb_query_timeout": 0.3,
+        }
     )
     try:
         with pytest.raises(DocumentSourceError) as excinfo:
             CkbDocumentSource(settings, backoff=FAST_RETRY).watermark(AGENCY)
-        cause = excinfo.value.__cause__
+        read_error = excinfo.value.__cause__
+        assert isinstance(read_error, ckb_ruuter.CkbReadError)
+        cause = read_error.__cause__
         assert isinstance(cause, requests.ConnectionError)
         assert not isinstance(cause, requests.ReadTimeout)
         # F8's general rule would retry it; the carve-out is what stops it.
         assert is_retryable_http(cause)
-        assert not is_retryable_resql(cause)
+        assert not is_retryable_ruuter_read(cause)
         assert len(connections) == 1
     finally:
         stop.set()
@@ -625,7 +633,7 @@ def _http(status: int) -> requests.Response:
     [requests.ConnectionError("blip"), _http(503), _http(429), _http(502)],
     ids=["connection", "503", "429", "502"],
 )
-def test_a_transient_resql_failure_is_retried(
+def test_a_transient_ckb_failure_is_retried(
     monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, transient: object
 ) -> None:
     captured = _stub_pages(monkeypatch, [transient, [ROW]])
@@ -633,8 +641,37 @@ def test_a_transient_resql_failure_is_retried(
     assert len(captured) == 2
 
 
+@pytest.mark.parametrize("method", ["watermark", "list_documents"])
+def test_a_ruuter_500_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, method: str
+) -> None:
+    """500 is Ruuter aborting the flow, which is also how its Resql step
+    timing out looks: the query may still be running in Postgres, so a retry
+    would stack a second one. The run fails; the next tick is the retry."""
+    captured = _stub_pages(monkeypatch, [_http(500), [ROW]])
+    with pytest.raises(DocumentSourceError, match="HTTP 500"):
+        getattr(source, method)(AGENCY)
+    assert len(captured) == 1
+
+
+@pytest.mark.parametrize("method", ["watermark", "list_documents"])
+@pytest.mark.parametrize("payload", ["Bad Request", {"response": "Bad Request"}])
+def test_a_ruuter_error_string_is_never_data(
+    monkeypatch: pytest.MonkeyPatch,
+    source: CkbDocumentSource,
+    method: str,
+    payload: object,
+) -> None:
+    """CKB's httpCodesAllowList lets a Resql 400/500 through Ruuter as HTTP
+    200 with the reason phrase as the body. A flow that lost its status check
+    would hand that back; it must fail the run, not read as zero rows."""
+    _stub(monkeypatch, payload)
+    with pytest.raises(DocumentSourceError, match="error message"):
+        getattr(source, method)(AGENCY)
+
+
 @pytest.mark.parametrize("status", [400, 404, 501])
-def test_a_permanent_resql_error_is_not_retried(
+def test_a_permanent_ckb_error_is_not_retried(
     monkeypatch: pytest.MonkeyPatch, source: CkbDocumentSource, status: int
 ) -> None:
     captured = _stub_pages(monkeypatch, [_http(status)])
@@ -643,10 +680,10 @@ def test_a_permanent_resql_error_is_not_retried(
     assert len(captured) == 1
 
 
-def test_the_default_policy_is_f8s(resql_settings: Settings) -> None:
+def test_the_default_policy_is_f8s(ruuter_settings: Settings) -> None:
     from exporter.services.backoff import DEFAULT_POLICY
 
-    assert CkbDocumentSource(resql_settings)._backoff is DEFAULT_POLICY
+    assert CkbDocumentSource(ruuter_settings)._backoff is DEFAULT_POLICY
 
 
 def test_document_source_has_no_destination_setting() -> None:
@@ -1192,11 +1229,13 @@ def test_concurrent_first_reads_share_one_client(
         ["s3_bucket_name"],
         ["aws_access_key_id"],
         ["aws_secret_access_key"],
+        ["aws_region"],
         [
             "s3_endpoint_url",
             "s3_bucket_name",
             "aws_access_key_id",
             "aws_secret_access_key",
+            "aws_region",
         ],
     ],
 )
