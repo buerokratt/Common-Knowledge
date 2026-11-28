@@ -421,6 +421,10 @@ says so. This needs blocker 1 merged.
    different names, change them there; `CKB_RUUTER_INTERNAL` must end in the
    project layer, `/ckb` (`http://ruuter-internal:8089/ckb`). The file is
    read once at startup, so restart content-external after any change.
+   Ruuter-internal reads four more of the pipeline's addresses from the same
+   file (`CKB_CONTENT_EXTERNAL`, `CKB_RESQL`, `CKB_USERS_RESQL` and the
+   toggle's domain); all six are in
+   [Endpoints in constants.ini](#endpoints-in-constantsini).
 4. **Apply the migrations** from the same checkout. `migrate.sh` runs the
    unpinned `liquibase/liquibase` image, which is now 5.x and ships without
    the PostgreSQL driver: change that image to `liquibase/liquibase:4.33`
@@ -527,6 +531,11 @@ a mistake fails the deploy rather than the first run.
      The `extraEnv` examples in Steps 6 and 7 list only their own entries;
      since each `--set-json` replaces the whole list, add this entry to every
      one of them.
+
+   Ruuter-internal's addresses for content-external and the two Resql
+   services come from the same file and have no `extraEnv` override; check
+   them against the namespace in
+   [Endpoints in constants.ini](#endpoints-in-constantsini).
 4. **Check storage.** The work PVC (`content-external-work-pvc`, 1 Gi) uses
    the cluster's default StorageClass and must be `ReadWriteOnce` on block or
    local storage, never NFS, EFS or CephFS: the run lock is an `flock`. The
@@ -843,6 +852,7 @@ export adds a `content-external error` line with the sanitised cause.
 | `failed`, `Ruuter-internal read failed (HTTP 400)` | A param the code sends is not in the flow's allowlist: flows and image are from different branches | Deploy both from the same commit |
 | `failed`, `Ruuter-internal read failed (HTTP 502)` | Resql answered every retry with an error | Check resql-ckb's log and its database connection (blocker 7 on Helm) |
 | `failed` naming `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` | The setting is empty | Set it ([4A](#step-4a--compose-configure-and-deploy) / [4B](#step-4b--helm-configure-and-deploy)) |
+| `failed`, `StoreError`: `CKB reads require …` (any of `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`) | A setting for CKB's own bucket is empty; none has a default in code | Compose: the root `.env` ([4A](#step-4a--compose-configure-and-deploy) item 2). Helm: `contentExternal.sourceBucket.*` and its Secret ([4B](#step-4b--helm-configure-and-deploy) items 1–2) |
 | First run fails with `NonEmptyDestination` | The container already holds objects but no manifest | Use an empty container |
 | `export_schedule.state` stays `unknown` | content-external cannot reach Ruuter-internal's `pipeline/content-export-status`, or Ruuter lacks the DSL or `constants.ini` (blockers 4–6) | Check `CKB_RUUTER_INTERNAL` in `constants.ini` and Ruuter-internal's log for `pipeline/content-export-status`; the timer asks again every minute |
 | `export_schedule.state` `inactive` with the toggle OFF | `change_reason` names it: a skip such as `chatbot_domain_not_configured`, or no poll yet since the toggle changed (`last_poll_at`) | Fix the reason, then wait for the next poll or call `pipeline/content-export-sync` |
@@ -882,6 +892,29 @@ service; "Helm" means a value under `contentExternal` in
 `CKB_RUUTER_INTERNAL` and `CKB_VAULT` are the exception: they are read from
 `constants.ini` (no defaults in code), and an environment variable of the
 same name overrides the file.
+
+### Endpoints in constants.ini
+
+Every service address the pipeline uses lives in the root
+[`constants.ini`](../../constants.ini), never in code. Compose mounts it from
+the checkout; Helm renders `charts/ckb/constants.ini` (a link to it) into
+ruuter-internal's and content-external's ConfigMaps, so on Helm a change means
+editing the file in the checkout the deploy job renders from. The defaults
+match the chart's own Service names and ports; change a line only if staging
+names or exposes that service differently.
+
+| Constant | Default | Read by | Used for |
+| --- | --- | --- | --- |
+| `CKB_RUUTER_INTERNAL` | `http://ruuter-internal:8089/ckb` | content-external | Every CKB read and the toggle poll. Must end in `/ckb`. Required: startup refuses without it |
+| `CKB_VAULT` | `http://vault:8200` | content-external (and cleaning) | Reading the Azure secret. Required on Azure. Helm: must equal `vaultAgent.vaultAddr`, or override it in `extraEnv` ([4B](#step-4b--helm-configure-and-deploy) item 3) |
+| `CKB_CONTENT_EXTERNAL` | `http://content-external:8125` | ruuter-internal | The export, sync, drain and reconcile flows calling content-external. Helm: must match `contentExternal.nameOverride` and `contentExternal.service.port` |
+| `CKB_RESQL` | `http://resql-ckb:8090/ckb` | ruuter-internal | The `content-external/*` read flows and `list_agencies`. Helm: must match `resqlCkb.nameOverride` and its port |
+| `CKB_USERS_RESQL` | `http://resql-users:8087/users` | ruuter-internal | The toggle read. Supplied by the surrounding Bürokratt deployment, not this chart (blocker 10) |
+| `BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID` | empty | ruuter-internal | Which chatbot widget's toggle gates the export ([Step 7](#step-7--enable-the-schedule)). Helm: `ruuterInternal.chatbotWidgetDomainId`, no file edit |
+
+ruuter-internal and content-external read the file only at startup. On
+Compose restart them after a change; on Helm the `checksum/constants`
+annotations restart them on the next deploy.
 
 **Required for staging on Azure:**
 
@@ -955,7 +988,7 @@ above:
 ## Checklist
 
 - [ ] Blockers 1–2 (and 3–10 on Helm) cleared; image and DSL both from a commit that includes `feat/cep-refactoring`
-- [ ] `CKB_RUUTER_INTERNAL` and `CKB_VAULT` in `constants.ini` point at staging (Helm: `CKB_VAULT` equals `vaultAgent.vaultAddr`)
+- [ ] Every entry in [Endpoints in constants.ini](#endpoints-in-constantsini) points at staging (Helm: `CKB_VAULT` equals `vaultAgent.vaultAddr`)
 - [ ] `content-external/agencies` answers from inside the content-external container (Step 5.6)
 - [ ] Azure container created; credential created and scoped to it
 - [ ] Vault secret written with `kv put`; placeholders gone

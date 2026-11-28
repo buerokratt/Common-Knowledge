@@ -572,7 +572,7 @@ def test_an_unconfigured_destination_names_every_missing_variable() -> None:
         external_s3_bucket_name="",
         external_s3_access_key_id=SecretStr(""),
         external_s3_secret_access_key=SecretStr(""),
-        external_s3_region="us-east-1",
+        external_s3_region="",
         external_s3_supports_batch_delete=True,
         export_concurrency=4,
     )
@@ -584,6 +584,7 @@ def test_an_unconfigured_destination_names_every_missing_variable() -> None:
         "EXTERNAL_S3_BUCKET_NAME",
         "EXTERNAL_S3_ACCESS_KEY_ID",
         "EXTERNAL_S3_SECRET_ACCESS_KEY",
+        "EXTERNAL_S3_REGION",
     ):
         assert name in message
 

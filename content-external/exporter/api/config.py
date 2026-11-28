@@ -494,7 +494,9 @@ class Settings(BaseSettings):
     s3_bucket_name: str = ""
     aws_access_key_id: SecretStr = SecretStr("")
     aws_secret_access_key: SecretStr = SecretStr("")
-    aws_region: str = "us-east-1"
+    # No default, like the rest of this block: compose and the chart supply
+    # AWS_REGION (sourceBucket.region), and the first read refuses without it.
+    aws_region: str = ""
     ckb_s3_connect_timeout: Annotated[float, Field(gt=0)] = 5.0
     ckb_s3_read_timeout: Annotated[float, Field(gt=0)] = 60.0
 
@@ -509,7 +511,10 @@ class Settings(BaseSettings):
     external_s3_access_key_id: SecretStr = SecretStr("")
     external_s3_secret_access_key: SecretStr = SecretStr("")
     # SigV4 needs a region to sign with; S3-compatible stores ignore its value.
-    external_s3_region: str = "us-east-1"
+    # No default, like the rest of this block: compose and the chart
+    # (externalStore.region) supply it, and an s3 destination or manifest
+    # store refuses without it.
+    external_s3_region: str = ""
     # D11. Declared, never probed: a store whose DeleteObjects is missing or
     # partial sets this false and gets per-key deletes with the same outcome.
     external_s3_supports_batch_delete: bool = True
@@ -663,6 +668,8 @@ class Settings(BaseSettings):
                 missing.append("EXTERNAL_S3_ACCESS_KEY_ID")
             if not self.external_s3_secret_access_key.get_secret_value():
                 missing.append("EXTERNAL_S3_SECRET_ACCESS_KEY")
+            if not self.external_s3_region:
+                missing.append("EXTERNAL_S3_REGION")
         if self.manifest_store_backend == "azure_blob" and not self.vault_secret_path:
             missing.append("VAULT_SECRET_PATH")
         if missing:
@@ -1392,6 +1399,7 @@ def missing_destination_settings(settings: Settings) -> list[str]:
             "EXTERNAL_S3_SECRET_ACCESS_KEY": (
                 settings.external_s3_secret_access_key.get_secret_value()
             ),
+            "EXTERNAL_S3_REGION": settings.external_s3_region,
         }
     return [name for name, value in required.items() if not value]
 

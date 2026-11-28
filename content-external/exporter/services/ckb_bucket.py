@@ -75,6 +75,7 @@ class CkbBucket:
                     ("S3_BUCKET_NAME", settings.s3_bucket_name),
                     ("AWS_ACCESS_KEY_ID", access_key),
                     ("AWS_SECRET_ACCESS_KEY", secret_key),
+                    ("AWS_REGION", settings.aws_region),
                 )
                 if not value
             ]

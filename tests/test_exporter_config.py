@@ -92,7 +92,8 @@ def test_defaults_match_the_documented_env_block(clean_env: None) -> None:
     assert settings.vault_token_path == "/agent/out/token"
     assert settings.vault_secret_path == ""
     assert settings.azure_storage_container == ""
-    assert settings.external_s3_region == "us-east-1"
+    # No region default either: deployment config supplies it.
+    assert settings.external_s3_region == ""
     assert settings.external_s3_supports_batch_delete is True
 
 
@@ -155,6 +156,7 @@ _LLM_MODULE_MINIMUM: dict[str, str] = {
     # D18: an explicit s3 manifest store authenticates with these.
     "external_s3_access_key_id": "manifest-key-id",
     "external_s3_secret_access_key": "manifest-secret",
+    "external_s3_region": "eu-north-1",
     "llm_module_base_url": "https://llm.example/ingest",
     "llm_module_collection": "ckb_chunks_v1",
     "llm_module_vault_secret_path": "llm/connections/ingest",
@@ -305,6 +307,10 @@ def test_llm_module_base_url_error_does_not_echo_a_credential() -> None:
         (
             {"manifest_store_backend": "s3", "manifest_store_endpoint_url": ""},
             "ENDPOINT_URL",
+        ),
+        (
+            {"manifest_store_backend": "s3", "external_s3_region": ""},
+            "EXTERNAL_S3_REGION",
         ),
         (
             {"manifest_store_backend": "azure_blob", "manifest_store_bucket": ""},
@@ -499,6 +505,7 @@ _COMPLETE_S3_DESTINATION: dict[str, object] = {
     "external_s3_bucket_name": "content-external",
     "external_s3_access_key_id": SecretStr("writer"),
     "external_s3_secret_access_key": SecretStr("writer-secret"),
+    "external_s3_region": "us-east-1",
 }
 
 
@@ -526,6 +533,7 @@ def test_an_empty_s3_destination_is_warned_about_by_name(
         "EXTERNAL_S3_BUCKET_NAME",
         "EXTERNAL_S3_ACCESS_KEY_ID",
         "EXTERNAL_S3_SECRET_ACCESS_KEY",
+        "EXTERNAL_S3_REGION",
     ):
         assert name in message
 
@@ -600,6 +608,7 @@ def test_missing_destination_settings_is_what_the_factory_refuses(
         "EXTERNAL_S3_ENDPOINT_URL",
         "EXTERNAL_S3_ACCESS_KEY_ID",
         "EXTERNAL_S3_SECRET_ACCESS_KEY",
+        "EXTERNAL_S3_REGION",
     ]
     with pytest.raises(ConfigurationError, match=", ".join(missing)):
         build_destination_store(settings)

@@ -1229,11 +1229,13 @@ def test_concurrent_first_reads_share_one_client(
         ["s3_bucket_name"],
         ["aws_access_key_id"],
         ["aws_secret_access_key"],
+        ["aws_region"],
         [
             "s3_endpoint_url",
             "s3_bucket_name",
             "aws_access_key_id",
             "aws_secret_access_key",
+            "aws_region",
         ],
     ],
 )
