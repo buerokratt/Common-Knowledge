@@ -184,6 +184,31 @@ line, so nothing else may get in), and on a constants.ini without exactly one
 BUROKRATT_CHATBOT_WIDGET_DOMAIN_ID line, which is also what a Windows checkout
 gives: the link arrives as a text file holding "../../constants.ini".
 */}}
+{{/*
+content-external's constants.ini: the repo file (charts/ckb/constants.ini, a
+link to the root constants.ini), unchanged.
+
+Aborts the render when the file has no CKB_RUUTER_INTERNAL=http(s)://... line,
+because the exporter has no endpoint defaults in code and would crash-loop at
+startup with "CKB_RUUTER_INTERNAL is empty". A Windows checkout causes exactly
+this: the link arrives as a text file holding "../../constants.ini". Skipped
+when contentExternal.env or extraEnv sets CKB_RUUTER_INTERNAL, which overrides
+the file.
+*/}}
+{{- define "ckb.contentExternal.constantsIni" -}}
+{{- $ini := .Files.Get "constants.ini" -}}
+{{- $overridden := false -}}
+{{- range concat (.Values.contentExternal.env | default list) (.Values.contentExternal.extraEnv | default list) -}}
+{{- if eq .name "CKB_RUUTER_INTERNAL" -}}
+{{- $overridden = true -}}
+{{- end -}}
+{{- end -}}
+{{- if and (not $overridden) (not (regexMatch "(?m)^CKB_RUUTER_INTERNAL=https?://\\S+" $ini)) -}}
+{{- fail "charts/ckb/constants.ini has no CKB_RUUTER_INTERNAL=http(s)://... line, so content-external would refuse to start. On Windows the link checks out as a text file holding \"../../constants.ini\": render from Linux or CI" -}}
+{{- end -}}
+{{- $ini -}}
+{{- end -}}
+
 {{- define "ckb.ruuterInternal.constantsIni" -}}
 {{- $ini := .Files.Get "constants.ini" -}}
 {{- $domain := .Values.ruuterInternal.chatbotWidgetDomainId | default "" | trim -}}

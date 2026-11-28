@@ -5,18 +5,6 @@ with the **object-store sink on Azure Blob**, for both Docker Compose and Helm.
 Operating detail lives in [RUNBOOK.md](../RUNBOOK.md) and design detail in
 [README.md](../README.md); this guide links to them rather than repeating them.
 
-Written 2026-11-04, against branch `feat/content-external-pipeline` and
-upstream `v2.0.0`. The Helm path was run end to end in minikube that day,
-with Azurite standing in for Azure and a dev-mode Vault: Steps 2, 4B, 5, 6
-and the scheduled export in Step 7 all behaved as written. Not verifiable
-there: deletes on real Azure (Step 7.4), service-principal login, and network
-access to a real storage account.
-
-Updated 2026-11-17 on `feat/cep-triggering` for the chatbot toggle gate and
-the polling export timer (Step 7, blockers 4 and 10). That path was run end
-to end on Compose against SeaweedFS and Azurite, reading the toggle from a
-chatbot `byk` database; not yet on Helm.
-
 ## Contents
 
 - [Overview](#overview)
@@ -82,7 +70,7 @@ store.
 
 ## Decisions to make first
 
-Agree these four before touching any configuration; every later step depends
+Agree these five before touching any configuration; every later step depends
 on them.
 
 | Decision | Options | Recommended for staging |
@@ -91,6 +79,7 @@ on them.
 | Content sink | `object_store` (files in a bucket or container) or `llm_module` (pushed to the LLM module's API) | `object_store` on Azure Blob. The `llm_module` contract is not signed off yet ([appendix](#appendix--the-llm-module-sink-instead)) |
 | Azure credential form | Account key, SAS token, or a service principal (`tenant_id` + `client_id` + `client_secret`) | Service principal with *Storage Blob Data Contributor* on the one container: scoped, and revocable without rotating the account key |
 | Chunk profile | A preset in `content-external/exporter/core/constants.py` `CHUNK_PROFILES` | `azure_native`, the current default. Changing it later re-chunks the whole corpus |
+| Which Vault | CKB's own Vault (Steps 2.1–2.3), or the platform team's shared central Vault ([Step 2.4](#24-variant--the-shared-central-vault-helm)) | Whichever Vault CKB's other services use in staging. As of 2026-11-28 CKB still runs its own Vault; only the LLM module has moved to the central one |
 
 Use a **new, empty** Azure container dedicated to this pipeline. The service
 refuses a container that already holds objects but no manifest
@@ -104,11 +93,11 @@ chart in minikube on 2026-11-04.
 
 | # | Blocker | Affects | Fix |
 | --- | --- | --- | --- |
-| 1 | Branch changes not merged. The content-external code, DSL and chart are on `v2.0.0`; the Azure switches in `docker-compose.yml` and in the chart (`contentExternal.storeBackend`, `extraEnv`, the always-rendered `serviceAccountName`), and the image-tag fix, are only on `feat/content-external-pipeline` | Both | Merge them into the branch staging deploys from |
+| 1 | Branch changes not merged. The current content-external code, DSL and chart (the Ruuter-only reads, the three `content-external/*` flows, the `constants.ini` mount) are only on `feat/cep-refactoring`. `v2.0.0`, `feat/content-external-pipeline` and `feat/cep-triggering` carry older code that reads Resql directly and lacks those flows | Both | Merge `feat/cep-refactoring` into the branch staging deploys from. Do not deploy content-external code from `feat/cep-refactoring` against DSL from `v2.0.0`: every run fails with HTTP 404 or 500 from Ruuter |
 | 2 | The database lacks the export index (changelog `20261020120000-add-source-file-export-index`) | Both | Run Liquibase from `v2.0.0`; [Step 5](#step-5--verify-the-deployment) checks it |
 | 3 | No content-external image on GHCR. `build-content-external.yml` builds only on a push to `wip`, which exists only on the `rootcodelabs` fork | Helm | Run the workflow in the `buerokratt` repo so `ghcr.io/buerokratt/common-knowledge:content-external-dev-1-1-1` exists |
 | 4 | CronManager, Ruuter-internal and Resql must carry the content-export DSL: `DSL/CronManagerScripts/trigger_content_*.sh` (drain, reconcile), `DSL/Ruuter.internal/ckb/GET/pipeline/content-*.yml`, `DSL/Ruuter.internal/ckb/GET/content-external/*.yml` (the three read flows content-external enumerates through; without them every run fails with HTTP 500 or 404 from Ruuter), `DSL/Ruuter.internal/ckb/TEMPLATES/pipeline/content-export-gate.yml`, `DSL/Resql/ckb/GET/agency/get_agency_export_watermark.sql`, `DSL/Resql/ckb/GET/source_file/list_agency_export_documents.sql`, and for `resql-users` `DSL/Resql/users/GET/config/get_domain_configuration.sql` (the toggle read) | Both | Compose mounts them from the checkout. Helm: rows 5 and 10 |
-| 5 | The chart's init containers run `git clone --branch dev`; upstream `dev` has none of the content-export DSL | Helm | Clone `v2.0.0` (or merge `v2.0.0` into `dev`) in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates |
+| 5 | The chart's init containers run `git clone --branch dev https://github.com/buerokratt/Common-Knowledge.git`; upstream `dev` has none of the content-export DSL, and no upstream branch yet has the `content-external/*` read flows | Helm | Get the `feat/cep-refactoring` changes onto a branch of `buerokratt/Common-Knowledge` (or merge them into upstream `dev`), and clone that branch in the Ruuter, Ruuter-internal, Resql, DataMapper and CronManager templates. Cloning `v2.0.0` is no longer enough |
 | 6 | Ruuter never loads `constants.ini`: the chart mounts it at `/app/config/constants.ini`, Ruuter reads `/app/constants.ini`. Every `[#CKB_RESQL]` placeholder stays unresolved (`Failed to resolve '%5B'`) | Helm | Change the `mountPath` in `ruuter-deployment.yaml` and `ruuter-internal-deployment.yaml` to `/app/constants.ini` |
 | 7 | Resql connects to `database:5432`; the chart's database Service is `<release>-database` | Helm | Set `SQLMS_DATASOURCES_0_JDBCURL` to `jdbc:postgresql://<release>-database:5432/ckb_db` |
 | 8 | The Liquibase job uses `liquibase/liquibase:latest` (5.x, no PostgreSQL driver) and the `varmoh` fork's 2025 `dev` (14 changelogs missing) | Helm | `liquibase.image.tag: "4.33"`, `liquibase.repo: https://github.com/buerokratt/Common-Knowledge.git`, `liquibase.branch: v2.0.0` |
@@ -117,7 +106,9 @@ chart in minikube on 2026-11-04.
 
 Rows 5–9 affect all of CKB on Helm, not only this pipeline. Running `helm`
 from a Windows checkout also breaks `charts/ckb/constants.ini`, a symlink
-checked out as a text file; deploy from Linux or CI.
+checked out as a text file; deploy from Linux or CI. Content-external reads
+its endpoints from that file too, so on a Windows render it refuses to start
+with `CKB_RUUTER_INTERNAL is empty`.
 
 ## Step 1 — Azure: storage account, container, credential
 
@@ -165,6 +156,12 @@ The Azure credential lives only in Vault, at the KV v2 path
 `secret/blob/connections/azure_blob/content`. Every run reads it through a
 token that a Vault Agent keeps fresh, so a rotated credential is used at the
 next run with no restart.
+
+Steps 2.1–2.3 assume CKB runs its own Vault and you hold its root token. If
+staging uses the platform team's **shared central Vault** instead, the secret's
+format (2.1) is the same, but who writes it, the policy and the login are
+different: follow [2.4](#24-variant--the-shared-central-vault-helm) in place of
+2.2 and 2.3.
 
 ### 2.1 Write the secret
 
@@ -246,6 +243,113 @@ Piping it through PowerShell adds a byte-order mark, which Vault rejects as
   (`vaultAgent.auth.method: approle` plus a Secret holding `role_id` and
   `secret_id`), but then something must rotate that Secret daily.
 
+### 2.4 Variant — the shared central Vault (Helm)
+
+Use this instead of 2.2 and 2.3 when content-external must use the platform
+team's shared Vault, the model the LLM module moved to under its issue #777
+(`RAG-Module-Internal/docs/VAULT.md`). In that model the platform team owns the
+Vault server, its policies and the AppRole credentials. You never hold a root
+token, and nothing like `vault/init.sh` runs against it.
+
+**Status.** CKB is not yet part of the central Vault's setup: no AppRole,
+Secret or path exists for it. Everything in "Ask the platform team" below is a
+prerequisite they own. The chart values below render cleanly (checked with
+`helm template` on 2026-11-28) but have not been run against a real central
+Vault. Compose cannot test this: it always runs its own Vault.
+
+**Ask the platform team for:**
+
+1. **A path prefix for CKB**, for example `ckb`. The LLM module's is
+   `llm-module`. Below, `<prefix>` stands for it. The KV v2 engine must be
+   the one mounted at `secret`: content-external has `/v1/secret/data/`
+   fixed in code, and a different mount needs a code change.
+2. **The Azure secret written** at `secret/<prefix>/blob/connections/azure_blob/content`,
+   with the keys from [2.1](#21-write-the-secret), by someone with write
+   access. Use `kv put`, as in 2.1. The `docker compose exec vault` command in
+   2.1 does not apply; whoever writes it uses their own token and
+   `VAULT_ADDR`.
+3. **A policy** attached to content-external's role. The exporter only ever
+   reads `secret/data/…`; it never lists or reads metadata:
+
+   ```hcl
+   path "secret/data/<prefix>/blob/connections/azure_blob/content" { capabilities = ["read"] }
+   # Only for the llm-module sink (appendix):
+   path "secret/data/<prefix>/content-external/llm_module" { capabilities = ["read"] }
+   ```
+
+   The agent renews its own token, which needs `auth/token/renew-self` and
+   `auth/token/lookup-self`. Vault's built-in `default` policy grants both,
+   so keep it attached to the role (do not set `token_no_default_policy`),
+   or add the two paths to the policy.
+4. **An AppRole for content-external**, for example
+   `ckb-content-external-service`, with a `secret_id` that does not expire
+   (`secret_id_ttl=0`, as central does for the LLM module). An expiring one
+   means re-authentication fails once it lapses, with nothing in the chart to
+   rotate it.
+5. **A Secret in CKB's namespace** holding that role's `role_id` and
+   `secret_id`, for example `ckb-content-external-approle`, created by the
+   central setup. Note its key names; the chart expects `role_id` and
+   `secret_id` unless told otherwise.
+6. **Network access** from CKB's namespace to the central Vault (the LLM
+   module uses `http://vault-central.central-vault.svc.cluster.local:8200`).
+   Both containers in the pod call it: the sidecar to log in, and the
+   exporter itself to read the secret. Unlike the LLM module, content-external
+   does not send requests through an agent proxy; it reads the agent's token
+   file and calls Vault directly. If the platform team allows Vault traffic
+   only through an agent's proxy, that needs a code change.
+
+**Then, in the deploy job,** replace the Vault-related flags from
+[Step 4B](#step-4b--helm-configure-and-deploy) item 2 with:
+
+```bash
+  --set contentExternal.vaultAgent.enabled=true \
+  --set contentExternal.vaultAgent.vaultAddr=http://vault-central.central-vault.svc.cluster.local:8200 \
+  --set contentExternal.vaultAgent.auth.method=approle \
+  --set contentExternal.vaultAgent.auth.approleSecret.name=ckb-content-external-approle \
+  --set contentExternal.azure.vaultSecretPath=<prefix>/blob/connections/azure_blob/content \
+  --set-json 'contentExternal.extraEnv=[{"name":"CKB_VAULT","value":"http://vault-central.central-vault.svc.cluster.local:8200"}]'
+```
+
+- If the Secret's keys are not `role_id` and `secret_id`, add
+  `--set contentExternal.vaultAgent.auth.approleSecret.roleIdKey=<key>` and
+  `…secretIdKey=<key>`. If central mounts AppRole somewhere other than
+  `auth/approle`, set `contentExternal.vaultAgent.auth.mountPath`.
+- `serviceAccount.create` is not needed: AppRole does not bind to a service
+  account.
+- **Set `CKB_VAULT` through `extraEnv`, not `constants.ini`,** unless the
+  cleaning service moves to the central Vault at the same time. Both read
+  `CKB_VAULT` from the same `constants.ini`, so editing it would move
+  cleaning too. Keep this entry in every later `extraEnv` list (Steps 6.6
+  and 7), since each `--set-json` replaces the whole list.
+- The sidecar's `vaultAddr` and `CKB_VAULT` must be the same Vault. If they
+  differ, the agent gets a token from one Vault and the exporter presents it to
+  the other, and every run fails with a 403.
+- If the pod runs as non-root, set `contentExternal.podSecurityContext.fsGroup`:
+  the Secret is mounted 0440 and the token is written 0640.
+- For the llm-module sink, also set
+  `LLM_MODULE_VAULT_SECRET_PATH=<prefix>/content-external/llm_module` in the
+  same `extraEnv` list.
+
+**Check it** before Step 5. The agent must have logged in and written a token
+(Step 5.3). The secret must also be readable with that token from the exporter
+container:
+
+```bash
+kubectl -n <namespace> exec deploy/content-external -c content-external -- python -c \
+  "import urllib.request as u; t=open('/vault/agent/token').read().strip(); r=u.Request('http://vault-central.central-vault.svc.cluster.local:8200/v1/secret/data/<prefix>/blob/connections/azure_blob/content', headers={'X-Vault-Token': t}); print(u.urlopen(r).status)"
+```
+
+`200` means the address, role, policy and path all line up. It prints only the
+status, never the secret. A `403` means the policy does not cover the path, or
+the token came from a different Vault. A `404` means the policy is in place but
+the secret has not been written there. If the pod does not start, describe it
+(`kubectl -n <namespace> describe pod -l app=content-external`): a missing
+Secret, or one without the expected keys, stops the volume from mounting. If it
+starts but the agent writes no token, read the agent's log
+(`kubectl -n <namespace> logs deploy/content-external -c vault-agent`). An
+AppRole login error such as `invalid role ID` or `invalid secret id` means the
+Secret holds another role's credentials, or names a different AppRole mount.
+
 ## Step 3 — Read access to CKB's own bucket
 
 Content-external reads the cleaned Markdown and its metadata sidecar from
@@ -305,11 +409,19 @@ says so. This needs blocker 1 merged.
    read on Azure. `CONTENT_SINK=object_store`, `CHUNK_PROFILE=azure_native`,
    `CONTENT_WORK_DIR`, `VAULT_TOKEN_PATH` and `VAULT_SECRET_PATH` are fixed in
    `docker-compose.yml`.
-3. **Apply the migrations** from the same checkout. `migrate.sh` runs the
+3. **Check the endpoints in `constants.ini`.** Content-external has no
+   endpoint defaults in code. It reads `CKB_RUUTER_INTERNAL` and `CKB_VAULT`
+   from the checkout's `constants.ini`, which `docker-compose.yml` mounts at
+   `/app/constants.ini`, and refuses to start if `CKB_RUUTER_INTERNAL` is
+   missing (or `CKB_VAULT`, on Azure). If staging's services or Vault have
+   different names, change them there; `CKB_RUUTER_INTERNAL` must end in the
+   project layer, `/ckb` (`http://ruuter-internal:8089/ckb`). The file is
+   read once at startup, so restart content-external after any change.
+4. **Apply the migrations** from the same checkout. `migrate.sh` runs the
    unpinned `liquibase/liquibase` image, which is now 5.x and ships without
    the PostgreSQL driver: change that image to `liquibase/liquibase:4.33`
    first, then run `./migrate.sh` (Git Bash or WSL on Windows).
-4. **Start or rebuild.** Content-external is built from the checkout, so no
+5. **Start or rebuild.** Content-external is built from the checkout, so no
    registry image is needed:
 
    ```bash
@@ -318,7 +430,7 @@ says so. This needs blocker 1 merged.
    docker compose restart ruuter-internal resql-ckb resql-users cron-manager   # pick up the new DSL
    ```
 
-5. **Schedule the AppRole renewal** from [Step 2.3](#23-agent-authentication)
+6. **Schedule the AppRole renewal** from [Step 2.3](#23-agent-authentication)
    (a daily `vault-init` re-run).
 
 Optional switches are **not** read from `.env`. `DRAIN_DELETES_ENABLED`,
@@ -344,7 +456,7 @@ The Azure switch is a set of plain scalar values, so `--set` is safe:
 | `contentExternal.azure.container` | your container | Renders `AZURE_STORAGE_CONTAINER` |
 | `contentExternal.azure.vaultSecretPath` | leave the default | Renders `VAULT_SECRET_PATH` (`blob/connections/azure_blob/content`) |
 | `contentExternal.vaultAgent.enabled` | `true` | Runs the Vault Agent sidecar; sets `VAULT_TOKEN_PATH` (the exporter reads Vault's address as `CKB_VAULT` from `constants.ini`) |
-| `contentExternal.vaultAgent.vaultAddr` | your Vault URL | The sidecar's own address. Default `http://vault:8200`; keep it the same Vault as `CKB_VAULT` in `constants.ini` |
+| `contentExternal.vaultAgent.vaultAddr` | your Vault URL | The sidecar's own address only. Default `http://vault:8200`. It does **not** set the exporter's `CKB_VAULT`; set that to the same URL (item 3 below) |
 | `contentExternal.serviceAccount.create` | `true` | Creates the `content-external` service account that Step 2.3 binds |
 | `contentExternal.sourceBucket.*` | CKB's bucket | Endpoint, bucket, region and the Secret holding the read key |
 | `contentExternal.extraEnv` | as needed | Extra settings appended to `env`, such as `DIFF_ON_MISSING_MANIFEST` |
@@ -388,18 +500,41 @@ a mistake fails the deploy rather than the first run.
      refuses duplicates.
    - Leave `externalStore` empty; it is the S3 destination and is not read on
      Azure.
-3. **Check storage.** The work PVC (`content-external-work-pvc`, 1 Gi) uses
+3. **Point the endpoints at staging.** Content-external reads
+   `CKB_RUUTER_INTERNAL` and `CKB_VAULT` from the chart's copy of
+   `constants.ini` (`charts/ckb/constants.ini`, a link to the repo root's),
+   which `content-external-configmap.yaml` mounts at `/app/constants.ini`.
+   **`contentExternal.vaultAgent.vaultAddr` does not set `CKB_VAULT`**: it is
+   only the sidecar's own address. Left as it is, the sidecar logs in to
+   staging's Vault while the exporter reads the Azure secret from
+   `http://vault:8200`, and every run fails. Do one of these:
+   - **Edit `constants.ini`** in the checkout the deploy job renders from
+     (recommended when content-external uses the same Vault as cleaning,
+     since the same file gives cleaning its `CKB_VAULT`; for the central
+     Vault, see [2.4](#24-variant--the-shared-central-vault-helm)). Set
+     `CKB_VAULT` to the same URL as `vaultAgent.vaultAddr`, and
+     `CKB_RUUTER_INTERNAL` if Ruuter-internal is not `ruuter-internal:8089`
+     in the namespace. It must end in `/ckb`. A change restarts the pod (a
+     `checksum/constants` annotation).
+   - **Override it in `extraEnv`**, since an environment variable takes
+     precedence over the file:
+     `--set-json 'contentExternal.extraEnv=[{"name":"CKB_VAULT","value":"https://<staging-vault>:8200"}]'`.
+     The `extraEnv` examples in Steps 6 and 7 list only their own entries;
+     since each `--set-json` replaces the whole list, add this entry to every
+     one of them.
+4. **Check storage.** The work PVC (`content-external-work-pvc`, 1 Gi) uses
    the cluster's default StorageClass and must be `ReadWriteOnce` on block or
    local storage, never NFS, EFS or CephFS: the run lock is an `flock`. The
    chart refuses any other access mode.
-4. **Check resources.** The default limit is 1 Gi of memory, which fits the
+5. **Check resources.** The default limit is 1 Gi of memory, which fits the
    default `EXPORT_CONCURRENCY=4`. The service refuses to start if
    concurrency × `MAX_DOCUMENT_BYTES` × 3 + about 192 Mi exceeds the limit, so
    raise both together.
-5. **Check the image.** `contentExternal.image.tag` is
+6. **Check the image.** `contentExternal.image.tag` is
    `content-external-dev-1-1-1`; it must exist on
-   `ghcr.io/buerokratt/common-knowledge` (blocker 3).
-6. **Deploy** with the command from item 2, from a Linux machine or CI.
+   `ghcr.io/buerokratt/common-knowledge` (blocker 3), built from a commit
+   that includes `feat/cep-refactoring` (blocker 1).
+7. **Deploy** with the command from item 2, from a Linux machine or CI.
 
 The deployment runs one replica with the `Recreate` strategy by design. Never
 scale it: two pods would run two exports at once.
@@ -428,12 +563,24 @@ to Azure; the first sample run in Step 6 proves that.
 2. **Startup log.** The `content-external config` line echoes every setting
    with secrets masked. Check `content_external_store_backend=azure_blob`,
    `azure_storage_container=<your container>` (`[unset]` means it is empty),
-   `vault_secret_path=blob/connections/azure_blob/content`, and the
+   `vault_secret_path=blob/connections/azure_blob/content`,
+   `ckb_ruuter_internal=<staging's Ruuter-internal>/ckb`,
+   `ckb_vault=<staging's Vault>`, and the
    `memory budget … within container limit` line that follows it. A
    `content-external config CONTENT_EXTERNAL_STORE_BACKEND=azure_blob but …
    empty` warning names any destination variable still unset; every run
    fails with `ConfigurationError` until it is fixed. An `agency_guard`
-   warning at startup is normal if Resql was still starting.
+   warning at startup is normal if Ruuter-internal or Resql was still
+   starting.
+
+   If the container exits at startup instead (a restart loop, or
+   `CrashLoopBackOff` on Helm), its log names the reason. `CKB_RUUTER_INTERNAL
+   is empty` or `CKB_VAULT is empty` means `constants.ini` was not mounted or
+   lacks the key (Steps [4A](#step-4a--compose-configure-and-deploy) item 3,
+   [4B](#step-4b--helm-configure-and-deploy) item 3). `CKB_QUERY_TIMEOUT … is
+   below 30` and `EXPORT_PAGE_SIZE … is above 5000` mean an override is
+   outside the limits in the
+   [configuration reference](#configuration-reference).
 3. **Vault token.** The agent must have written a non-empty token:
 
    ```bash
@@ -462,8 +609,33 @@ to Azure; the first sample run in Step 6 proves that.
    CronManager's log lists
    `trigger_content_drain` and `trigger_content_reconcile` with trigger
    `false`, and their two scripts are present under `/app/scripts`.
-6. **Agency id.** Note the agency's `base_id` for Step 6 (one agency per
-   deployment):
+6. **CKB read flows.** Content-external reads CKB only through three
+   Ruuter-internal flows (blocker 4). Call one from inside the
+   content-external container, so the check also proves the network path
+   and the `CKB_RUUTER_INTERNAL` value:
+
+   ```bash
+   # Compose (Helm: kubectl -n <namespace> exec deploy/content-external -c content-external -- python -c …)
+   docker compose exec content-external python -c \
+     "import urllib.request as u; print(u.urlopen('http://ruuter-internal:8089/ckb/content-external/agencies?page=1&pageSize=1&sorting=name%20asc').read().decode())"
+   ```
+
+   Use staging's `CKB_RUUTER_INTERNAL` in place of
+   `http://ruuter-internal:8089/ckb`. Expect `{"response":[…]}` holding the
+   one agency. An `HTTP Error` instead says what is wrong:
+   - **404:** the `content-external/*` flows are not deployed (blockers 1,
+     4 and 5).
+   - **400** (`missing_param`): the flows and the image come from different
+     branches, so the allowlist and the code no longer match.
+   - **500:** Resql is unreachable or timed out, or Ruuter did not load
+     `constants.ini` (blocker 6). Ruuter-internal's log has the cause.
+   - **502** (`resql_error`): Resql answered with an error.
+
+   The other two flows, `content-external/export-watermark` and
+   `content-external/export-documents`, are exercised by the sample run in
+   Step 6; [RUNBOOK.md](../RUNBOOK.md) shows how to call them by hand.
+7. **Agency id.** Note the agency's `base_id` for Step 6 (one agency per
+   deployment). The flow above returns it too:
 
    ```sql
    SELECT DISTINCT base_id, name FROM agency_management.agency;
@@ -655,8 +827,16 @@ export adds a `content-external error` line with the sanitised cause.
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `failed`, `error_type: ConfigurationError` | The Vault secret still holds `REPLACE_ME`, has two credential forms, has a query string on `account_url`, Vault answered 403/404, or the agent token file is missing or expired | Fix the secret ([2.1](#21-write-the-secret)), the policy ([2.2](#22-policy)) or the agent's login ([2.3](#23-agent-authentication)) |
-| `failed`, `error_type: StoreError` | Vault unreachable or 5xx (retryable), or Azure refused or the container does not exist | Retryable: nothing, the next tick retries. Otherwise check the container name, the credential's role and the network path |
+| Container exits at startup: `CKB_RUUTER_INTERNAL is empty` or `CKB_VAULT is empty` (or `must be an http(s):// URL`) | `constants.ini` is not mounted at `/app/constants.ini`, or lacks the key | Fix `constants.ini` ([4A](#step-4a--compose-configure-and-deploy) item 3, [4B](#step-4b--helm-configure-and-deploy) item 3) and restart content-external |
+| `helm template`/`upgrade` fails: `charts/ckb/constants.ini has no CKB_RUUTER_INTERNAL=http(s)://... line` | Rendered from a Windows checkout, where the `charts/ckb/constants.ini` link is a text file holding `../../constants.ini`; or the key really is missing | Render from Linux or CI (or a checkout with `core.symlinks=true`); otherwise add the key to the root `constants.ini` |
+| Container exits at startup: `CKB_QUERY_TIMEOUT … is below 30` or `EXPORT_PAGE_SIZE … is above 5000` | An override outside the limits the Ruuter flows impose | Remove the override, or lower `EXPORT_PAGE_SIZE` instead of raising the timeout |
+| `failed`, `error_type: ConfigurationError` | The Vault secret still holds `REPLACE_ME`, has two credential forms, has a query string on `account_url`, Vault answered 403/404, or the agent token file is missing or expired. On Helm, a 403 with a valid token usually means `CKB_VAULT` names a different Vault from `vaultAgent.vaultAddr` | Fix the secret ([2.1](#21-write-the-secret)), the policy ([2.2](#22-policy)), the agent's login ([2.3](#23-agent-authentication)), or `CKB_VAULT` ([4B](#step-4b--helm-configure-and-deploy) item 3) |
+| `failed`, `error_type: StoreError` | Vault unreachable or 5xx (retryable), or Azure refused or the container does not exist. A Vault that is unreachable on every run usually means `CKB_VAULT` is still `http://vault:8200` | Retryable: nothing, the next tick retries. Otherwise check `CKB_VAULT`, the container name, the credential's role and the network path |
+| Central Vault ([2.4](#24-variant--the-shared-central-vault-helm)): `failed`, `ConfigurationError`, `Vault returned HTTP 403` or `404` | 403: central's policy does not cover the `<prefix>/…` path in `VAULT_SECRET_PATH`, or `CKB_VAULT` and `vaultAgent.vaultAddr` name different Vaults. 404: nothing written at that path yet | Run the check at the end of 2.4. Policy and secret are the platform team's to fix; the two addresses are yours |
+| `failed`, `Ruuter-internal read failed (HTTP 404: …)` (`agency count` or `CKB read /content-external/…`) | The `content-external/*` flows are not in ruuter-internal | Deploy the DSL from the same branch as the image (blockers 1, 4 and 5), then restart ruuter-internal |
+| `failed`, `Ruuter-internal read failed (HTTP 500: …)` | Ruuter aborted the flow: Resql unreachable or past the step's 25 s timeout, a page over the flow's 8 MB limit, the flow missing, or Ruuter without `constants.ini` (blocker 6). Never retried, because the query may still be running | Read ruuter-internal's log for the flow. For timeouts or the size limit, lower `EXPORT_PAGE_SIZE`; for a slow first page, check the export index (Step 5.4) |
+| `failed`, `Ruuter-internal read failed (HTTP 400)` | A param the code sends is not in the flow's allowlist: flows and image are from different branches | Deploy both from the same commit |
+| `failed`, `Ruuter-internal read failed (HTTP 502)` | Resql answered every retry with an error | Check resql-ckb's log and its database connection (blocker 7 on Helm) |
 | `failed` naming `AZURE_STORAGE_CONTAINER` or `VAULT_SECRET_PATH` | The setting is empty | Set it ([4A](#step-4a--compose-configure-and-deploy) / [4B](#step-4b--helm-configure-and-deploy)) |
 | First run fails with `NonEmptyDestination` | The container already holds objects but no manifest | Use an empty container |
 | `export_schedule.state` stays `unknown` | content-external cannot reach Ruuter-internal's `pipeline/content-export-status`, or Ruuter lacks the DSL or `constants.ini` (blockers 4–6) | Check `CKB_RUUTER_INTERNAL` in `constants.ini` and Ruuter-internal's log for `pipeline/content-export-status`; the timer asks again every minute |
@@ -694,6 +874,9 @@ Every setting is an environment variable of the content-external service.
 "Compose" means the root `.env` unless it says the `docker-compose.yml`
 service; "Helm" means a value under `contentExternal` in
 `charts/ckb/values.yaml`, overridden with `--set` in the deploy job.
+`CKB_RUUTER_INTERNAL` and `CKB_VAULT` are the exception: they are read from
+`constants.ini` (no defaults in code), and an environment variable of the
+same name overrides the file.
 
 **Required for staging on Azure:**
 
@@ -706,7 +889,7 @@ service; "Helm" means a value under `contentExternal` in
 | `CONTENT_WORK_DIR` | `/var/lib/content-external` | fixed in `docker-compose.yml` | from `workDir` |
 | `VAULT_SECRET_PATH` | `blob/connections/azure_blob/content` | fixed in `docker-compose.yml` | `azure.vaultSecretPath` (default) |
 | `CKB_RUUTER_INTERNAL` | `http://ruuter-internal:8089/ckb` | `constants.ini`, mounted at `/app/constants.ini` | `constants.ini`, mounted by `content-external-configmap.yaml` |
-| `CKB_VAULT` | your Vault URL | `constants.ini` | `constants.ini` (the sidecar agent uses `vaultAgent.vaultAddr`) |
+| `CKB_VAULT` | your Vault URL | `constants.ini` | `constants.ini`, or `extraEnv`. Not set by `vaultAgent.vaultAddr`, which is the sidecar's own address; keep the two equal |
 | `VAULT_TOKEN_PATH` | the agent's token file | fixed: `/agent/out/token` | set by the sidecar: `/vault/agent/token` |
 | `S3_ENDPOINT_URL`, `S3_BUCKET_NAME`, `AWS_REGION` | CKB's bucket | `.env` | `sourceBucket` |
 | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | CKB bucket key (`GetObject`) | `.env` (shared with file-processing) | `sourceBucket.secret` |
@@ -766,10 +949,13 @@ above:
 
 ## Checklist
 
-- [ ] Blockers 1–2 (and 3–10 on Helm) cleared
+- [ ] Blockers 1–2 (and 3–10 on Helm) cleared; image and DSL both from a commit that includes `feat/cep-refactoring`
+- [ ] `CKB_RUUTER_INTERNAL` and `CKB_VAULT` in `constants.ini` point at staging (Helm: `CKB_VAULT` equals `vaultAgent.vaultAddr`)
+- [ ] `content-external/agencies` answers from inside the content-external container (Step 5.6)
 - [ ] Azure container created; credential created and scoped to it
 - [ ] Vault secret written with `kv put`; placeholders gone
 - [ ] Vault policy present; agent login works (daily `vault-init` on Compose, Kubernetes role on Helm)
+- [ ] Central Vault only (2.4): prefix, secret, policy, non-expiring AppRole and namespace Secret provided by the platform team; `CKB_VAULT` in `extraEnv` equals `vaultAgent.vaultAddr`; the 2.4 check returns `200`
 - [ ] CKB bucket read key in place
 - [ ] Settings in `.env` (Compose) or the deploy job's `--set` flags (Helm); deployed
 - [ ] `/health` shows `store_backend: azure_blob`; token file present; export index present
